@@ -23,6 +23,8 @@ Use a modular monolith: one FastAPI application, organized by feature, with a re
 
 LangGraph coordinates deterministic, auditable workflows. It does not call an AI model in V1.
 
+> **Design note:** Strictly speaking, V1's deterministic workflows could be plain Python service functions — LangGraph earns its keep primarily when branching/looping agent logic and an LLM arrive. LangGraph is kept in V1 **intentionally, as a learning vehicle** for this project, so the graph structure, state, and node patterns are in place before the optional LLM advisor lands in a deferred future PR. If it proves cumbersome during V1, a node can be swapped for a plain function without changing the surrounding contract.
+
 1. **Statement import:** upload CSV → map columns → normalize dates, amounts, and merchants → detect duplicates → apply category rules → show review → save approved transactions.
 2. **Payslip import:** upload PDF/image → extract text or run local OCR → identify candidate pay fields → require confirmation/correction → save confirmed income records.
 3. **Insights:** aggregate confirmed transactions and income → find trends, recurring charges, and category spikes → calculate budget suggestions and goal scenarios → save evidence-backed insights.
@@ -127,7 +129,7 @@ Dockerfile
 pyproject.toml
 ```
 
-## Future direct bank/card imports
+> **PR 1 delivered** only `app/main.py`, `app/core/__init__.py`, `app/core/config.py`, `app/templates/`, and `app/static/`. **PR 2a** creates the `app/db/` package and expands `app/core/` with security and logging helpers; the remaining feature packages (`auth/`, `workspaces/`, `imports/`, etc.) are added by the PR that first needs them.
 
 Do not pick or integrate a banking provider yet. Define a `BankConnector` contract and make the import service accept a normalized external transaction containing provider, external transaction ID, account label, date, description, amount, and currency.
 
@@ -136,7 +138,7 @@ When a provider is selected, add account linking, consent/revocation handling, e
 ## Delivery sequence
 
 1. Bootstrap the `uv` project, Python 3.12 environment, linting, tests, Docker configuration, and beginner-friendly README.
-2. Implement SQLite models, Alembic migrations, and database tests.
+2. Implement SQLite models, Alembic migrations, and database tests. Split into 2a (database core + users/workspaces), 2b (imports/transactions), 2c (payslips/income), and 2d (planning/insights) — see the PR breakdown.
 3. Add Google sign-in, private/shared workspaces, and authorization controls.
 4. Build CSV import, transaction review, categorization, and merchant rules.
 5. Build payslip upload, local extraction/OCR, confirmation, and income reporting.
@@ -160,3 +162,5 @@ Small, non-blocking items acknowledged during PR 1 review and scheduled for a la
 
 - **Dockerfile CMD optimization:** The current `CMD ["uv", "run", "fastapi", "run", ...]` re-checks the uv environment on every container boot. Once the image build installs all dependencies (it already does via `uv sync --locked --all-groups`), switch the CMD to invoke the binary directly — `CMD ["fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]` — for faster cold starts with identical behavior. Do this in PR 9 (production readiness) or whenever the Dockerfile is next touched.
 - **Re-add `APP_ENV` to `compose.yaml`:** PR 1 removed the `APP_ENV: development` environment variable from `compose.yaml` because nothing consumed it yet. When `app/core/config.py` is wired into the application (PR 2 database session or PR 3 auth), re-add `APP_ENV` (and the new settings it reads, such as `SECRET_KEY`, `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) to `compose.yaml` so the container actually passes them in.
+- **Multi-stage Dockerfile (dev vs. prod):** PR 1 installs dev dependencies (`--all-groups`) in the image so tests can run inside the container via `docker compose run --rm web uv run pytest`. This bloats the runtime image with pytest/httpx/ruff. In PR 9 (production readiness), split the Dockerfile into a `dev` target (all groups, tests included) and a `prod` target (runtime deps only, no tests, lean CMD) so production deployments ship a small image while local/dev containers keep running tests.
+- **Drop `README.md` from the Dockerfile `COPY`:** The Dockerfile copies `README.md` into the image but the application never reads it. Remove it from the `COPY pyproject.toml uv.lock README.md ./` line for a slightly smaller image and clearer intent. Trivial; do it whenever the Dockerfile is next touched.

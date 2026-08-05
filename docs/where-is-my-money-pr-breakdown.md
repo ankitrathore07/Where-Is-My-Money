@@ -10,9 +10,29 @@ Keep each pull request focused, independently testable, and small enough to revi
 
 ## PR 2 — Database foundation
 
+The original single PR 2 created all ~13 tables at once, which is too large to review comfortably. It is split into four smaller PRs that each land the schema a feature actually needs. Merge in order.
+
+### PR 2a — Database core, users, and workspaces
+
 - Add SQLAlchemy configuration for SQLite, the `data/` volume, Alembic, database session management, and migration commands.
-- Add initial migrations for users, workspaces, memberships, invitations, uploaded files, categories, import jobs, transactions, merchant rules, payslips, income records, budgets, goals, and insights.
-- **Done when:** a clean database can be created and migrated entirely from source control.
+- Create the `app/db/` package (models, session, repositories) and expand `app/core/` beyond the `config.py` skeleton delivered in PR 1 (security helpers, logging setup).
+- Add migrations for `users`, `workspaces`, `workspace_memberships`, and `workspace_invitations` — the tables PR 3 (auth) depends on.
+- **Done when:** a clean database can be created from Alembic migrations and the user/workspace tables round-trip through the session.
+
+### PR 2b — Imports and transactions
+
+- Add migrations for `uploaded_files`, `import_jobs`, `transactions`, `categories`, and `merchant_rules` — the tables PR 4 (CSV import) and PR 5 (categorization) depend on.
+- **Done when:** the import/transaction/category tables migrate cleanly and the workspace-level duplicate fingerprint constraint is enforced.
+
+### PR 2c — Payslips and income
+
+- Add migrations for `payslips` and `income_records` — the tables PR 6 depends on.
+- **Done when:** the payslip/income tables migrate cleanly and income records stay separate from bank transactions.
+
+### PR 2d — Planning and insights
+
+- Add migrations for `budgets`, `savings_goals`, and `insight_snapshots` — the tables PR 7 and PR 8 depend on.
+- **Done when:** all remaining tables migrate cleanly and a fresh database can be created and migrated entirely from source control (the original PR 2 exit criterion).
 
 ## PR 3 — Google sign-in and workspaces
 
