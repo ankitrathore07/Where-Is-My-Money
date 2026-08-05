@@ -88,6 +88,7 @@ container stopped, run:
     Dockerfile               Recipe for one application container
     compose.yaml             Local Docker configuration
     .github/workflows/ci.yml Automated checks for GitHub pull requests
+    docs/                    Implementation plan and PR breakdown
 
 ## Next step
 
