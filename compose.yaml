@@ -1,0 +1,13 @@
+name: where-is-my-money
+
+services:
+  web:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/app/data
+
+volumes:
+  app_data:

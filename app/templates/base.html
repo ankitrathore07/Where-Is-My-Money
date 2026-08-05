@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Where Is My Money?{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">Where Is My Money?</a>
+      <span class="badge">PR 1 foundation</span>
+    </header>
+    <main class="page-content">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
