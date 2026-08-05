@@ -63,14 +63,28 @@ container with:
 The Compose file creates a named app_data volume. The upcoming database PR will
 use this persistent storage for local application data.
 
+### Run the checks inside the container
+
+The image installs both runtime and development dependencies, so the same
+checks that run locally and in CI also run inside the container. With the
+container stopped, run:
+
+    docker compose run --rm web uv run ruff check .
+    docker compose run --rm web uv run ruff format --check .
+    docker compose run --rm web uv run pytest
+
+`--rm` removes the one-off container after the command finishes.
+
 ## Project map
 
     app/main.py              FastAPI application and routes
+    app/core/config.py       Application settings read from environment
     app/templates/           HTML pages rendered by Python
     app/static/              Browser CSS and JavaScript assets
     tests/                   Automated tests
     pyproject.toml           Project metadata and Python dependencies
     uv.lock                  Exact dependency versions
+    .env.example             Template for local environment variables
     Dockerfile               Recipe for one application container
     compose.yaml             Local Docker configuration
     .github/workflows/ci.yml Automated checks for GitHub pull requests
