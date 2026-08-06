@@ -1,19 +1,10 @@
+from datetime import datetime, timedelta
+
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.db.models import Base, User, Workspace, WorkspaceInvitation, WorkspaceMembership
-
-
-@pytest.fixture
-def session():
-    """Create an in-memory SQLite DB with all tables and yield a session."""
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    with Session() as s:
-        yield s
+from app.db.models import User, Workspace, WorkspaceInvitation, WorkspaceMembership
 
 
 def test_user_roundtrip(session: Session) -> None:
@@ -70,7 +61,6 @@ def test_membership_and_unique_constraint(session: Session) -> None:
     session.commit()
     assert membership.id is not None
 
-    # Duplicate (workspace_id, user_id) must be rejected.
     dup = WorkspaceMembership(workspace_id=ws.id, user_id=member.id, role="member")
     session.add(dup)
     with pytest.raises(IntegrityError):
@@ -80,8 +70,6 @@ def test_membership_and_unique_constraint(session: Session) -> None:
 
 def test_invitation_with_expiry(session: Session) -> None:
     """An invitation stores a token and an optional expiry."""
-    from datetime import datetime, timedelta
-
     owner = User(google_sub="sub-1", email="owner@example.com")
     session.add(owner)
     session.commit()

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -39,6 +39,11 @@ class Workspace(Base):
     owner: Mapped["User"] = relationship(back_populates="owned_workspaces")
     memberships: Mapped[list["WorkspaceMembership"]] = relationship(back_populates="workspace")
     invitations: Mapped[list["WorkspaceInvitation"]] = relationship(back_populates="workspace")
+    uploaded_files: Mapped[list["UploadedFile"]] = relationship(back_populates="workspace")
+    import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="workspace")
+    categories: Mapped[list["Category"]] = relationship(back_populates="workspace")
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="workspace")
+    merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="workspace")
 
 
 class WorkspaceMembership(Base):
@@ -69,3 +74,96 @@ class WorkspaceInvitation(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="invitations")
     invited_by: Mapped["User | None"] = relationship(back_populates="sent_invitations")
+
+
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    file_type: Mapped[str] = mapped_column(String(50))
+    storage_path: Mapped[str] = mapped_column(String(512))
+    checksum: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column()
+    retention_choice: Mapped[str] = mapped_column(String(20), default="retain")
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="uploaded_files")
+    import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="uploaded_file")
+
+
+class ImportJob(Base):
+    __tablename__ = "import_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    uploaded_file_id: Mapped[int | None] = mapped_column(ForeignKey("uploaded_files.id"))
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    column_mapping: Mapped[dict | None] = mapped_column(JSON)
+    validation_errors: Mapped[dict | None] = mapped_column(JSON)
+    source_checksum: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="import_jobs")
+    uploaded_file: Mapped["UploadedFile | None"] = relationship(back_populates="import_jobs")
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="import_job")
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(20), default="expense")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace | None"] = relationship(back_populates="categories")
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="category")
+    merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="category")
+
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "duplicate_fingerprint", name="uix_workspace_duplicate_fingerprint"
+        ),
+        Index("ix_workspace_transaction_date", "workspace_id", "date"),
+        Index("ix_workspace_transaction_category", "workspace_id", "category_id"),
+        Index("ix_workspace_normalized_merchant", "workspace_id", "normalized_merchant"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    description: Mapped[str] = mapped_column(String(512))
+    normalized_merchant: Mapped[str | None] = mapped_column(String(255))
+    amount_cents: Mapped[int] = mapped_column()
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
+    categorization_source: Mapped[str] = mapped_column(String(50), default="uncategorized")
+    duplicate_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    import_job_id: Mapped[int | None] = mapped_column(ForeignKey("import_jobs.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="transactions")
+    category: Mapped["Category | None"] = relationship(back_populates="transactions")
+    import_job: Mapped["ImportJob | None"] = relationship(back_populates="transactions")
+
+
+class MerchantRule(Base):
+    __tablename__ = "merchant_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    merchant_pattern: Mapped[str] = mapped_column(String(255))
+    normalized_merchant: Mapped[str | None] = mapped_column(String(255))
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="merchant_rules")
+    category: Mapped["Category | None"] = relationship(back_populates="merchant_rules")
