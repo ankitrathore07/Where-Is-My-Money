@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -56,6 +57,9 @@ class Workspace(Base):
     merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="workspace")
     payslips: Mapped[list["Payslip"]] = relationship(back_populates="workspace")
     income_records: Mapped[list["IncomeRecord"]] = relationship(back_populates="workspace")
+    budgets: Mapped[list["Budget"]] = relationship(back_populates="workspace")
+    savings_goals: Mapped[list["SavingsGoal"]] = relationship(back_populates="workspace")
+    insight_snapshots: Mapped[list["InsightSnapshot"]] = relationship(back_populates="workspace")
 
 
 class WorkspaceMembership(Base):
@@ -138,6 +142,7 @@ class Category(Base):
     workspace: Mapped["Workspace | None"] = relationship(back_populates="categories")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="category")
     merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="category")
+    budgets: Mapped[list["Budget"]] = relationship(back_populates="category")
 
 
 class Transaction(Base):
@@ -221,3 +226,58 @@ class IncomeRecord(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="income_records")
     payslip: Mapped["Payslip | None"] = relationship(back_populates="income_records")
+
+
+class Budget(Base):
+    __tablename__ = "budgets"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "category_id", "period_month", name="uix_workspace_category_month"
+        ),
+        Index("ix_workspace_budget_period", "workspace_id", "period_month"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), index=True)
+    amount_cents: Mapped[int] = mapped_column()
+    period_month: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="budgets")
+    category: Mapped["Category"] = relationship(back_populates="budgets")
+
+
+class SavingsGoal(Base):
+    __tablename__ = "savings_goals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    target_amount_cents: Mapped[int] = mapped_column()
+    current_amount_cents: Mapped[int] = mapped_column(default=0)
+    target_date: Mapped[date | None] = mapped_column(Date)
+    monthly_contribution_cents: Mapped[int | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="savings_goals")
+
+
+class InsightSnapshot(Base):
+    __tablename__ = "insight_snapshots"
+    __table_args__ = (Index("ix_workspace_insight_period", "workspace_id", "period_start"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    snapshot_data: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="insight_snapshots")
