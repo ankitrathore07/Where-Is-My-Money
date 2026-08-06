@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build a Python-first personal-finance web app that runs locally with SQLite and can later move to PostgreSQL. It will import CSV bank and credit-card statements plus uploaded payslips, store normalized financial data, categorize spending, generate explainable insights, suggest budgets, and calculate savings-goal timelines.
+Build a Python-first personal-finance web app that runs locally with SQLite and can later move to PostgreSQL. It will import CSV bank and credit-card statements plus uploaded payslips, store normalized financial data, categorize spending, generate explainable insights, suggest budgets, calculate savings-goal timelines, and track account balances (checking, 401k, brokerage, mortgage, loans) to show net worth over time.
 
 The first release uses FastAPI server-rendered pages, Google sign-in, SQLAlchemy, Alembic, SQLite, deterministic LangGraph workflows, and Docker. It does not use an LLM, bank-aggregation API, payment movement, or investment advice.
 
@@ -27,7 +27,8 @@ LangGraph coordinates deterministic, auditable workflows. It does not call an AI
 
 1. **Statement import:** upload CSV → map columns → normalize dates, amounts, and merchants → detect duplicates → apply category rules → show review → save approved transactions.
 2. **Payslip import:** upload PDF/image → extract text or run local OCR → identify candidate pay fields → require confirmation/correction → save confirmed income records.
-3. **Insights:** aggregate confirmed transactions and income → find trends, recurring charges, and category spikes → calculate budget suggestions and goal scenarios → save evidence-backed insights.
+3. **Account statement import:** upload CSV/PDF statement (401k, brokerage, mortgage, loan) → identify the account → extract the balance as of a date → require confirmation → save a balance snapshot linked to the account.
+4. **Insights:** aggregate confirmed transactions, income, and balance snapshots → find trends, recurring charges, and category spikes → calculate net worth, budget suggestions, and goal scenarios → save evidence-backed insights.
 
 Categorization precedence is: manual transaction choice → workspace merchant rule → built-in merchant rule → `Uncategorized`. A user can save a correction as a merchant rule for future imports.
 
@@ -50,6 +51,9 @@ erDiagram
     WORKSPACE ||--o{ BUDGET : plans
     WORKSPACE ||--o{ SAVINGS_GOAL : tracks
     WORKSPACE ||--o{ INSIGHT_SNAPSHOT : receives
+    WORKSPACE ||--o{ ACCOUNT : owns
+    ACCOUNT ||--o{ ACCOUNT_BALANCE_SNAPSHOT : reports
+    ACCOUNT ||--o{ IMPORT_JOB : targets
 ```
 
 - `users`: Google subject ID, verified email, display name, timestamps.
@@ -61,8 +65,11 @@ erDiagram
 - `payslips`: employer, pay period, pay date, candidate extracted fields, confidence, review status, and optional file reference.
 - `income_records`: confirmed gross pay, net pay, taxes, deductions, and pay date. These stay separate from bank transactions to avoid duplicating direct deposits.
 - `budgets`, `savings_goals`, `insight_snapshots`: accepted category limits, savings scenarios, and report results with their supporting period.
+- `accounts`: name, account type (checking, savings, credit_card, investment_401k, investment_brokerage, mortgage, auto_loan, student_loan, other), institution, `is_liability` flag, and workspace. An account is an asset (checking, 401k) or a liability (mortgage, loan).
+- `account_balance_snapshots`: account, balance in signed integer cents, as-of date, source (manual or statement import), optional uploaded file reference, and workspace. The latest snapshot per account drives the net worth view. Individual investment holdings (stocks within a 401k) are a future enhancement; V1 tracks total account balances only.
+- `import_jobs` gains an optional `account_id` so an import can target a specific account (added in the PR 2e migration).
 
-Create indexes for workspace-scoped transaction dates, transaction categories, normalized merchants, and duplicate fingerprints. Enforce foreign keys and a workspace-level duplicate constraint where source data permits it.
+Create indexes for workspace-scoped transaction dates, transaction categories, normalized merchants, and duplicate fingerprints. Index account balance snapshots by (workspace_id, as_of_date) and (account_id, as_of_date). Enforce foreign keys and a workspace-level duplicate constraint where source data permits it.
 
 ## Product behavior
 
@@ -72,6 +79,17 @@ Create indexes for workspace-scoped transaction dates, transaction categories, n
 - **Budget suggestions:** Recommend a monthly category limit from the median of the prior three complete months plus a 10% buffer. Users must edit or accept a suggestion; nothing is created automatically.
 - **Savings goals:** A goal has a name, target amount, current savings, and a target date or monthly contribution. The app calculates the missing value and reports whether the goal is on track.
 - **Privacy boundary:** The app analyzes data and presents scenarios only. It does not connect to banks, move money, make investments, or provide individualized financial advice in V1.
+
+## Account balances and net worth
+
+Transactions and income records are **flows** — they show where money goes and where it comes from. Account balances are **stocks** — they show where you stand at a point in time. The app tracks both.
+
+- **Accounts:** A workspace owns accounts of various types: checking, savings, credit card, 401k, brokerage (e.g., Robinhood, Fidelity NetBenefits), mortgage, auto loan, student loan, and other. Each account is flagged as an asset or a liability.
+- **Balance snapshots:** Each imported statement (or manual entry) produces a balance snapshot — the account balance as of a date, in integer cents. The latest snapshot per account drives the net worth view.
+- **Statement types:** V1 accepts CSV and PDF statements for 401k, brokerage, mortgage, and loan accounts. The import extracts the account balance and period, requires confirmation, and saves a snapshot. Individual investment holdings (specific stocks within a 401k) are a future enhancement; V1 tracks total balances only.
+- **Net worth view:** The dashboard shows total assets (bank + investment accounts), total liabilities (mortgage + loans + credit card balances), and net worth (assets − liabilities) with a trend over time from balance snapshots.
+- **Relationship to transactions:** Bank and credit card statements already produce transactions (where money goes). Account statement imports produce balance snapshots (where you stand). A mortgage payment appears as a transaction (the outflow) and the remaining balance appears as a snapshot (the liability). The two are independent — one does not duplicate the other.
+- **Not investment advice:** Showing balances and net worth is informational. The app does not recommend buys, sells, asset allocation, or any investment strategy.
 
 ## Security and operations
 
@@ -96,6 +114,7 @@ Only add narrowly scoped, read-only tools that return bounded, redacted results:
 - `get_recurring_expenses(period)`
 - `get_budget_status(month)`
 - `get_goal_projection(goal_id)`
+- `get_net_worth(as_of_date)` returning total assets, total liabilities, and net worth from the latest snapshots per account.
 - `search_transactions(filters, limit)` with server-enforced workspace scope, a small result limit, and no source-file content.
 
 Do not expose tools that upload/read raw statements or payslips, change transactions/categories/budgets/goals, manage household members, disclose secrets, execute code, call arbitrary URLs, or move money. Any future write action must remain a normal application form with an explicit human confirmation; it is not an LLM tool.
@@ -114,7 +133,8 @@ app/
 ├── imports/           # CSV upload, mapping, parsing, deduplication
 ├── transactions/      # Transaction browsing, categories, rules
 ├── payslips/          # Payslip upload, OCR, review, income records
-├── insights/          # Reports and explanations
+├── accounts/          # Account management and balance snapshots
+├── insights/          # Reports, net worth, and explanations
 ├── planning/          # Budgets and savings goals
 ├── graphs/            # LangGraph state and nodes
 ├── connectors/        # Future bank-import contracts only
@@ -133,17 +153,18 @@ pyproject.toml
 
 Do not pick or integrate a banking provider yet. Define a `BankConnector` contract and make the import service accept a normalized external transaction containing provider, external transaction ID, account label, date, description, amount, and currency.
 
-When a provider is selected, add account linking, consent/revocation handling, encrypted provider tokens, incremental sync, and reconciliation against imported CSV data. The provider should feed the same validation, normalization, categorization, and duplicate-detection pipeline as CSV imports.
+When a provider is selected, add account linking, consent/revocation handling, encrypted provider tokens, incremental sync, and reconciliation against imported CSV data. The provider should feed the same validation, normalization, categorization, and duplicate-detection pipeline as CSV imports. The same `BankConnector` contract can be extended to investment providers (e.g., Plaid, Yodlee) that return balance snapshots for 401k and brokerage accounts, and to loan servicers that return remaining balances.
 
 ## Delivery sequence
 
 1. Bootstrap the `uv` project, Python 3.12 environment, linting, tests, Docker configuration, and beginner-friendly README.
-2. Implement SQLite models, Alembic migrations, and database tests. Split into 2a (database core + users/workspaces), 2b (imports/transactions), 2c (payslips/income), and 2d (planning/insights) — see the PR breakdown.
+2. Implement SQLite models, Alembic migrations, and database tests. Split into 2a (database core + users/workspaces), 2b (imports/transactions), 2c (payslips/income), 2d (planning/insights), and 2e (accounts/balance snapshots) — see the PR breakdown.
 3. Add Google sign-in, private/shared workspaces, and authorization controls.
 4. Build CSV import, transaction review, categorization, and merchant rules.
 5. Build payslip upload, local extraction/OCR, confirmation, and income reporting.
 6. Add LangGraph workflows, insights, budget recommendations, and savings goals.
-7. Containerize the single-instance SQLite application and document the future PostgreSQL migration path.
+7. Build account statement imports (401k, brokerage, mortgage, loans) and the net worth view.
+8. Containerize the single-instance SQLite application and document the future PostgreSQL migration path.
 
 ## Acceptance tests
 
@@ -153,6 +174,7 @@ When a provider is selected, add account linking, consent/revocation handling, e
 - Private and household workspaces cannot access each other’s data; all household members can manage their shared workspace.
 - Payslip extraction produces editable candidates, does not persist unconfirmed values, and correctly reports confirmed net/gross income.
 - Insights, budgets, and goals produce deterministic calculations and explain their source period.
+- Account statement imports produce confirmed balance snapshots, and the net worth view correctly sums assets minus liabilities from the latest snapshot per account.
 - The app runs locally through `uv` and Docker with a persistent SQLite volume.
 - Before an LLM is introduced, its tool allowlist and authorization tests must pass; all unregistered, cross-workspace, raw-file, network, and write-action requests must be rejected.
 

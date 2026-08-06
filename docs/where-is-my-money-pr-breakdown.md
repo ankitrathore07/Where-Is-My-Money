@@ -34,6 +34,13 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add migrations for `budgets`, `savings_goals`, and `insight_snapshots` — the tables PR 7 and PR 8 depend on.
 - **Done when:** all remaining tables migrate cleanly and a fresh database can be created and migrated entirely from source control (the original PR 2 exit criterion).
 
+### PR 2e — Accounts and balance snapshots
+
+- Add migrations for `accounts` (name, type, institution, is_liability, workspace) and `account_balance_snapshots` (account, balance cents, as-of date, source, optional file reference, workspace).
+- Add an optional `account_id` column to `import_jobs` so an import can target a specific account.
+- Index snapshots by (workspace_id, as_of_date) and (account_id, as_of_date).
+- **Done when:** the account/balance tables migrate cleanly and a balance snapshot round-trips through the session linked to an account.
+
 ## PR 3 — Google sign-in and workspaces
 
 - Implement Google OAuth, secure sessions, sign-out, private workspace creation, household workspaces, and equal-access memberships.
@@ -69,6 +76,15 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add editable budget suggestions and monthly remaining-spend views.
 - Add savings goals with target amount, current savings, deadline/monthly contribution calculations, and on-track status.
 - **Done when:** the UI and tests correctly calculate a travel-goal contribution or target date.
+
+## PR 8b — Account statement imports and net worth view
+
+- Add account management (create/edit accounts: checking, savings, credit card, 401k, brokerage, mortgage, auto loan, student loan, other) with asset/liability flag.
+- Add CSV/PDF statement import for 401k, brokerage (e.g., Robinhood, Fidelity NetBenefits), mortgage, and loan accounts: extract the balance as of a date, require confirmation, save a balance snapshot.
+- Add manual balance entry for accounts without a statement.
+- Add the net worth dashboard: total assets, total liabilities, net worth (assets − liabilities), and a trend over time from the latest snapshot per account.
+- Add tests that net worth correctly sums assets minus liabilities and that snapshots are workspace-scoped.
+- **Done when:** a sample 401k statement and a mortgage statement import produce confirmed snapshots and the net worth view shows the correct total.
 
 ## PR 9 — Production readiness and learning documentation
 
