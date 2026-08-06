@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -44,6 +54,8 @@ class Workspace(Base):
     categories: Mapped[list["Category"]] = relationship(back_populates="workspace")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="workspace")
     merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="workspace")
+    payslips: Mapped[list["Payslip"]] = relationship(back_populates="workspace")
+    income_records: Mapped[list["IncomeRecord"]] = relationship(back_populates="workspace")
 
 
 class WorkspaceMembership(Base):
@@ -91,6 +103,7 @@ class UploadedFile(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="uploaded_files")
     import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="uploaded_file")
+    payslips: Mapped[list["Payslip"]] = relationship(back_populates="uploaded_file")
 
 
 class ImportJob(Base):
@@ -167,3 +180,44 @@ class MerchantRule(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="merchant_rules")
     category: Mapped["Category | None"] = relationship(back_populates="merchant_rules")
+
+
+class Payslip(Base):
+    __tablename__ = "payslips"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    uploaded_file_id: Mapped[int | None] = mapped_column(ForeignKey("uploaded_files.id"))
+    employer: Mapped[str | None] = mapped_column(String(255))
+    pay_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pay_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pay_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidate_fields: Mapped[dict | None] = mapped_column(JSON)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    review_status: Mapped[str] = mapped_column(String(50), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="payslips")
+    uploaded_file: Mapped["UploadedFile | None"] = relationship(back_populates="payslips")
+    income_records: Mapped[list["IncomeRecord"]] = relationship(back_populates="payslip")
+
+
+class IncomeRecord(Base):
+    __tablename__ = "income_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    payslip_id: Mapped[int | None] = mapped_column(ForeignKey("payslips.id"))
+    employer: Mapped[str | None] = mapped_column(String(255))
+    pay_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    gross_pay_cents: Mapped[int] = mapped_column()
+    net_pay_cents: Mapped[int] = mapped_column()
+    taxes_cents: Mapped[int] = mapped_column()
+    deductions_cents: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="income_records")
+    payslip: Mapped["Payslip | None"] = relationship(back_populates="income_records")
