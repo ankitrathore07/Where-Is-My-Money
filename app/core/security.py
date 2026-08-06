@@ -1,5 +1,4 @@
 import secrets
-from typing import Optional
 
 
 def generate_invite_token(length: int = 48) -> str:
@@ -7,7 +6,7 @@ def generate_invite_token(length: int = 48) -> str:
     return secrets.token_urlsafe(length)[:length]
 
 
-def constant_time_compare(a: str, b: str) -> bool:
+def constant_time_compare(a: str | None, b: str | None) -> bool:
     """Compare two strings in constant time to avoid timing attacks."""
     if a is None or b is None:
         return False

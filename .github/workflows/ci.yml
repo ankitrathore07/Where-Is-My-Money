@@ -25,5 +25,5 @@ jobs:
           DATABASE_URL: sqlite:///data/where-is-my-money.db
         run: |
           mkdir -p data
-          uv run alembic upgrade head || (python -m alembic upgrade head)
+          uv run alembic upgrade head
       - run: uv run pytest

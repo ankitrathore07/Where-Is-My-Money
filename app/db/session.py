@@ -1,7 +1,7 @@
-from typing import Generator, Optional
+from collections.abc import Generator
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
@@ -11,15 +11,15 @@ engine = None
 SessionLocal = None
 
 
-def init_engine(database_url: Optional[str] = None):
+def init_engine(database_url: str | None = None):
     """Initialize the SQLAlchemy engine and session factory.
 
     Returns the created engine.
     """
     global engine, SessionLocal
     url = database_url or settings.database_url
-    engine = create_engine(url, echo=False, future=True)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    engine = create_engine(url, echo=False)
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return engine
 
 
@@ -27,7 +27,7 @@ def get_engine():
     return engine
 
 
-def get_db() -> Generator:
+def get_db() -> Generator[Session, None, None]:
     """Yield a database session for FastAPI dependencies or manual use.
 
     If the session factory hasn't been initialized, initialize it from settings.
