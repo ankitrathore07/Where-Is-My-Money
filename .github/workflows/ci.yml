@@ -20,4 +20,10 @@ jobs:
       - run: uv sync --all-groups --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: sqlite:///data/where-is-my-money.db
+        run: |
+          mkdir -p data
+          uv run alembic upgrade head
       - run: uv run pytest
