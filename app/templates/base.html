@@ -9,7 +9,17 @@
   <body>
     <header class="site-header">
       <a class="brand" href="/">Where Is My Money?</a>
-      <span class="badge">PR 1 foundation</span>
+      <nav class="site-nav" aria-label="Account navigation">
+        {% if current_user %}
+          <a href="/workspaces">Workspaces</a>
+          <form action="/auth/sign-out" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="link-button" type="submit">Sign out</button>
+          </form>
+        {% else %}
+          <span class="badge">Private by workspace</span>
+        {% endif %}
+      </nav>
     </header>
     <main class="page-content">
       {% block content %}{% endblock %}

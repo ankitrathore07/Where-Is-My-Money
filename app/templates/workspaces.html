@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Your workspaces · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">Signed in as {{ current_user.email }}</p>
+    <h1>Your workspaces</h1>
+    <p>Personal finances stay private. Household spaces are visible only to accepted members.</p>
+  </section>
+
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+  <section class="card-grid" aria-label="Workspace list">
+    {% for workspace in workspaces %}
+      <a class="card" href="/workspaces/{{ workspace.id }}">
+        <span class="badge">{{ "Personal" if workspace.is_personal else "Household" }}</span>
+        <strong>{{ workspace.name }}</strong>
+      </a>
+    {% endfor %}
+  </section>
+
+  {% if pending_invitations %}
+    <section class="panel">
+      <h2>Pending invitations</h2>
+      <ul>
+        {% for invitation in pending_invitations %}
+          <li>{{ invitation.workspace.name }} is waiting for your acceptance.</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Create a household workspace</h2>
+    <form action="/workspaces" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="workspace-name">Workspace name</label>
+      <input id="workspace-name" name="name" maxlength="255" required>
+      <button class="button" type="submit">Create household</button>
+    </form>
+  </section>
+{% endblock %}

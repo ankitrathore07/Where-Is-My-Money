@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}{{ workspace.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ "Personal workspace" if workspace.is_personal else "Household workspace" }}</p>
+    <h1>{{ workspace.name }}</h1>
+    <p>
+      {% if workspace.is_personal %}
+        Only your membership can open this private space.
+      {% else %}
+        Every accepted member has equal access to this household space.
+      {% endif %}
+    </p>
+  </section>
+
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  {% if invitation_url %}
+    <div class="notice" role="status">
+      <strong>Invitation created.</strong>
+      <p>Share this one-time link privately. It expires in seven days.</p>
+      <a href="{{ invitation_url }}">{{ invitation_url }}</a>
+    </div>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Members</h2>
+    <ul>
+      {% for member in members %}
+        <li>{{ member.display_name or member.email }} <span class="muted">{{ member.email }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if not workspace.is_personal %}
+    <section class="panel">
+      <h2>Invite a household member</h2>
+      <form action="/workspaces/{{ workspace.id }}/invitations" method="post" class="stacked-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="invitation-email">Verified Google account email</label>
+        <input id="invitation-email" name="email" type="email" maxlength="320" required>
+        <button class="button" type="submit">Create invitation</button>
+      </form>
+
+      {% if pending_invitations %}
+        <h3>Waiting for acceptance</h3>
+        <ul>
+          {% for invitation in pending_invitations %}
+            <li>{{ invitation.email }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}

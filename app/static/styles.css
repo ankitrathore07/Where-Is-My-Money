@@ -13,6 +13,11 @@ body {
   margin: 0;
 }
 
+button,
+input {
+  font: inherit;
+}
+
 .site-header {
   align-items: center;
   background: #ffffff;
@@ -27,6 +32,30 @@ body {
   font-size: 1.15rem;
   font-weight: 800;
   text-decoration: none;
+}
+
+.site-nav {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+}
+
+.site-nav a,
+.link-button {
+  color: #173f2b;
+  font-weight: 700;
+}
+
+.site-nav form {
+  margin: 0;
+}
+
+.link-button {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
 }
 
 .badge,
@@ -56,6 +85,10 @@ body {
   max-width: 45rem;
 }
 
+.page-heading h1 {
+  font-size: clamp(2.25rem, 6vw, 4.5rem);
+}
+
 h1 {
   color: #123522;
   font-size: clamp(2.5rem, 7vw, 5.25rem);
@@ -76,6 +109,7 @@ h2 {
 }
 
 .button {
+  border: 0;
   background: #1d6a42;
   border-radius: 0.5rem;
   color: #ffffff;
@@ -84,6 +118,10 @@ h2 {
   margin-top: 1rem;
   padding: 0.75rem 1rem;
   text-decoration: none;
+}
+
+button.button {
+  cursor: pointer;
 }
 
 .button:hover,
@@ -95,4 +133,68 @@ h2 {
   border-top: 1px solid #dbe3d7;
   margin-top: 5rem;
   padding-top: 2rem;
+}
+
+.card-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  margin: 2rem 0;
+}
+
+.card,
+.panel,
+.notice {
+  background: #ffffff;
+  border: 1px solid #dbe3d7;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+
+.card {
+  color: #173f2b;
+  display: grid;
+  gap: 0.75rem;
+  text-decoration: none;
+}
+
+.card:hover,
+.card:focus-visible {
+  border-color: #1d6a42;
+}
+
+.panel,
+.notice {
+  margin-top: 1.5rem;
+}
+
+.stacked-form {
+  align-items: flex-start;
+  display: grid;
+  gap: 0.65rem;
+  max-width: 30rem;
+}
+
+.stacked-form input:not([type="hidden"]) {
+  border: 1px solid #aebbad;
+  border-radius: 0.4rem;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.alert,
+.notice {
+  border-left: 0.3rem solid #1d6a42;
+}
+
+.alert {
+  background: #fff3ef;
+  border-color: #a43c20;
+  border-radius: 0.35rem;
+  padding: 0.85rem 1rem;
+}
+
+.muted {
+  color: #667268;
+  font-size: 0.9rem;
 }

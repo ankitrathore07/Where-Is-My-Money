@@ -46,6 +46,7 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Implement Google OAuth, secure sessions, sign-out, private workspace creation, household workspaces, and equal-access memberships.
 - Add pending email invitations and route-level workspace authorization.
 - **Done when:** authorization tests prove private and shared data are isolated correctly.
+- **Status:** Implemented with verified Google identities, signed/CSRF-protected browser sessions, hashed invitation tokens, and membership-derived route authorization.
 
 ## PR 4 — CSV statements and transactions
 
