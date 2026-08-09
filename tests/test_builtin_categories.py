@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from alembic import command
@@ -41,6 +42,7 @@ def test_builtin_categories_migrate_reversibly(tmp_path: Path) -> None:
 
     command.upgrade(configured, "head")
     assert global_categories(database_url) == EXPECTED_BUILTINS
+    assert logging.getLogger("where_is_my_money.config").disabled is False
 
     command.downgrade(configured, "0005_accounts_balances")
     assert global_categories(database_url) == set()

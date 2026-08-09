@@ -103,6 +103,8 @@ async def test_valid_upload_maps_and_previews_before_commit(tmp_path: Path) -> N
     assert mapping_page.status_code == 200
     assert "Date" in mapping_page.text
     assert "Example Market" in mapping_page.text
+    assert 'value="mdy" selected' in mapping_page.text
+    assert 'value="as_is" selected' in mapping_page.text
     assert mapped.status_code == 303
     assert review.status_code == 200
     assert "-12.34" in review.text
@@ -134,6 +136,103 @@ async def test_invalid_extension_creates_no_private_record(tmp_path: Path) -> No
     assert count == 0
     assert "Choose a CSV file" in response.text
     assert list(tmp_path.rglob("*.csv")) == []
+
+
+@pytest.mark.anyio
+async def test_mapping_errors_are_specific_and_do_not_advance_job(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            import_id = int(uploaded.headers["location"].split("/")[-2])
+            response = await client.post(
+                uploaded.headers["location"],
+                data={
+                    "csrf_token": token,
+                    "date_column": "Date",
+                    "description_column": "Date",
+                    "amount_mode": "single",
+                    "amount_column": "Amount",
+                    "date_format": "unknown",
+                    "amount_sign": "unknown",
+                },
+            )
+        with factory() as session:
+            job = session.get(ImportJob, import_id)
+            assert job is not None and job.status == "awaiting_mapping"
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 400
+    assert "Each field must use a different CSV column" in response.text
+    assert "Choose a supported date format" in response.text
+    assert "Choose how signed amounts should be interpreted" in response.text
+
+
+@pytest.mark.anyio
+async def test_invalid_review_edit_is_preserved_without_database_write(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            import_id = int(uploaded.headers["location"].split("/")[-2])
+            await client.post(
+                uploaded.headers["location"],
+                data={
+                    "csrf_token": token,
+                    "date_column": "Date",
+                    "description_column": "Description",
+                    "amount_mode": "single",
+                    "amount_column": "Amount",
+                    "date_format": "mdy",
+                    "amount_sign": "as_is",
+                },
+            )
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports/{import_id}/commit",
+                data={
+                    "csrf_token": token,
+                    "row_numbers": "2",
+                    "include_2": "on",
+                    "date_2": "2026-08-01",
+                    "description_2": "Corrected description",
+                    "amount_2": "not money",
+                },
+            )
+        with factory() as session:
+            count = session.scalar(select(func.count()).select_from(Transaction))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 400
+    assert 'value="Corrected description"' in response.text
+    assert 'value="not money"' in response.text
+    assert "Correct the highlighted rows" in response.text
+    assert count == 0
 
 
 @pytest.mark.anyio
@@ -275,4 +374,60 @@ async def test_cancel_deletes_source_and_records_canceled_state(tmp_path: Path) 
 
     assert response.status_code == 303
     assert response.headers["location"] == f"/workspaces/{workspace_id}"
+    assert list(tmp_path.rglob("*.csv")) == []
+
+
+@pytest.mark.anyio
+async def test_cancel_cleanup_failure_links_to_successful_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    store = application.state.upload_store
+    original_delete = store.delete
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            import_id = int(uploaded.headers["location"].split("/")[-2])
+
+            def fail_delete(storage_key: str) -> None:
+                raise OSError("synthetic cleanup failure")
+
+            monkeypatch.setattr(store, "delete", fail_delete)
+            canceled = await client.post(
+                f"/workspaces/{workspace_id}/imports/{import_id}/cancel",
+                data={"csrf_token": token},
+                follow_redirects=False,
+            )
+            result = await client.get(canceled.headers["location"])
+            monkeypatch.setattr(store, "delete", original_delete)
+            retried = await client.post(
+                f"/workspaces/{workspace_id}/imports/{import_id}/cleanup",
+                data={"csrf_token": token},
+                follow_redirects=False,
+            )
+        with factory() as session:
+            job = session.get(ImportJob, import_id)
+            uploaded_file = session.scalar(select(UploadedFile))
+            assert job is not None and job.status == "canceled"
+            assert uploaded_file is not None and uploaded_file.deleted is True
+    finally:
+        engine.dispose()
+
+    assert canceled.status_code == 303
+    assert canceled.headers["location"].endswith(f"/imports/{import_id}")
+    assert result.status_code == 200
+    assert "Retry source cleanup" in result.text
+    assert retried.status_code == 303
     assert list(tmp_path.rglob("*.csv")) == []

@@ -110,6 +110,7 @@ def _review_page(
     *,
     error: str | None = None,
     row_errors: dict[int, dict[str, str]] | None = None,
+    submitted_edits: tuple[RowEdit, ...] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     review = build_review(session, _store(request), job)
@@ -124,6 +125,8 @@ def _review_page(
             review=review,
             error=error,
             row_errors=row_errors or {},
+            submitted=bool(submitted_edits is not None),
+            submitted_by_row={edit.row_number: edit for edit in submitted_edits or ()},
         ),
         status_code=status_code,
     )
@@ -297,6 +300,7 @@ async def commit_review(
             job,
             error=exc.message,
             row_errors=exc.row_errors,
+            submitted_edits=edits,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     except ImportStateError as exc:
@@ -307,6 +311,7 @@ async def commit_review(
             workspace,
             job,
             error=exc.message,
+            submitted_edits=edits,
             status_code=status.HTTP_409_CONFLICT,
         )
     return RedirectResponse(
@@ -346,7 +351,12 @@ async def cancel_pending_import(
         cancel_import(session, _store(request), job)
     except ImportStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
-    return RedirectResponse(f"/workspaces/{workspace.id}", status_code=status.HTTP_303_SEE_OTHER)
+    destination = (
+        f"/workspaces/{workspace.id}/imports/{job.id}"
+        if job.status == "canceled_cleanup_failed"
+        else f"/workspaces/{workspace.id}"
+    )
+    return RedirectResponse(destination, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/imports/{import_id}/cleanup", dependencies=[Depends(require_csrf)])

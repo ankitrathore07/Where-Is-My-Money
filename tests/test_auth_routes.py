@@ -437,7 +437,7 @@ async def test_household_creation_requires_csrf_and_grants_creator_access(
     assert detail.status_code == 200
     assert "Shared Home" in detail.text
     assert "Route User" in detail.text
-    assert "Import CSV" not in detail.text
+    assert "Import CSV" in detail.text
     assert "Categorize transactions" not in detail.text
 
 

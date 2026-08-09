@@ -13,11 +13,11 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="table-wrap panel"><table>
       <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead>
-      <tbody>{% for row in review.rows %}<tr>
-        <td><input type="checkbox" name="include_{{ row.row_number }}" {% if row.included %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"></td>
-        <td><input name="date_{{ row.row_number }}" value="{{ row.date_value }}"></td>
-        <td><input name="description_{{ row.row_number }}" value="{{ row.description_value }}"></td>
-        <td><input name="amount_{{ row.row_number }}" value="{{ row.amount_value }}"></td>
+      <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr>
+        <td><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"></td>
+        <td><input name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
+        <td><input name="description_{{ row.row_number }}" value="{{ edit.description_value if edit else row.description_value }}"></td>
+        <td><input name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
         <td>{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
       </tr>{% endfor %}</tbody>
     </table></div>
