@@ -60,6 +60,10 @@ class Workspace(Base):
     budgets: Mapped[list["Budget"]] = relationship(back_populates="workspace")
     savings_goals: Mapped[list["SavingsGoal"]] = relationship(back_populates="workspace")
     insight_snapshots: Mapped[list["InsightSnapshot"]] = relationship(back_populates="workspace")
+    accounts: Mapped[list["Account"]] = relationship(back_populates="workspace")
+    account_balance_snapshots: Mapped[list["AccountBalanceSnapshot"]] = relationship(
+        back_populates="workspace"
+    )
 
 
 class WorkspaceMembership(Base):
@@ -108,6 +112,9 @@ class UploadedFile(Base):
     workspace: Mapped["Workspace"] = relationship(back_populates="uploaded_files")
     import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="uploaded_file")
     payslips: Mapped[list["Payslip"]] = relationship(back_populates="uploaded_file")
+    account_balance_snapshots: Mapped[list["AccountBalanceSnapshot"]] = relationship(
+        back_populates="uploaded_file"
+    )
 
 
 class ImportJob(Base):
@@ -116,6 +123,7 @@ class ImportJob(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     uploaded_file_id: Mapped[int | None] = mapped_column(ForeignKey("uploaded_files.id"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     status: Mapped[str] = mapped_column(String(50), default="pending")
     column_mapping: Mapped[dict | None] = mapped_column(JSON)
     validation_errors: Mapped[dict | None] = mapped_column(JSON)
@@ -127,7 +135,52 @@ class ImportJob(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="import_jobs")
     uploaded_file: Mapped["UploadedFile | None"] = relationship(back_populates="import_jobs")
+    account: Mapped["Account | None"] = relationship(back_populates="import_jobs")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="import_job")
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    account_type: Mapped[str] = mapped_column(String(50))
+    institution: Mapped[str | None] = mapped_column(String(255))
+    is_liability: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="accounts")
+    balance_snapshots: Mapped[list["AccountBalanceSnapshot"]] = relationship(
+        back_populates="account"
+    )
+    import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="account")
+
+
+class AccountBalanceSnapshot(Base):
+    __tablename__ = "account_balance_snapshots"
+    __table_args__ = (
+        Index("ix_workspace_balance_snapshot_date", "workspace_id", "as_of_date"),
+        Index("ix_account_balance_snapshot_date", "account_id", "as_of_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    balance_cents: Mapped[int] = mapped_column()
+    as_of_date: Mapped[date] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(50), default="manual")
+    uploaded_file_id: Mapped[int | None] = mapped_column(ForeignKey("uploaded_files.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="account_balance_snapshots")
+    account: Mapped["Account"] = relationship(back_populates="balance_snapshots")
+    uploaded_file: Mapped["UploadedFile | None"] = relationship(
+        back_populates="account_balance_snapshots"
+    )
 
 
 class Category(Base):

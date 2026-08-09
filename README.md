@@ -4,16 +4,17 @@ Where Is My Money? is a personal-finance learning project. It will help people
 import their spending, understand where their money goes, plan expenses, and
 work toward savings goals.
 
-This first pull request deliberately contains only the foundation: a small
-Python web app, tests, code-quality checks, and Docker files. It does not yet
-store financial data, connect to banks, or call an LLM.
+The project now contains a small Python web app and its database foundation,
+including tables for workspaces, transactions, income, planning, accounts, and
+balance snapshots. User-facing finance workflows are still upcoming: the app
+does not yet import financial data, connect to banks, or call an LLM.
 
 ## What you need
 
 - Python 3.12. The project uses uv to find or install it.
 - uv. It is already installed on this machine.
-- Docker Desktop is optional for this PR. It is needed only to build and run
-  the application inside a container.
+- Docker Desktop is optional for local development. It is needed only to build
+  and run the application inside a container.
 
 ## Run the application locally
 
@@ -60,8 +61,8 @@ container with:
 
     docker compose down
 
-The Compose file creates a named app_data volume. The upcoming database PR will
-use this persistent storage for local application data.
+The Compose file creates a named app_data volume. The SQLite database uses this
+persistent storage so local application data can survive container restarts.
 
 ### Run the checks inside the container
 
@@ -79,8 +80,10 @@ container stopped, run:
 
     app/main.py              FastAPI application and routes
     app/core/config.py       Application settings read from environment
+    app/db/models.py         SQLAlchemy table definitions and relationships
     app/templates/           HTML pages rendered by Python
     app/static/              Browser CSS and JavaScript assets
+    migrations/              Ordered Alembic database schema changes
     tests/                   Automated tests
     pyproject.toml           Project metadata and Python dependencies
     uv.lock                  Exact dependency versions
@@ -92,5 +95,6 @@ container stopped, run:
 
 ## Next step
 
-PR 2 introduces the SQLite database schema and migrations. Until then, the
-application intentionally remembers no financial information.
+PR 3 adds Google sign-in and workspace authorization. The database schema is
+ready, but the application intentionally stores no financial information until
+later user-facing features use it.
