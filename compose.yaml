@@ -4,6 +4,12 @@ services:
   web:
     build:
       context: .
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SECRET_KEY: ${SECRET_KEY:-dev-only-ephemeral-key-do-not-use-in-production}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///data/where-is-my-money.db}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "8000:8000"
     volumes:
