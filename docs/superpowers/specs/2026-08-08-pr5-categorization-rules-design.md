@@ -60,24 +60,18 @@ service if real statement fixtures demonstrate the need.
 
 ## Product behavior
 
+The expanded built-in taxonomy, initial merchant catalog, independent Subscription label, ambiguity
+policy, and catalog-maintenance rules are defined in
+`docs/superpowers/specs/2026-08-09-pr5-built-in-categorization-catalog-design.md`. That document
+extends this design and is part of the same PR5 scope.
+
 ### Built-in categories
 
 PR4 owns creation of the initial built-in category rows because its import review and transaction
-list need them before PR5 lands. The required built-ins are:
-
-| Name | Kind |
-| --- | --- |
-| Uncategorized | expense |
-| Groceries | expense |
-| Dining | expense |
-| Housing | expense |
-| Utilities | expense |
-| Transportation | expense |
-| Shopping | expense |
-| Entertainment | expense |
-| Health | expense |
-| Income | income |
-| Transfer | transfer |
+list need them before PR5 lands. The required names, kinds, boundaries, and initial catalog are
+defined by the expanded catalog design. In particular, it supersedes the earlier short category
+list with the complete V1 taxonomy, including `Dining & Drinks`, `Software & Online Services`, and
+`Health & Fitness`.
 
 Built-ins have `workspace_id = NULL`. Their names are stable application identifiers in V1; the UI
 may display them directly. PR5 must fail clearly at startup/test setup if `Uncategorized` is absent,
@@ -124,26 +118,19 @@ stored rule.
 
 ### Built-in merchant rules
 
-Built-in merchant rules live in a small immutable Python catalog, not the database. Each entry maps
+Built-in merchant rules live in an immutable Python catalog, not the database. Each entry maps
 one or more exact canonical keys to a normalized merchant label and a built-in category name.
 Keeping them in code makes review and precedence explicit and avoids pretending global rows are
 workspace-owned `MerchantRule` records.
 
-The initial catalog is deliberately small and fixture-driven:
-
-| Exact key | Display merchant | Built-in category |
-| --- | --- | --- |
-| NETFLIX COM | Netflix | Entertainment |
-| SPOTIFY USA | Spotify | Entertainment |
-| UBER TRIP | Uber | Transportation |
-
-PR5 must not claim comprehensive merchant coverage. A missing match correctly falls through to
-`Uncategorized`.
+The initial fixture-backed merchant keys, categories, amount directions, Subscription values, and
+intentional exclusions are defined in the expanded catalog design. A missing or ambiguous match
+correctly falls through to `Uncategorized`.
 
 ### Categorization precedence
 
 The categorizer returns a `CategorizationDecision` containing `normalized_merchant`, `category_id`,
-and one of four source values:
+`is_subscription`, and one of four source values:
 
 - `manual`: a member explicitly chose the transaction category. This value is never replaced by an
   automatic pass.
@@ -162,7 +149,8 @@ a custom category owned by that same workspace.
 
 From the transaction list/review UI, a member can open an edit form for a transaction in the active
 workspace. The form shows the immutable statement description, editable normalized merchant label,
-a category picker, and `Use for matching future transactions` checkbox.
+a category picker, an independent Subscription checkbox, and `Use for matching future
+transactions` checkbox.
 
 Submitting the form always updates the selected transaction and sets
 `categorization_source = "manual"`. The service rejects a transaction from another workspace and a
@@ -176,12 +164,12 @@ neither is committed.
 
 If the checkbox is selected, PR5 derives the exact merchant key from the transaction's original
 description and upserts one `MerchantRule` for `(workspace_id, merchant_pattern)`. The rule stores
-the submitted normalized merchant label and category.
+the submitted normalized merchant label, category, and Subscription choice.
 
 If that workspace already has a rule for the key, the new explicit choice replaces its label and
-category. A rule in another workspace is untouched. Saving a rule does not recategorize historical
-transactions; it affects candidates evaluated after the save. The transaction being edited stays
-`manual`, even though its values now equal the rule.
+category and Subscription choice. A rule in another workspace is untouched. Saving a rule does not
+recategorize historical transactions; it affects candidates evaluated after the save. The
+transaction being edited stays `manual`, even though its values now equal the rule.
 
 Unchecking the box means “do not create or update a rule,” not “delete an existing rule.” Rule
 management and deletion are deferred.
@@ -190,7 +178,8 @@ management and deletion are deferred.
 
 PR4 first parses and normalizes structural CSV values: date, original description, signed integer
 cents, and duplicate fingerprint. PR5 then categorizes each non-duplicate candidate before the
-review page is rendered. The review page shows the suggested merchant/category and source.
+review page is rendered. The review page shows the suggested merchant, category, Subscription
+value, and source.
 
 If the member changes the suggestion during review, PR4 commits that row as `manual`; otherwise it
 commits the source returned by PR5. A candidate must not be saved before review approval. Rebuilding
@@ -311,6 +300,8 @@ PR5 adds one Alembic migration after the final PR4 head:
 4. Add a partial unique index on `(workspace_id, name_key)` for custom rows where
    `workspace_id IS NOT NULL`.
 5. Add a partial unique index on `name_key` for built-in rows where `workspace_id IS NULL`.
+6. Add non-null `is_subscription` boolean columns with a false default to `transactions` and
+   `merchant_rules`.
 
 The migration must first detect duplicate existing values and fail with a useful message in tests,
 rather than silently dropping a rule or category. SQLite and PostgreSQL versions of the partial
@@ -341,6 +332,8 @@ These rules hold at the database-service boundary, even when a route was already
 - Custom category reads use the active workspace ID; built-ins are included only with an explicit
   `workspace_id IS NULL` branch.
 - Merchant rule reads and upserts use both workspace ID and merchant key.
+- Category and Subscription values are taken from the same winning rule; another workspace's rule
+  cannot supply either value.
 - A category selected for a transaction must satisfy
   `category.workspace_id IS NULL OR category.workspace_id = active_workspace_id`.
 - The categorizer accepts workspace ID as an explicit required argument and has no global “current
@@ -355,6 +348,8 @@ These rules hold at the database-service boundary, even when a route was already
 - Display fallback trimming, whitespace collapse, and length limit.
 - Built-in catalog lookup and no-match behavior.
 - Exact matching: similar prefixes do not match.
+- Catalog validation for category names, unique canonical keys, amount directions, and Subscription
+  values.
 
 ### Service tests with an in-memory database
 
@@ -367,6 +362,8 @@ These rules hold at the database-service boundary, even when a route was already
 - Manual edit without checkbox changes only the transaction.
 - Manual edit with checkbox atomically updates the transaction and creates/replaces only the active
   workspace's rule.
+- Manual and workspace Subscription choices override built-in values without changing category
+  precedence.
 - Saved rule affects a later candidate but does not rewrite prior transactions.
 - Forced rule failure rolls back the manual transaction update.
 
@@ -380,7 +377,8 @@ These rules hold at the database-service boundary, even when a route was already
 
 ### PR4 integration tests
 
-- A sample normalized candidate receives a built-in suggestion on the review page.
+- A sample normalized candidate receives a built-in category and Subscription suggestion on the
+  review page.
 - A workspace rule overrides that suggestion.
 - A review correction commits with source `manual`.
 - Saving a rule, then previewing a later import, applies `workspace_rule`.
@@ -437,15 +435,16 @@ PR5 is complete when all of the following are true:
 
 1. A member can create and select a workspace-only category.
 2. A member can manually change a transaction's category and normalized merchant.
-3. The manual transaction stores source `manual` and automatic evaluation cannot overwrite it.
-4. With `Use for matching future transactions` selected, a later exact-key candidate in the same
+3. A member can independently set or clear Subscription without replacing the primary category.
+4. The manual transaction stores source `manual` and automatic evaluation cannot overwrite it.
+5. With `Use for matching future transactions` selected, a later exact-key candidate in the same
    workspace receives the saved merchant/category with source `workspace_rule`.
-5. The same key in another workspace does not see that rule.
-6. Without a workspace rule, a built-in rule applies; without either, the built-in
+6. The same key in another workspace does not see that rule.
+7. Without a workspace rule, a built-in rule applies; without either, the built-in
    `Uncategorized` category applies.
-7. Cross-workspace transaction/category IDs and unauthorized routes do not disclose or mutate data.
-8. Import review still precedes commit and duplicate re-upload remains safe.
-9. Migration-from-PR4, full pytest, Ruff lint, and Ruff format checks pass.
+8. Cross-workspace transaction/category IDs and unauthorized routes do not disclose or mutate data.
+9. Import review still precedes commit and duplicate re-upload remains safe.
+10. Migration-from-PR4, full pytest, Ruff lint, and Ruff format checks pass.
 
 ## PR4-to-PR5 execution handoff
 
