@@ -98,9 +98,7 @@ def test_liability_balance_uses_positive_amount_owed(
     assert fetched in account.balance_snapshots
 
 
-def test_exceptional_negative_balance_is_allowed(
-    session: Session, workspace: Workspace
-) -> None:
+def test_exceptional_negative_balance_is_allowed(session: Session, workspace: Workspace) -> None:
     account = Account(
         workspace_id=workspace.id,
         name="Overdrawn Checking",
@@ -157,9 +155,7 @@ def test_multiple_snapshots_on_same_date_are_allowed(
     assert all(snapshot.id is not None for snapshot in snapshots)
 
 
-def test_snapshot_can_reference_uploaded_file(
-    session: Session, workspace: Workspace
-) -> None:
+def test_snapshot_can_reference_uploaded_file(session: Session, workspace: Workspace) -> None:
     uploaded_file = UploadedFile(
         workspace_id=workspace.id,
         file_type="pdf",
