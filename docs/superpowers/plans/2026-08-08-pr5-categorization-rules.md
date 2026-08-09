@@ -8,6 +8,9 @@
 
 **Tech Stack:** Python 3.12, FastAPI, Jinja2, SQLAlchemy 2.x, Alembic, SQLite/PostgreSQL-compatible schema, pytest, Ruff.
 
+**Implementation status:** Tasks 1–8 are implemented on `codex/pr-5-categorization-rules`; the
+final verification and review gates below determine readiness to merge.
+
 ## Global Constraints
 
 - Start implementation only from merged `main` after both PR3 and PR4 land.
@@ -35,52 +38,36 @@
 
 ## Preflight: required merged interfaces
 
-Do this gate after PR4 merges and before Task 1. It intentionally has no implementation commit.
+**Status:** Complete. PR3 and PR4 were present on merged `main` before Task 1.
 
-Expected PR3 semantics:
+Consumed PR3 paths:
 
 ```python
-@dataclass(frozen=True)
-class WorkspaceContext:
-    user_id: int
-    workspace_id: int
-
-
-async def require_current_user(request: Request, session: Session) -> User:
-    """Return PR3's authenticated user or raise its standard unauthenticated response."""
-
-
-async def require_workspace_context(
-    workspace_id: int,
-    current_user: User,
-    session: Session,
-) -> WorkspaceContext:
-    """Return owner/member context or raise HTTP 404."""
-
-
-def verify_csrf(request: Request) -> None:
-    """Return after verification or raise PR3's standard CSRF response."""
+app.auth.dependencies.require_current_user(...) -> User
+app.workspaces.dependencies.require_workspace(...) -> Workspace
+app.core.middleware.require_csrf(...) -> None
 ```
 
-Expected PR4 data boundary:
+Consumed PR4 data boundary:
 
 ```python
 @dataclass(frozen=True)
-class NormalizedTransactionCandidate:
+class NormalizedTransaction:
     row_number: int
-    date: datetime
+    transaction_date: date
     description: str
+    normalized_merchant: str
     amount_cents: int
-    duplicate_fingerprint: str
 
 
 @dataclass(frozen=True)
-class ReviewedTransaction:
-    candidate: NormalizedTransactionCandidate
-    normalized_merchant: str
-    category_id: int
-    is_subscription: bool
-    categorization_source: str
+class ReviewRow:
+    normalized: NormalizedTransaction | None
+    duplicate: bool
+    normalized_merchant: str | None
+    category_id: int | None
+    is_subscription: bool | None
+    categorization_source: str | None
 ```
 
 - [ ] **Step 1: Create an isolated implementation branch/worktree from merged main**
@@ -139,21 +126,18 @@ revision identifier, update every explicit `0006`/`0007` reference in this plan 
 
 ### Integration Contract
 
-These concrete public paths are the handoff requested from PR3 and PR4. They do not exist on the
-inspected PR2e base. If merged code provides identical semantics under a different path, update the
-plan to that exact path during Preflight; semantic differences require the smallest tested adapter.
+These are the verified public paths used by the implementation.
 
 | Contract | Required semantics | Required public location |
 | --- | --- | --- |
-| Authorized workspace | owner/accepted member or 404 | `app/workspaces/dependencies.py::require_workspace_context` |
-| Workspace value | immutable user/workspace IDs | `app/workspaces/types.py::WorkspaceContext` |
+| Authorized workspace | owner/accepted member or 404; returns ORM workspace | `app/workspaces/dependencies.py::require_workspace` |
 | Current user | authenticated ORM/domain user | `app/auth/dependencies.py::require_current_user` |
-| CSRF | validates every state-changing form | `app/core/security.py::verify_csrf` |
-| Normalized candidate | row/date/description/cents/fingerprint | `app/imports/types.py::NormalizedTransactionCandidate` |
-| Review row | merchant/category/subscription/source survive to commit | `app/imports/types.py::ReviewedTransaction` |
-| Preview builder | categorizer call after dedupe | `app/imports/service.py::build_import_preview` |
-| Commit service | persists authoritative workspace/review fields | `app/imports/service.py::commit_reviewed_transactions` |
-| Transaction list | scoped loader/template extension point | `app/transactions/service.py::list_transactions` |
+| CSRF | validates every state-changing form | `app/core/middleware.py::require_csrf` |
+| Normalized candidate | row/date/description/merchant/cents | `app/imports/types.py::NormalizedTransaction` |
+| Review row | duplicate plus merchant/category/subscription/source | `app/imports/types.py::ReviewRow` and `RowEdit` |
+| Preview builder | categorizer call after dedupe | `app/imports/service.py::build_review` |
+| Commit service | persists authoritative workspace/review fields | `app/imports/service.py::commit_import` |
+| Transaction list | scoped loader/template extension point | `app/transactions/queries.py::list_transactions` |
 | Alembic parent | seeded built-ins, single head | `0006_builtin_categories` |
 
 ---
@@ -477,10 +461,10 @@ git commit -m "feat: expand built-in categorization catalog"
 
 **Interfaces:**
 
-- Consumes: `NormalizedTransactionCandidate` from PR4, models from Task 1, and pure types/functions
+- Consumes: `NormalizedTransaction` from PR4, models from Task 1, and pure types/functions
   from Task 2.
 - Produces: `categorize_candidate(session: Session, workspace_id: int, candidate:
-  NormalizedTransactionCandidate) -> CategorizationDecision`.
+  NormalizedTransaction) -> CategorizationDecision`.
 
 - [ ] **Step 1: Add explicit two-workspace and built-in-category fixtures**
 
@@ -861,7 +845,7 @@ git commit -m "feat: save manual categories and future merchant rules"
 
 ### Task 6: Add authorized category and transaction forms
 
-**Blocked by:** final PR3 dependency/CSRF names and PR4 transaction page layout.
+**Dependency status:** Unblocked by merged PR3 dependencies and PR4 transaction layout.
 
 **Files:**
 
@@ -878,7 +862,7 @@ git commit -m "feat: save manual categories and future merchant rules"
 
 **Interfaces:**
 
-- Consumes: PR3 authorized `WorkspaceContext` and CSRF dependency/token convention; PR4 transaction
+- Consumes: PR3 authorized `Workspace` and CSRF dependency/token convention; PR4 transaction
   list route/template; Tasks 4 and 5 service APIs.
 - Produces:
   `GET/POST /workspaces/{workspace_id}/categories`,
@@ -963,7 +947,7 @@ git commit -m "feat: add categorization forms"
 
 ### Task 7: Integrate categorization into PR4 import review
 
-**Blocked by:** final PR4 candidate, preview, review serialization, and commit interfaces.
+**Dependency status:** Unblocked by merged PR4 candidate, review, and commit interfaces.
 
 **Files:**
 
@@ -976,8 +960,8 @@ git commit -m "feat: add categorization forms"
 
 **Interfaces:**
 
-- Consumes: actual PR4 equivalents of `NormalizedTransactionCandidate` and
-  `ReviewedTransaction`, plus `categorize_candidate()` from Task 3.
+- Consumes: PR4 `NormalizedTransaction`, `ReviewRow`, and `RowEdit`, plus
+  `categorize_candidate()` from Task 3.
 - Produces: categorized preview rows whose merchant/category/Subscription/source survive unchanged
   to commit, except explicit review edits become `manual`.
 
@@ -1180,6 +1164,5 @@ feature, fuzzy matcher, bulk recategorization, LangGraph/LLM work, or unrelated 
 5. Request code review after the full suite is green. Create a production PR only then, with PR5's
    acceptance matrix in the description.
 
-The implementation is currently blocked at Preflight because the inspected merged base contains
-PR2e but not PR3 or PR4. This plan deliberately provides no production-code shortcut around that
-blocker.
+PR3 and PR4 are merged and every dependency in this handoff has been consumed through the concrete
+paths in the Integration Contract table. No PR5 work remains blocked on those pull requests.

@@ -1,8 +1,8 @@
 # PR5 Categorization Rules Design
 
-**Status:** Design ready; implementation intentionally waits for PR3 and PR4 integration contracts.
+**Status:** Implemented on the PR5 branch after PR3 and PR4 merged.
 
-**Base inspected:** merged `main` at `a12aa57`, including PR2e.
+**Base inspected:** merged `main` including PR3 and PR4; concrete integration paths are recorded below.
 
 ## Purpose
 
@@ -27,10 +27,9 @@ is nullable so global built-ins and workspace-owned custom categories can share 
 `normalized_merchant`, `category_id`, and `categorization_source` fields, plus workspace/date,
 category, and normalized-merchant indexes.
 
-The current foundation deliberately has no feature services or routes. PR3 and PR4 are not present
-on `main`, so their final module names and signatures cannot be verified yet. The contracts below
-are therefore merge requirements for those PRs and a rebase checklist for PR5, not claims about
-code that already exists.
+PR3 and PR4 are present on the implementation base. PR5 consumes their existing authentication,
+workspace, CSRF, normalized-row, review, commit, duplicate, and transaction-query boundaries. It
+adds no alternate authentication or CSV pipeline.
 
 ## Design choices considered
 
@@ -202,32 +201,14 @@ Routes never build workspace-scoped queries directly. They receive an authorized
 from PR3 and pass its ID to services. Services still include `workspace_id` in every read/write
 query; authorization at the route is not treated as a substitute for data isolation.
 
-## Required PR3 auth/workspace interface
+## Consumed PR3 auth/workspace interface
 
-PR5 requires PR3 to expose these semantics. Names may be adapted once PR3 lands, but there must be
-one obvious equivalent for each contract:
+The merged PR3 contracts consumed by PR5 are:
 
 ```python
-@dataclass(frozen=True)
-class WorkspaceContext:
-    user_id: int
-    workspace_id: int
-
-
-async def require_current_user(request: Request, session: Session) -> User:
-    """Return the signed-in user or raise the PR3 unauthenticated response."""
-
-
-async def require_workspace_context(
-    workspace_id: int,
-    current_user: User,
-    session: Session,
-) -> WorkspaceContext:
-    """Return context only for an owner/accepted member; otherwise raise 404."""
-
-
-def verify_csrf(request: Request) -> None:
-    """Reject a state-changing request without PR3's valid signed CSRF token."""
+app.auth.dependencies.require_current_user(...) -> User
+app.workspaces.dependencies.require_workspace(...) -> Workspace
+app.core.middleware.require_csrf(...) -> None
 ```
 
 Consumption rules:
@@ -242,33 +223,44 @@ Consumption rules:
    redirect or 401 behavior consistently.
 6. Every POST uses PR3's CSRF dependency and token rendering convention.
 
-If PR3 uses a dependency class or an `Annotated` alias instead of the functions above, PR5 should
-consume that public alias rather than duplicate membership queries.
+`require_workspace` resolves ownership or accepted membership and returns 404 for missing or
+foreign workspaces. PR5 receives its returned ORM `Workspace` through FastAPI dependency injection
+and uses `workspace.id` as the authoritative scope.
 
-## Required PR4 transaction/import interface
+## Consumed PR4 transaction/import interface
 
-PR5 requires PR4 to retain a stable pure-data boundary after CSV value normalization and before
-review rendering:
+PR5 extends the merged PR4 pure-data boundary after CSV value normalization and duplicate
+detection and before review rendering:
 
 ```python
 @dataclass(frozen=True)
-class NormalizedTransactionCandidate:
+class NormalizedTransaction:
     row_number: int
-    date: datetime
+    transaction_date: date
     description: str
+    normalized_merchant: str
     amount_cents: int
-    duplicate_fingerprint: str
 
 
 @dataclass(frozen=True)
-class ReviewedTransaction:
-    candidate: NormalizedTransactionCandidate
-    normalized_merchant: str
-    category_id: int
-    categorization_source: str
+class ReviewRow:
+    normalized: NormalizedTransaction | None
+    duplicate: bool
+    normalized_merchant: str | None
+    category_id: int | None
+    is_subscription: bool | None
+    categorization_source: str | None
 ```
 
-PR4 must provide these behaviors to PR5:
+Concrete integration points are:
+
+- `app.imports.service.build_review`: calls the categorizer only for valid non-duplicate rows.
+- `app.imports.types.RowEdit`: carries selected and originally previewed categorization fields.
+- `app.imports.service.commit_import`: validates accessible categories and persists the approved
+  decision without re-running changed rules.
+- `app.transactions.queries.list_transactions`: remains the workspace-scoped list loader.
+
+The retained PR4 behaviors are:
 
 1. `description` is the original normalized-text statement description and is available before a
    `Transaction` row exists.
@@ -276,7 +268,7 @@ PR4 must provide these behaviors to PR5:
    detection.
 3. The preview builder has one injection/call point for
    `categorize_candidate(session: Session, workspace_id: int, candidate:
-   NormalizedTransactionCandidate) -> CategorizationDecision`.
+   NormalizedTransaction) -> CategorizationDecision`.
 
 4. Review state carries `normalized_merchant`, `category_id`, and `categorization_source` without
    recomputing them during commit.
@@ -286,8 +278,8 @@ PR4 must provide these behaviors to PR5:
 7. PR4 exposes or centralizes transaction list loading so PR5 can add an edit link without creating
    an unscoped second list query.
 
-If PR4 chooses Pydantic models instead of dataclasses, the field names and meanings above remain the
-compatibility contract. PR5 should adapt at its boundary rather than force a rewrite of PR4.
+The browser never supplies a workspace ID inside review-row data; the authorized import job owns
+that scope. Duplicate detection stays in PR4 and happens before categorization side effects.
 
 ## Persistence changes
 
@@ -403,31 +395,12 @@ These rules hold at the database-service boundary, even when a route was already
 - Import parsing, mapping, duplicate detection, file retention, authentication, membership, or CSRF
   implementation (owned by PR3/PR4).
 
-## Blocked and independent work
+## Dependency status
 
-### Safe before PR3/PR4 land
-
-- Review and approve this design and implementation plan.
-- Refine pure normalization examples against anonymized statement descriptions.
-- Agree on the PR3 `WorkspaceContext`/CSRF public dependency and PR4 candidate/review DTO fields.
-- Prepare test fixture CSVs containing no real financial data.
-
-### Blocked by PR3
-
-- PR5 routes, route tests, active-workspace navigation, 404 behavior, and CSRF wiring.
-- Final names/import paths for current-user and authorized-workspace dependencies.
-
-### Blocked by PR4
-
-- Final migration revision ID and safe category backfill (PR4 owns built-in seeding).
-- Import preview categorization, review overrides, commit integration, and end-to-end saved-rule test.
-- Transaction list edit links and final template composition.
-- Exact DTO/repository import paths.
-
-### Must wait for both
-
-- Full authorization plus import acceptance tests and the final quality-gate run.
-- Production implementation branch/PR. Start it only from merged `main` after PR3 and PR4.
+PR3 and PR4 are merged, so no PR5 implementation work remains blocked by them. PR5 reuses their
+public boundaries listed above. Future work deliberately remains out of scope: fuzzy matching,
+retroactive recategorization, category edit/delete, rule-management UI, and cadence-based recurring
+charge detection.
 
 ## Acceptance criteria
 
@@ -446,10 +419,9 @@ PR5 is complete when all of the following are true:
 9. Import review still precedes commit and duplicate re-upload remains safe.
 10. Migration-from-PR4, full pytest, Ruff lint, and Ruff format checks pass.
 
-## PR4-to-PR5 execution handoff
+## Implementation handoff
 
-After PR4 merges, the PR5 implementer should rebase/create a fresh branch from merged `main`, record
-the actual PR3/PR4 contract locations in the implementation plan, and run the existing suite before
-writing a failing PR5 test. If an expected contract is missing, add only the smallest adapter or
-PR4 refactor needed to expose it; do not duplicate authentication, workspace membership, import
-parsing, duplicate detection, or transaction commit logic inside PR5.
+PR5 was implemented from merged `main` on `codex/pr-5-categorization-rules`. Continue maintenance
+through the concrete interfaces above; do not duplicate authentication, workspace membership,
+import parsing, duplicate detection, or transaction commit logic. The acceptance test in
+`tests/test_categorization_acceptance.py` is the executable handoff for the cross-feature workflow.
