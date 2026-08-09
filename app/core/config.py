@@ -8,7 +8,14 @@ Values are read from environment variables (or a local .env file) via
 pydantic-settings. No secret is ever committed to source control.
 """
 
+import logging
+import secrets
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEVELOPMENT_SECRET_SENTINEL = "dev-only-ephemeral-key-do-not-use-in-production"
+logger = logging.getLogger("where_is_my_money.config")
 
 
 class Settings(BaseSettings):
@@ -25,10 +32,37 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "development"
-    secret_key: str = "dev-only-ephemeral-key-do-not-use-in-production"
+    secret_key: str | None = None
     database_url: str = "sqlite:///data/where-is-my-money.db"
     google_client_id: str = ""
     google_client_secret: str = ""
+
+    @property
+    def is_production(self) -> bool:
+        """Return whether production-only security rules apply."""
+        return self.app_env.casefold() == "production"
+
+    @property
+    def session_https_only(self) -> bool:
+        """Require HTTPS when the browser sends the session cookie."""
+        return self.is_production
+
+    @model_validator(mode="after")
+    def validate_secret_key(self) -> "Settings":
+        """Generate a temporary local key or reject unsafe production keys."""
+        missing_or_sentinel = not self.secret_key or self.secret_key == DEVELOPMENT_SECRET_SENTINEL
+        if self.is_production:
+            if missing_or_sentinel:
+                raise ValueError("SECRET_KEY is required in production")
+            if len(self.secret_key) < 32:
+                raise ValueError("SECRET_KEY must be at least 32 characters in production")
+        elif missing_or_sentinel:
+            self.secret_key = secrets.token_urlsafe(48)
+            logger.warning(
+                "Generated an ephemeral SECRET_KEY for development; browser sessions "
+                "will reset when the process restarts"
+            )
+        return self
 
 
 settings = Settings()
