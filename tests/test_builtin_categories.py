@@ -5,19 +5,9 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-EXPECTED_BUILTINS = {
-    ("Uncategorized", "expense"),
-    ("Groceries", "expense"),
-    ("Dining", "expense"),
-    ("Housing", "expense"),
-    ("Utilities", "expense"),
-    ("Transportation", "expense"),
-    ("Shopping", "expense"),
-    ("Entertainment", "expense"),
-    ("Health", "expense"),
-    ("Income", "income"),
-    ("Transfers", "transfer"),
-}
+from app.categorization.builtins import BUILTIN_CATEGORY_DEFINITIONS
+
+EXPECTED_BUILTINS = set(BUILTIN_CATEGORY_DEFINITIONS)
 
 
 def global_categories(database_url: str) -> set[tuple[str, str]]:
