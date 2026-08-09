@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.service import get_or_create_google_user
+from app.core.security import hash_invitation_token
 from app.db.models import User, WorkspaceInvitation, WorkspaceMembership
 from app.workspaces.service import (
     InvitationError,
@@ -34,7 +35,7 @@ def create_user(session: Session, subject: str, email: str, name: str) -> User:
 
 
 def test_household_creator_is_an_equal_member(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
 
     household = create_household_workspace(session, owner, "  Our Home  ")
     session.commit()
@@ -53,15 +54,15 @@ def test_household_creator_is_an_equal_member(session: Session) -> None:
 
 @pytest.mark.parametrize("name", ["", "   ", "x" * 256])
 def test_household_rejects_invalid_name(session: Session, name: str) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
 
     with pytest.raises(WorkspaceRuleError):
         create_household_workspace(session, owner, name)
 
 
 def test_workspace_listing_and_lookup_use_membership_only(session: Session) -> None:
-    alex = create_user(session, "alex-sub", "alex@example.test", "Alex")
-    blair = create_user(session, "blair-sub", "blair@example.test", "Blair")
+    alex = create_user(session, "alex-sub", "alex@example.com", "Alex")
+    blair = create_user(session, "blair-sub", "blair@example.com", "Blair")
     household = create_household_workspace(session, alex, "Shared Home")
     session.commit()
 
@@ -76,21 +77,21 @@ def test_workspace_listing_and_lookup_use_membership_only(session: Session) -> N
 
 
 def test_personal_workspace_cannot_be_invited_into(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
 
     with pytest.raises(WorkspaceRuleError):
         create_workspace_invitation(
             session,
             owner.owned_workspaces[0],
             owner,
-            "invitee@example.test",
+            "invitee@example.com",
             now=NOW,
         )
 
 
 def test_outsider_cannot_invite_to_household(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
-    outsider = create_user(session, "outsider-sub", "outsider@example.test", "Outsider")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    outsider = create_user(session, "outsider-sub", "outsider@example.com", "Outsider")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
 
@@ -99,13 +100,13 @@ def test_outsider_cannot_invite_to_household(session: Session) -> None:
             session,
             household,
             outsider,
-            "invitee@example.test",
+            "invitee@example.com",
             now=NOW,
         )
 
 
 def test_invitation_normalizes_email_and_stores_only_digest(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
 
@@ -113,27 +114,42 @@ def test_invitation_normalizes_email_and_stores_only_digest(session: Session) ->
         session,
         household,
         owner,
-        "  Invitee@Example.Test  ",
+        "  Invitee@Example.Com  ",
         now=NOW,
     )
     session.commit()
 
-    assert dispatch.invitation.email == "invitee@example.test"
+    assert dispatch.invitation.email == "invitee@example.com"
     assert dispatch.invitation.token != dispatch.raw_token
     assert len(dispatch.invitation.token) == 64
     stored_expiry = dispatch.invitation.expires_at.replace(tzinfo=UTC)
     assert stored_expiry == NOW + timedelta(days=7)
 
 
+def test_invitation_rejects_invalid_email_syntax(session: Session) -> None:
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    household = create_household_workspace(session, owner, "Shared Home")
+    session.commit()
+
+    with pytest.raises(InvitationError):
+        create_workspace_invitation(
+            session,
+            household,
+            owner,
+            "not-an-email",
+            now=NOW,
+        )
+
+
 def test_duplicate_live_invitation_is_rejected(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
     create_workspace_invitation(
         session,
         household,
         owner,
-        "invitee@example.test",
+        "invitee@example.com",
         now=NOW,
     )
     session.commit()
@@ -143,13 +159,13 @@ def test_duplicate_live_invitation_is_rejected(session: Session) -> None:
             session,
             household,
             owner,
-            "INVITEE@example.test",
+            "INVITEE@example.com",
             now=NOW + timedelta(hours=1),
         )
 
 
 def test_current_member_cannot_be_invited_again(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
 
@@ -158,21 +174,21 @@ def test_current_member_cannot_be_invited_again(session: Session) -> None:
             session,
             household,
             owner,
-            "OWNER@example.test",
+            "OWNER@example.com",
             now=NOW,
         )
 
 
 def test_invitation_requires_matching_verified_user_email(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
-    wrong_user = create_user(session, "wrong-sub", "wrong@example.test", "Wrong")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    wrong_user = create_user(session, "wrong-sub", "wrong@example.com", "Wrong")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
     dispatch = create_workspace_invitation(
         session,
         household,
         owner,
-        "invitee@example.test",
+        "invitee@example.com",
         now=NOW,
     )
     session.commit()
@@ -184,8 +200,8 @@ def test_invitation_requires_matching_verified_user_email(session: Session) -> N
 
 
 def test_expired_invitation_cannot_be_accepted(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
-    invitee = create_user(session, "invitee-sub", "invitee@example.test", "Invitee")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    invitee = create_user(session, "invitee-sub", "invitee@example.com", "Invitee")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
     dispatch = create_workspace_invitation(
@@ -206,11 +222,31 @@ def test_expired_invitation_cannot_be_accepted(session: Session) -> None:
         )
 
 
+def test_invitation_without_expiry_is_unavailable(session: Session) -> None:
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    invitee = create_user(session, "invitee-sub", "invitee@example.com", "Invitee")
+    household = create_household_workspace(session, owner, "Shared Home")
+    session.commit()
+    invitation = WorkspaceInvitation(
+        workspace_id=household.id,
+        email=invitee.email,
+        token=hash_invitation_token("legacy-token"),
+        invited_by_id=owner.id,
+        accepted=False,
+        expires_at=None,
+    )
+    session.add(invitation)
+    session.commit()
+
+    with pytest.raises(InvitationError):
+        accept_workspace_invitation(session, invitee, "legacy-token", now=NOW)
+
+
 def test_acceptance_adds_equal_access_once_and_preserves_private_boundaries(
     session: Session,
 ) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
-    invitee = create_user(session, "invitee-sub", "invitee@example.test", "Invitee")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    invitee = create_user(session, "invitee-sub", "invitee@example.com", "Invitee")
     household = create_household_workspace(session, owner, "Shared Home")
     session.commit()
     dispatch = create_workspace_invitation(
@@ -249,8 +285,8 @@ def test_acceptance_adds_equal_access_once_and_preserves_private_boundaries(
 
 
 def test_any_household_member_can_invite(session: Session) -> None:
-    owner = create_user(session, "owner-sub", "owner@example.test", "Owner")
-    member = create_user(session, "member-sub", "member@example.test", "Member")
+    owner = create_user(session, "owner-sub", "owner@example.com", "Owner")
+    member = create_user(session, "member-sub", "member@example.com", "Member")
     household = create_household_workspace(session, owner, "Shared Home")
     session.add(WorkspaceMembership(workspace_id=household.id, user_id=member.id, role="member"))
     session.commit()
@@ -259,7 +295,7 @@ def test_any_household_member_can_invite(session: Session) -> None:
         session,
         household,
         member,
-        "next@example.test",
+        "next@example.com",
         now=NOW,
     )
     session.commit()

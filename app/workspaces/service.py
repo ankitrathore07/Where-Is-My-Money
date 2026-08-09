@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -80,6 +81,10 @@ def create_workspace_invitation(
         raise WorkspaceRuleError("Personal workspaces cannot be shared")
     if not normalized_email or len(normalized_email) > 320:
         raise InvitationError("Enter a valid invitation email")
+    try:
+        validate_email(normalized_email, check_deliverability=False)
+    except EmailNotValidError as exc:
+        raise InvitationError("Enter a valid invitation email") from exc
     if get_authorized_workspace(session, inviter.id, workspace.id) is None:
         raise WorkspaceRuleError("Workspace not found")
 
@@ -232,7 +237,7 @@ def list_workspace_pending_invitations(
 
 def _is_expired(expires_at: datetime | None, now: datetime) -> bool:
     if expires_at is None:
-        return False
+        return True
     comparable_expiry = (
         expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
     )

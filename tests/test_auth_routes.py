@@ -66,7 +66,7 @@ def db_factory() -> Generator[sessionmaker[Session], None, None]:
 def verified_claims(**overrides: object) -> dict[str, object]:
     claims: dict[str, object] = {
         "sub": "route-user-sub",
-        "email": "route-user@example.test",
+        "email": "route-user@example.com",
         "email_verified": True,
         "name": "Route User",
     }
@@ -381,13 +381,13 @@ async def test_personal_workspace_routes_are_isolated(
     ):
         application.state.google_oauth.google.claims = verified_claims(
             sub="alex-route-sub",
-            email="alex-route@example.test",
+            email="alex-route@example.com",
             name="Alex Route",
         )
         await complete_sign_in(alex_client)
         application.state.google_oauth.google.claims = verified_claims(
             sub="blair-route-sub",
-            email="blair-route@example.test",
+            email="blair-route@example.com",
             name="Blair Route",
         )
         await complete_sign_in(blair_client)
@@ -463,7 +463,7 @@ async def test_household_invitation_is_email_bound_one_time_and_equal_access(
     ):
         application.state.google_oauth.google.claims = verified_claims(
             sub="owner-route-sub",
-            email="owner-route@example.test",
+            email="owner-route@example.com",
             name="Owner Route",
         )
         await complete_sign_in(owner_client)
@@ -477,7 +477,7 @@ async def test_household_invitation_is_email_bound_one_time_and_equal_access(
 
         invited = await owner_client.post(
             f"/workspaces/{household_id}/invitations",
-            data={"email": "Invitee@Example.Test", "csrf_token": owner_csrf},
+            data={"email": "Invitee@Example.Com", "csrf_token": owner_csrf},
         )
         match = re.search(r"/invitations/([A-Za-z0-9_-]+)", invited.text)
         assert match is not None
@@ -495,7 +495,7 @@ async def test_household_invitation_is_email_bound_one_time_and_equal_access(
 
         application.state.google_oauth.google.claims = verified_claims(
             sub="wrong-route-sub",
-            email="wrong@example.test",
+            email="wrong@example.com",
             name="Wrong Person",
         )
         await complete_sign_in(wrong_client)
@@ -508,7 +508,7 @@ async def test_household_invitation_is_email_bound_one_time_and_equal_access(
 
         application.state.google_oauth.google.claims = verified_claims(
             sub="invitee-route-sub",
-            email="invitee@example.test",
+            email="invitee@example.com",
             name="Invitee Route",
         )
         await complete_sign_in(invitee_client)
@@ -528,7 +528,7 @@ async def test_household_invitation_is_email_bound_one_time_and_equal_access(
         )
         member_invite = await invitee_client.post(
             f"/workspaces/{household_id}/invitations",
-            data={"email": "next@example.test", "csrf_token": invitee_csrf},
+            data={"email": "next@example.com", "csrf_token": invitee_csrf},
         )
 
     assert invited.status_code == 201
@@ -561,7 +561,7 @@ async def test_personal_workspace_rejects_invitation_route(
             assert personal_id is not None
         response = await client.post(
             f"/workspaces/{personal_id}/invitations",
-            data={"email": "invitee@example.test", "csrf_token": token},
+            data={"email": "invitee@example.com", "csrf_token": token},
         )
 
     assert response.status_code == 400
@@ -593,7 +593,7 @@ async def test_expired_invitation_route_does_not_add_membership(
         household_id = int(created.headers["location"].rsplit("/", 1)[1])
         invited = await owner_client.post(
             f"/workspaces/{household_id}/invitations",
-            data={"email": "late@example.test", "csrf_token": owner_csrf},
+            data={"email": "late@example.com", "csrf_token": owner_csrf},
         )
         match = re.search(r"/invitations/([A-Za-z0-9_-]+)", invited.text)
         assert match is not None
@@ -609,7 +609,7 @@ async def test_expired_invitation_route_does_not_add_membership(
 
         application.state.google_oauth.google.claims = verified_claims(
             sub="late-route-sub",
-            email="late@example.test",
+            email="late@example.com",
             name="Late Invitee",
         )
         await complete_sign_in(invitee_client)
