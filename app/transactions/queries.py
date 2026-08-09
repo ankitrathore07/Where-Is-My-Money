@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.db.models import Category, Transaction
 
 Direction = Literal["all", "expense", "income"]
+Subscription = Literal["all", "yes", "no"]
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -27,6 +28,7 @@ class TransactionFilters:
     end_date: date | None = None
     category_id: int | None = None
     direction: Direction = "all"
+    subscription: Subscription = "all"
     query: str = ""
     page: int = 1
     page_size: int = 50
@@ -82,6 +84,10 @@ def parse_filters(params: Mapping[str, str]) -> TransactionFilters:
     if direction_value not in {"all", "expense", "income"}:
         errors["direction"] = "Choose all, expense, or income."
 
+    subscription_value = params.get("subscription", "all").strip() or "all"
+    if subscription_value not in {"all", "yes", "no"}:
+        errors["subscription"] = "Choose all, yes, or no."
+
     category_id = _positive_integer(
         params.get("category_id", "").strip(), "category_id", errors, optional=True
     )
@@ -98,6 +104,7 @@ def parse_filters(params: Mapping[str, str]) -> TransactionFilters:
         end_date=end_date,
         category_id=category_id,
         direction=cast(Direction, direction_value),
+        subscription=cast(Subscription, subscription_value),
         query=query,
         page=page,
     )
@@ -140,6 +147,10 @@ def list_transactions(
         predicates.append(Transaction.amount_cents < 0)
     elif filters.direction == "income":
         predicates.append(Transaction.amount_cents > 0)
+    if filters.subscription == "yes":
+        predicates.append(Transaction.is_subscription.is_(True))
+    elif filters.subscription == "no":
+        predicates.append(Transaction.is_subscription.is_(False))
     if filters.query:
         lowered = filters.query.casefold()
         predicates.append(

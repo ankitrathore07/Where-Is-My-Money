@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Categories · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Categories</h1>
+    <p>Create categories that are visible only inside this workspace.</p>
+  </section>
+
+  {% if error %}<div class="alert" role="alert">{{ error.message }}</div>{% endif %}
+
+  <section class="panel">
+    <h2>Create a workspace category</h2>
+    <form action="/workspaces/{{ workspace.id }}/categories" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="name">Category name</label>
+      <input id="name" name="name" maxlength="100" required value="{{ submitted_name }}">
+      <label for="kind">Kind</label>
+      <select id="kind" name="kind">
+        {% for value in ["expense", "income", "transfer"] %}<option value="{{ value }}" {% if submitted_kind == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}
+      </select>
+      <button class="button" type="submit">Create category</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Workspace categories</h2>
+    {% if choices.workspace %}<ul>{% for category in choices.workspace %}<li>{{ category.name }} <span class="badge">{{ category.kind }}</span></li>{% endfor %}</ul>{% else %}<p>No custom categories yet.</p>{% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Built-in categories</h2>
+    <ul>{% for category in choices.builtin %}<li>{{ category.name }} <span class="badge">{{ category.kind }}</span></li>{% endfor %}</ul>
+  </section>
+{% endblock %}

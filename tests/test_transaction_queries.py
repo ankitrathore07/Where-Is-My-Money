@@ -20,6 +20,7 @@ def _transaction(
     amount: int,
     category: Category | None = None,
     merchant: str | None = None,
+    is_subscription: bool = False,
 ) -> Transaction:
     transaction = Transaction(
         workspace_id=workspace.id,
@@ -29,6 +30,7 @@ def _transaction(
         amount_cents=amount,
         category_id=category.id if category else None,
         categorization_source="uncategorized",
+        is_subscription=is_subscription,
     )
     session.add(transaction)
     session.commit()
@@ -41,6 +43,7 @@ def test_parse_filters_sets_bounded_defaults() -> None:
     assert filters.end_date is None
     assert filters.category_id is None
     assert filters.direction == "all"
+    assert filters.subscription == "all"
     assert filters.query == ""
     assert filters.page == 1
     assert filters.page_size == 50
@@ -52,6 +55,7 @@ def test_parse_filters_sets_bounded_defaults() -> None:
         ({"start_date": "08/01/2026"}, "start_date"),
         ({"start_date": "2026-08-02", "end_date": "2026-08-01"}, "end_date"),
         ({"direction": "transfer"}, "direction"),
+        ({"subscription": "sometimes"}, "subscription"),
         ({"page": "0"}, "page"),
         ({"page": "abc"}, "page"),
         ({"category_id": "abc"}, "category_id"),
@@ -92,6 +96,37 @@ def test_direction_filter(
 
     page = list_transactions(session, workspace.id, parse_filters({"direction": direction}))
     assert [item.amount_cents for item in page.items] == [expected]
+
+
+@pytest.mark.parametrize(("subscription", "expected"), [("yes", "Subscribed"), ("no", "Ordinary")])
+def test_subscription_filter_is_workspace_scoped(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+    subscription: str,
+    expected: str,
+) -> None:
+    _transaction(
+        session,
+        workspace,
+        day=1,
+        description="Subscribed",
+        amount=-100,
+        is_subscription=True,
+    )
+    _transaction(session, workspace, day=2, description="Ordinary", amount=-200)
+    _transaction(
+        session,
+        other_workspace,
+        day=3,
+        description="Private subscription",
+        amount=-300,
+        is_subscription=True,
+    )
+
+    page = list_transactions(session, workspace.id, parse_filters({"subscription": subscription}))
+
+    assert [item.description for item in page.items] == [expected]
 
 
 def test_category_filter_accepts_global_and_owned_but_rejects_foreign(

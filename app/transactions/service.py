@@ -38,6 +38,21 @@ class ManualCategorizationInput:
     save_for_future: bool
 
 
+def get_transaction_for_categorization(
+    session: Session, workspace_id: int, transaction_id: int
+) -> Transaction:
+    """Load a transaction only through its active workspace boundary."""
+    transaction = session.scalar(
+        select(Transaction).where(
+            Transaction.id == transaction_id,
+            Transaction.workspace_id == workspace_id,
+        )
+    )
+    if transaction is None:
+        raise TransactionNotFoundError("Transaction not found")
+    return transaction
+
+
 def _merchant_display(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split())
 
@@ -102,14 +117,7 @@ def manually_categorize_transaction(
     values: ManualCategorizationInput,
 ) -> Transaction:
     """Apply a scoped manual update and optionally upsert one exact-key rule."""
-    transaction = session.scalar(
-        select(Transaction).where(
-            Transaction.id == transaction_id,
-            Transaction.workspace_id == workspace_id,
-        )
-    )
-    if transaction is None:
-        raise TransactionNotFoundError("Transaction not found")
+    transaction = get_transaction_for_categorization(session, workspace_id, transaction_id)
 
     category = session.scalar(
         select(Category).where(

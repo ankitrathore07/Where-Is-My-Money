@@ -13,6 +13,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.auth.dependencies import get_optional_current_user
 from app.auth.oauth import build_google_oauth
 from app.auth.routes import router as auth_router
+from app.categories.routes import router as category_router
 from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
 from app.core.middleware import CSRFMiddleware
@@ -90,6 +91,7 @@ def create_app(
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
     application.include_router(workspace_router)
+    application.include_router(category_router)
     application.include_router(import_router)
     application.include_router(transaction_router)
 
