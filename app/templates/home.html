@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 
 {% block content %}
+  {% if current_user %}
+    <p class="eyebrow">Signed in securely</p>
+    <p>Welcome, {{ current_user.display_name or current_user.email }}.</p>
+  {% endif %}
   <section class="hero">
     <p class="eyebrow">Personal finance, built carefully</p>
     <h1>Understand where your money goes.</h1>
