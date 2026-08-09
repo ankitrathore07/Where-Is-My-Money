@@ -106,6 +106,32 @@ def _expand_builtin_categories(connection) -> None:
             )
 
 
+def _remap_removed_category_references(connection, removed_names: set[str]) -> None:
+    uncategorized_id = connection.execute(
+        sa.text(
+            "select id from categories "
+            "where workspace_id is null and name = 'Uncategorized' limit 1"
+        )
+    ).scalar_one()
+    for name in removed_names:
+        removed_id = connection.execute(
+            sa.text(
+                "select id from categories where workspace_id is null and name = :name limit 1"
+            ),
+            {"name": name},
+        ).scalar_one_or_none()
+        if removed_id is None:
+            continue
+        for table_name in ("transactions", "merchant_rules", "budgets"):
+            connection.execute(
+                sa.text(
+                    f"update {table_name} set category_id = :replacement "  # noqa: S608
+                    "where category_id = :removed"
+                ),
+                {"replacement": uncategorized_id, "removed": removed_id},
+            )
+
+
 def upgrade():
     connection = op.get_bind()
     op.add_column("categories", sa.Column("name_key", sa.String(length=100), nullable=True))
@@ -183,6 +209,7 @@ def downgrade():
         "Transfers",
     }
     added_names = {name for name, _ in BUILTIN_CATEGORIES} - original_names
+    _remap_removed_category_references(connection, added_names)
     for name in added_names:
         connection.execute(
             sa.text("delete from categories where workspace_id is null and name = :name"),

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Category, MerchantRule, Transaction, User, Workspace
 from tests.route_helpers import build_route_test_app, complete_sign_in
@@ -139,6 +140,80 @@ async def test_categorization_post_requires_csrf_and_redisplays_validation(
     assert missing_csrf.status_code == 403
     assert invalid.status_code == 422
     assert "Merchant name is required" in invalid.text
+    assert transaction is not None
+    assert transaction.normalized_merchant == "Local Cafe"
+    assert transaction.categorization_source == "uncategorized"
+
+
+@pytest.mark.anyio
+async def test_save_for_future_redisplays_overlong_statement_key(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            workspace_id, category_id, transaction_id = _seed_transaction(factory)
+            with factory() as session:
+                transaction = session.get(Transaction, transaction_id)
+                assert transaction is not None
+                transaction.description = "A" * 256
+                session.commit()
+            response = await client.post(
+                f"/workspaces/{workspace_id}/transactions/{transaction_id}/categorization",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "normalized_merchant": "Long Merchant",
+                    "category_id": str(category_id),
+                    "save_for_future": "on",
+                },
+            )
+            with factory() as session:
+                transaction = session.get(Transaction, transaction_id)
+                rule = session.scalar(select(MerchantRule))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 422
+    assert "255 characters" in response.text
+    assert transaction is not None
+    assert transaction.normalized_merchant == "Local Cafe"
+    assert transaction.categorization_source == "uncategorized"
+    assert rule is None
+
+
+@pytest.mark.anyio
+async def test_future_rule_uniqueness_race_returns_safe_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+
+    def lose_unique_race(*args, **kwargs):
+        raise IntegrityError("insert", {}, RuntimeError("unique constraint"))
+
+    monkeypatch.setattr("app.transactions.routes.manually_categorize_transaction", lose_unique_race)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            workspace_id, category_id, transaction_id = _seed_transaction(factory)
+            response = await client.post(
+                f"/workspaces/{workspace_id}/transactions/{transaction_id}/categorization",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "normalized_merchant": "Neighborhood Cafe",
+                    "category_id": str(category_id),
+                    "save_for_future": "on",
+                },
+            )
+            with factory() as session:
+                transaction = session.get(Transaction, transaction_id)
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 409
+    assert "changed at the same time" in response.text
     assert transaction is not None
     assert transaction.normalized_merchant == "Local Cafe"
     assert transaction.categorization_source == "uncategorized"

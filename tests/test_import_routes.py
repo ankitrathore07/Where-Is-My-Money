@@ -9,6 +9,7 @@ from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
     csrf_token,
+    review_token,
     verified_claims,
 )
 
@@ -112,6 +113,7 @@ async def test_valid_upload_maps_and_previews_before_commit(tmp_path: Path) -> N
     assert 'name="normalized_merchant_2"' in review.text
     assert 'name="category_2"' in review.text
     assert 'name="is_subscription_2"' in review.text
+    assert 'name="review_token_2"' in review.text
 
 
 @pytest.mark.anyio
@@ -204,7 +206,7 @@ async def test_invalid_review_edit_is_preserved_without_database_write(tmp_path:
                 follow_redirects=False,
             )
             import_id = int(uploaded.headers["location"].split("/")[-2])
-            await client.post(
+            mapped = await client.post(
                 uploaded.headers["location"],
                 data={
                     "csrf_token": token,
@@ -216,6 +218,8 @@ async def test_invalid_review_edit_is_preserved_without_database_write(tmp_path:
                     "amount_sign": "as_is",
                 },
             )
+            review = await client.get(mapped.headers["location"])
+            baseline_token = review_token(review.text, 2)
             response = await client.post(
                 f"/workspaces/{workspace_id}/imports/{import_id}/commit",
                 data={
@@ -225,6 +229,7 @@ async def test_invalid_review_edit_is_preserved_without_database_write(tmp_path:
                     "date_2": "2026-08-01",
                     "description_2": "Corrected description",
                     "amount_2": "not money",
+                    "review_token_2": baseline_token,
                 },
             )
         with factory() as session:
@@ -304,7 +309,7 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                 follow_redirects=False,
             )
             import_id = int(uploaded.headers["location"].split("/")[-2])
-            await client.post(
+            mapped = await client.post(
                 uploaded.headers["location"],
                 data={
                     "csrf_token": token,
@@ -316,9 +321,11 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                     "amount_sign": "as_is",
                 },
             )
+            review = await client.get(mapped.headers["location"])
             with factory() as session:
                 category_id = session.scalar(select(Category.id))
                 assert category_id is not None
+            baseline_token = review_token(review.text, 2)
             response = await client.post(
                 f"/workspaces/{workspace_id}/imports/{import_id}/commit",
                 data={
@@ -331,11 +338,12 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                     "normalized_merchant_2": "Reviewed Market",
                     "category_2": str(category_id),
                     "is_subscription_2": "on",
-                    "categorization_source_2": "uncategorized",
-                    "original_normalized_merchant_2": "Example Market",
+                    "categorization_source_2": "workspace_rule",
+                    "original_normalized_merchant_2": "Reviewed Market",
                     "original_category_2": str(category_id),
-                    "original_is_subscription_2": "no",
-                    "original_categorization_source_2": "uncategorized",
+                    "original_is_subscription_2": "yes",
+                    "original_categorization_source_2": "workspace_rule",
+                    "review_token_2": baseline_token,
                 },
                 follow_redirects=False,
             )
@@ -356,6 +364,61 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
     assert response.status_code == 303
     assert response.headers["location"] == (f"/workspaces/{workspace_id}/imports/{import_id}")
     assert list(tmp_path.rglob("*.csv")) == []
+
+
+@pytest.mark.anyio
+async def test_review_commit_rejects_tampered_preview_token(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            import_id = int(uploaded.headers["location"].split("/")[-2])
+            mapped = await client.post(
+                uploaded.headers["location"],
+                data={
+                    "csrf_token": token,
+                    "date_column": "Date",
+                    "description_column": "Description",
+                    "amount_mode": "single",
+                    "amount_column": "Amount",
+                    "date_format": "mdy",
+                    "amount_sign": "as_is",
+                },
+            )
+            review = await client.get(mapped.headers["location"])
+            baseline_token = review_token(review.text, 2)
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports/{import_id}/commit",
+                data={
+                    "csrf_token": token,
+                    "row_numbers": "2",
+                    "include_2": "on",
+                    "date_2": "2026-08-01",
+                    "description_2": "Example Market",
+                    "amount_2": "-12.34",
+                    "review_token_2": f"{baseline_token}tampered",
+                },
+            )
+        with factory() as session:
+            transaction_count = session.scalar(select(func.count()).select_from(Transaction))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 400
+    assert "Review data could not be verified" in response.text
+    assert transaction_count == 0
 
 
 @pytest.mark.anyio

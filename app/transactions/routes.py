@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_current_user
@@ -231,6 +232,21 @@ async def transaction_categorization_submit(
             transaction_id,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             error=str(exc),
+            submitted_merchant=normalized_merchant,
+            submitted_category_id=category_id,
+            submitted_subscription=subscription_value,
+            submitted_save_for_future=save_value,
+        )
+    except IntegrityError:
+        session.rollback()
+        return _categorization_response(
+            request,
+            user,
+            session,
+            workspace,
+            transaction_id,
+            status_code=status.HTTP_409_CONFLICT,
+            error="A future merchant rule changed at the same time. Reload and try again.",
             submitted_merchant=normalized_merchant,
             submitted_category_id=category_id,
             submitted_subscription=subscription_value,

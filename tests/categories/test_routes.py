@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Category, User, Workspace, WorkspaceMembership
 from tests.route_helpers import build_route_test_app, complete_sign_in
@@ -140,3 +141,36 @@ async def test_category_post_requires_csrf_and_redisplays_validation(tmp_path: P
     assert invalid.status_code == 422
     assert "Category name is required" in invalid.text
     assert custom_count == 0
+
+
+@pytest.mark.anyio
+async def test_category_uniqueness_race_redisplays_duplicate_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+
+    def lose_unique_race(*args, **kwargs):
+        raise IntegrityError("insert", {}, RuntimeError("unique constraint"))
+
+    monkeypatch.setattr("app.categories.routes.create_custom_category", lose_unique_race)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            response = await client.post(
+                f"/workspaces/{workspace_id}/categories",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "name": "Trips",
+                    "kind": "expense",
+                },
+            )
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 422
+    assert "already exists in this workspace" in response.text

@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_current_user
@@ -83,6 +84,18 @@ async def category_create(
             workspace,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             error=exc,
+            submitted_name=name,
+            submitted_kind=kind,
+        )
+    except IntegrityError:
+        session.rollback()
+        return _render(
+            request,
+            user,
+            session,
+            workspace,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error=DuplicateCategoryNameError(),
             submitted_name=name,
             submitted_kind=kind,
         )

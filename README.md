@@ -130,7 +130,8 @@ will detect recurrence from transaction cadence.
 
 The built-in categories are Income, Transfers, Housing, Utilities, Groceries,
 Dining & Drinks, Transportation, Shopping, Entertainment, Software & Online
-Services, Health, Insurance, Education, Travel, Personal Care, Pets, Childcare,
+Services, Health & Fitness, Insurance, Education, Travel, Personal Care, Pets,
+Childcare,
 Gifts & Donations, Taxes & Fees, Cash & ATM, and Uncategorized. Eating out,
 cafes, bars, takeout, and restaurant delivery belong in **Dining & Drinks**.
 Ambiguous payment processors such as generic PayPal, Venmo, Zelle, Square, or

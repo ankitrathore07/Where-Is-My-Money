@@ -15,6 +15,11 @@ from app.db.models import ImportJob, User, Workspace
 from app.db.session import get_db
 from app.imports.mapping import MappingValidationError
 from app.imports.parser import CsvValidationError
+from app.imports.review_tokens import (
+    ReviewTokenError,
+    create_review_token,
+    load_review_token,
+)
 from app.imports.service import (
     ImportStateError,
     ReviewValidationError,
@@ -80,12 +85,6 @@ def _optional_form_int(value: object) -> int | None:
         return None
 
 
-def _optional_form_bool(value: object) -> bool | None:
-    if value is None:
-        return None
-    return str(value).casefold() in {"1", "true", "yes", "on"}
-
-
 def _mapping_page(
     request: Request,
     user: User,
@@ -128,6 +127,7 @@ def _review_page(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     review = build_review(session, _store(request), job)
+    secret_key = request.app.state.settings.secret_key or ""
     return templates.TemplateResponse(
         request=request,
         name="imports/review.html",
@@ -142,6 +142,9 @@ def _review_page(
             submitted=bool(submitted_edits is not None),
             submitted_by_row={edit.row_number: edit for edit in submitted_edits or ()},
             category_choices=list_accessible_categories(session, workspace.id),
+            review_tokens={
+                row.row_number: create_review_token(secret_key, job.id, row) for row in review.rows
+            },
         ),
         status_code=status_code,
     )
@@ -294,46 +297,44 @@ async def commit_review(
         row_numbers = tuple(int(value) for value in form.getlist("row_numbers"))
     except (TypeError, ValueError):
         row_numbers = ()
-    edits = tuple(
-        RowEdit(
-            row_number=row_number,
-            include=form.get(f"include_{row_number}") is not None,
-            date_value=str(form.get(f"date_{row_number}", "")),
-            description_value=str(form.get(f"description_{row_number}", "")),
-            amount_value=str(form.get(f"amount_{row_number}", "")),
-            normalized_merchant=(
-                str(form.get(f"normalized_merchant_{row_number}"))
-                if form.get(f"normalized_merchant_{row_number}") is not None
-                else None
-            ),
-            category_id=_optional_form_int(form.get(f"category_{row_number}")),
-            is_subscription=(
-                form.get(f"is_subscription_{row_number}") is not None
-                if form.get(f"category_{row_number}") is not None
-                else None
-            ),
-            categorization_source=(
-                str(form.get(f"categorization_source_{row_number}"))
-                if form.get(f"categorization_source_{row_number}") is not None
-                else None
-            ),
-            original_normalized_merchant=(
-                str(form.get(f"original_normalized_merchant_{row_number}"))
-                if form.get(f"original_normalized_merchant_{row_number}") is not None
-                else None
-            ),
-            original_category_id=_optional_form_int(form.get(f"original_category_{row_number}")),
-            original_is_subscription=_optional_form_bool(
-                form.get(f"original_is_subscription_{row_number}")
-            ),
-            original_categorization_source=(
-                str(form.get(f"original_categorization_source_{row_number}"))
-                if form.get(f"original_categorization_source_{row_number}") is not None
-                else None
-            ),
-        )
-        for row_number in row_numbers
-    )
+    secret_key = request.app.state.settings.secret_key or ""
+    edits_list: list[RowEdit] = []
+    try:
+        for row_number in row_numbers:
+            baseline = load_review_token(
+                secret_key,
+                str(form.get(f"review_token_{row_number}", "")),
+                job.id,
+                row_number,
+            )
+            edits_list.append(
+                RowEdit(
+                    row_number=row_number,
+                    include=form.get(f"include_{row_number}") is not None,
+                    date_value=str(form.get(f"date_{row_number}", "")),
+                    description_value=str(form.get(f"description_{row_number}", "")),
+                    amount_value=str(form.get(f"amount_{row_number}", "")),
+                    normalized_merchant=(
+                        str(form.get(f"normalized_merchant_{row_number}"))
+                        if form.get(f"normalized_merchant_{row_number}") is not None
+                        else None
+                    ),
+                    category_id=_optional_form_int(form.get(f"category_{row_number}")),
+                    is_subscription=(
+                        form.get(f"is_subscription_{row_number}") is not None
+                        if form.get(f"category_{row_number}") is not None
+                        else None
+                    ),
+                    categorization_source=baseline.categorization_source,
+                    original_normalized_merchant=baseline.normalized_merchant,
+                    original_category_id=baseline.category_id,
+                    original_is_subscription=baseline.is_subscription,
+                    original_categorization_source=baseline.categorization_source,
+                )
+            )
+    except ReviewTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    edits = tuple(edits_list)
     try:
         commit_import(session, _store(request), job, edits)
     except ReviewValidationError as exc:

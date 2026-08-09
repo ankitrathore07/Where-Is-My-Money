@@ -133,3 +133,74 @@ def test_categorization_migration_rejects_duplicate_category_keys(tmp_path: Path
 
     with pytest.raises(RuntimeError, match="duplicate category name"):
         command.upgrade(configured, "head")
+
+
+def test_downgrade_remaps_references_from_pr5_categories(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{(tmp_path / 'referenced-downgrade.db').as_posix()}"
+    configured = _config(database_url)
+    command.upgrade(configured, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            categories = dict(
+                connection.execute(
+                    text(
+                        "select name, id from categories "
+                        "where name in ('Uncategorized', 'Software & Online Services')"
+                    )
+                )
+                .tuples()
+                .all()
+            )
+            connection.execute(
+                text(
+                    "insert into users (google_sub, email) "
+                    "values ('downgrade-owner', 'downgrade@example.com')"
+                )
+            )
+            connection.execute(
+                text(
+                    "insert into workspaces (name, is_personal, owner_id) "
+                    "values ('Downgrade', 1, 1)"
+                )
+            )
+            connection.execute(
+                text(
+                    "insert into transactions "
+                    "(workspace_id, date, description, amount_cents, category_id) "
+                    "values (1, '2026-08-09', 'SOFTWARE', -1000, :category_id)"
+                ),
+                {"category_id": categories["Software & Online Services"]},
+            )
+            connection.execute(
+                text(
+                    "insert into merchant_rules "
+                    "(workspace_id, merchant_pattern, category_id) "
+                    "values (1, 'SOFTWARE', :category_id)"
+                ),
+                {"category_id": categories["Software & Online Services"]},
+            )
+            connection.execute(
+                text(
+                    "insert into budgets "
+                    "(workspace_id, category_id, period_month, amount_cents) "
+                    "values (1, :category_id, '2026-08-01', 5000)"
+                ),
+                {"category_id": categories["Software & Online Services"]},
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(configured, PR4_HEAD)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            expected = categories["Uncategorized"]
+            assert connection.scalar(text("select category_id from transactions")) == expected
+            assert connection.scalar(text("select category_id from merchant_rules")) == expected
+            assert connection.scalar(text("select category_id from budgets")) == expected
+            assert connection.execute(text("pragma foreign_key_check")).all() == []
+    finally:
+        engine.dispose()

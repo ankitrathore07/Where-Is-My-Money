@@ -262,6 +262,24 @@ def test_save_for_future_rejects_description_without_merchant_key(
         )
 
 
+def test_save_for_future_rejects_merchant_key_longer_than_rule_schema(
+    session: Session, workspace: Workspace
+) -> None:
+    category = _category(session, workspace.id)
+    transaction = _transaction(session, workspace.id, category, description="A" * 256)
+
+    with pytest.raises(MerchantRuleKeyError, match="255"):
+        manually_categorize_transaction(
+            session,
+            workspace.id,
+            transaction.id,
+            ManualCategorizationInput("Long Merchant", category.id, False, True),
+        )
+
+    assert transaction.normalized_merchant == "A" * 256
+    assert session.scalar(select(MerchantRule)) is None
+
+
 def test_rule_failure_can_roll_back_transaction_and_rule_atomically(
     session: Session, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

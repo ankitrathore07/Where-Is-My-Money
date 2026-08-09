@@ -132,6 +132,8 @@ def manually_categorize_transaction(
     key = merchant_key(transaction.description)
     if save_for_future and not key:
         raise MerchantRuleKeyError("Transaction description has no usable merchant key")
+    if save_for_future and len(key) > MAX_MERCHANT_LENGTH:
+        raise MerchantRuleKeyError("Future-rule merchant key must be 255 characters or fewer")
 
     transaction.normalized_merchant = normalized_merchant
     transaction.category_id = category.id
