@@ -80,3 +80,12 @@ class ImportReview:
     valid_rows: int
     invalid_rows: int
     duplicate_rows: int
+
+
+@dataclass(frozen=True)
+class RowEdit:
+    row_number: int
+    include: bool
+    date_value: str
+    description_value: str
+    amount_value: str

@@ -7,17 +7,22 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import ImportJob, Transaction, UploadedFile, Workspace
+import app.imports.service as import_service
+from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.parser import CsvValidationError
 from app.imports.service import (
     ImportStateError,
+    ReviewValidationError,
     build_review,
     cancel_import,
+    commit_import,
     create_csv_import,
     get_workspace_import,
+    retry_cleanup,
     save_mapping,
 )
 from app.imports.storage import LocalUploadStore, UploadStorageError
+from app.imports.types import RowEdit
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example,-1.00\n"
 
@@ -287,3 +292,215 @@ def test_review_requires_the_private_source(
         build_review(session, store, created.job)
 
     assert error.value.code == "source_missing"
+
+
+def mapped_import(
+    session: Session,
+    workspace: Workspace,
+    store: LocalUploadStore,
+    source: bytes = CSV_BYTES,
+    retention: str = "delete_after_import",
+) -> ImportJob:
+    created = create_csv_import(session, store, workspace, BytesIO(source), retention)
+    save_mapping(
+        session,
+        store,
+        created.job,
+        {
+            "date_column": "Date",
+            "description_column": "Description",
+            "amount_mode": "single",
+            "amount_column": "Amount",
+            "date_format": "mdy",
+            "amount_sign": "as_is",
+        },
+    )
+    return created.job
+
+
+def add_uncategorized(session: Session) -> Category:
+    category = Category(workspace_id=None, name="Uncategorized", kind="expense")
+    session.add(category)
+    session.commit()
+    return category
+
+
+def test_commit_uses_reviewed_edits_and_exclusions_atomically(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,First,-12.34\n08/02/2026,Second,-2.00\n",
+    )
+    add_uncategorized(session)
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 0
+
+    result = commit_import(
+        session,
+        store,
+        job,
+        (
+            RowEdit(2, True, "2026-08-01", "Corrected Market", "-12.34"),
+            RowEdit(3, False, "2026-08-02", "Second", "-2.00"),
+        ),
+    )
+
+    assert result.inserted_count == 1
+    assert result.excluded_count == 1
+    assert result.duplicate_count == 0
+    assert result.job.status == "committed"
+    transactions = list(session.scalars(select(Transaction)))
+    assert len(transactions) == 1
+    assert transactions[0].description == "Corrected Market"
+    assert transactions[0].amount_cents == -1234
+    assert transactions[0].date.date().isoformat() == "2026-08-01"
+    assert transactions[0].category is not None
+    assert transactions[0].category.name == "Uncategorized"
+    assert transactions[0].categorization_source == "uncategorized"
+    assert transactions[0].duplicate_fingerprint is not None
+    assert job.uploaded_file is not None
+    assert job.uploaded_file.deleted is True
+    assert list(tmp_path.rglob("*.csv")) == []
+
+
+def test_commit_rejects_changed_row_set(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, store)
+    add_uncategorized(session)
+
+    with pytest.raises(ImportStateError) as error:
+        commit_import(session, store, job, (RowEdit(999, True, "2026-08-01", "X", "-1"),))
+
+    assert error.value.code == "review_rows_changed"
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 0
+
+
+def test_commit_returns_row_errors_without_writing(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, store)
+    add_uncategorized(session)
+
+    with pytest.raises(ReviewValidationError) as error:
+        commit_import(
+            session,
+            store,
+            job,
+            (RowEdit(2, True, "2026-08-01", "", "0"),),
+        )
+
+    assert error.value.row_errors[2] == {
+        "description": "Enter a description.",
+        "amount": "Enter a valid non-zero amount.",
+    }
+    assert job.status == "reviewing"
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 0
+
+
+def test_second_commit_is_idempotent(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, store, retention="retain")
+    add_uncategorized(session)
+    edits = (RowEdit(2, True, "2026-08-01", "Example", "-1.00"),)
+
+    first = commit_import(session, store, job, edits)
+    second = commit_import(session, store, job, edits)
+
+    assert first.inserted_count == 1
+    assert second.inserted_count == 0
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 1
+    assert job.uploaded_file is not None
+    assert job.uploaded_file.deleted is False
+    assert len(list(tmp_path.rglob("*.csv"))) == 1
+
+
+def test_commit_requires_at_least_one_new_selected_row(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, store)
+    add_uncategorized(session)
+
+    with pytest.raises(ReviewValidationError) as error:
+        commit_import(
+            session,
+            store,
+            job,
+            (RowEdit(2, False, "2026-08-01", "Example", "-1.00"),),
+        )
+
+    assert error.value.code == "no_rows_selected"
+    assert job.status == "reviewing"
+
+
+def test_cleanup_failure_preserves_commit_and_can_be_retried(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    normal_store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, normal_store)
+    add_uncategorized(session)
+
+    result = commit_import(
+        session,
+        FailingDeleteStore(tmp_path),
+        job,
+        (RowEdit(2, True, "2026-08-01", "Example", "-1.00"),),
+    )
+
+    assert result.inserted_count == 1
+    assert result.cleanup_failed is True
+    assert job.status == "committed_cleanup_failed"
+    assert job.validation_errors == {"cleanup": "delete_failed"}
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 1
+
+    retry_cleanup(session, normal_store, job)
+
+    assert job.status == "committed"
+    assert job.validation_errors is None
+    assert job.uploaded_file is not None
+    assert job.uploaded_file.deleted is True
+
+
+def test_concurrent_duplicate_rolls_back_the_entire_commit(
+    session: Session,
+    workspace: Workspace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(session, workspace, store, retention="retain")
+    add_uncategorized(session)
+    payload = "v1\n2026-08-01\n-100\nEXAMPLE\n1"
+    fingerprint = hashlib.sha256(payload.encode()).hexdigest()
+    session.add(
+        Transaction(
+            workspace_id=workspace.id,
+            date=datetime(2026, 8, 1, tzinfo=UTC),
+            description="Example",
+            normalized_merchant="EXAMPLE",
+            amount_cents=-100,
+            duplicate_fingerprint=fingerprint,
+        )
+    )
+    session.commit()
+    monkeypatch.setattr(import_service, "find_existing_fingerprints", lambda *args: set())
+
+    with pytest.raises(ImportStateError) as error:
+        commit_import(
+            session,
+            store,
+            job,
+            (RowEdit(2, True, "2026-08-01", "Example", "-1.00"),),
+        )
+
+    assert error.value.code == "duplicate_commit_conflict"
+    assert session.scalar(select(func.count()).select_from(Transaction)) == 1
+    assert session.get(ImportJob, job.id).status == "reviewing"

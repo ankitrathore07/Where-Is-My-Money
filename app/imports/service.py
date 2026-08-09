@@ -1,15 +1,20 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, time
 from typing import BinaryIO, Literal
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.db.models import ImportJob, UploadedFile, Workspace
+from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
 from app.imports.mapping import mapping_from_json, validate_mapping
-from app.imports.normalization import RowValidationError, normalize_source_row
+from app.imports.normalization import (
+    RowValidationError,
+    normalize_review_edit,
+    normalize_source_row,
+)
 from app.imports.parser import parse_csv_bytes
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import (
@@ -18,6 +23,7 @@ from app.imports.types import (
     ImportReview,
     NormalizedTransaction,
     ReviewRow,
+    RowEdit,
 )
 
 ACTIVE_STATUSES = {"awaiting_mapping", "reviewing"}
@@ -37,6 +43,28 @@ class ImportStateError(ValueError):
 class UploadResult:
     kind: UploadResultKind
     job: ImportJob
+
+
+class ReviewValidationError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        row_errors: dict[int, dict[str, str]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.row_errors = row_errors or {}
+
+
+@dataclass(frozen=True)
+class CommitResult:
+    job: ImportJob
+    inserted_count: int
+    duplicate_count: int
+    excluded_count: int
+    cleanup_failed: bool
 
 
 def get_workspace_import(session: Session, workspace_id: int, import_id: int) -> ImportJob | None:
@@ -250,3 +278,161 @@ def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> I
         invalid_rows=len(errors_by_row),
         duplicate_rows=sum(row.duplicate for row in review_rows),
     )
+
+
+def _uncategorized(session: Session) -> Category:
+    matches = list(
+        session.scalars(
+            select(Category).where(
+                Category.workspace_id.is_(None),
+                Category.name == "Uncategorized",
+                Category.kind == "expense",
+            )
+        )
+    )
+    if len(matches) != 1:
+        raise ImportStateError(
+            "builtin_category_missing",
+            "The built-in Uncategorized category is unavailable.",
+        )
+    return matches[0]
+
+
+def commit_import(
+    session: Session,
+    store: LocalUploadStore,
+    job: ImportJob,
+    edits: tuple[RowEdit, ...],
+) -> CommitResult:
+    """Atomically persist reviewed non-duplicate edits, then honor retention."""
+    if job.status in COMMITTED_STATUSES:
+        return CommitResult(
+            job=job,
+            inserted_count=0,
+            duplicate_count=0,
+            excluded_count=0,
+            cleanup_failed=job.status == "committed_cleanup_failed",
+        )
+    if job.status != "reviewing":
+        raise ImportStateError("not_ready_to_commit", "Review the CSV before committing it.")
+
+    review = build_review(session, store, job)
+    expected_rows = tuple(row.row_number for row in review.rows)
+    submitted_rows = tuple(edit.row_number for edit in edits)
+    if submitted_rows != expected_rows or len(set(submitted_rows)) != len(submitted_rows):
+        raise ImportStateError(
+            "review_rows_changed", "The reviewed rows changed; reload the review page."
+        )
+
+    normalized: list[NormalizedTransaction] = []
+    row_errors: dict[int, dict[str, str]] = {}
+    for edit in edits:
+        if not edit.include:
+            continue
+        try:
+            normalized.append(
+                normalize_review_edit(
+                    edit.row_number,
+                    edit.date_value,
+                    edit.description_value,
+                    edit.amount_value,
+                    "iso",
+                )
+            )
+        except RowValidationError as exc:
+            row_errors[edit.row_number] = exc.field_errors
+    if row_errors:
+        raise ReviewValidationError(
+            "invalid_review_rows", "Correct the highlighted rows before committing.", row_errors
+        )
+
+    fingerprinted = fingerprint_transactions(tuple(normalized))
+    existing = find_existing_fingerprints(
+        session, job.workspace_id, {item.fingerprint for item in fingerprinted}
+    )
+    new_items = tuple(item for item in fingerprinted if item.fingerprint not in existing)
+    known_duplicate_rows = {row.row_number for row in review.rows if row.duplicate}
+    duplicate_count = len(existing) + sum(
+        not edit.include and edit.row_number in known_duplicate_rows for edit in edits
+    )
+    excluded_count = sum(
+        not edit.include and edit.row_number not in known_duplicate_rows for edit in edits
+    )
+    if not new_items:
+        raise ReviewValidationError(
+            "no_rows_selected", "Select at least one new valid transaction."
+        )
+
+    category = _uncategorized(session)
+    for item in new_items:
+        transaction = item.transaction
+        session.add(
+            Transaction(
+                workspace_id=job.workspace_id,
+                date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
+                description=transaction.description,
+                normalized_merchant=transaction.normalized_merchant,
+                amount_cents=transaction.amount_cents,
+                category_id=category.id,
+                categorization_source="uncategorized",
+                duplicate_fingerprint=item.fingerprint,
+                import_job_id=job.id,
+            )
+        )
+    job.status = "committed"
+    job.validation_errors = None
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ImportStateError(
+            "duplicate_commit_conflict",
+            "Another request committed matching transactions; review again.",
+        ) from exc
+
+    cleanup_failed = False
+    uploaded_file = job.uploaded_file
+    if (
+        uploaded_file is not None
+        and uploaded_file.retention_choice == "delete_after_import"
+        and not uploaded_file.deleted
+    ):
+        try:
+            store.delete(uploaded_file.storage_path)
+        except (OSError, UploadStorageError):
+            cleanup_failed = True
+            job.status = "committed_cleanup_failed"
+            job.validation_errors = {"cleanup": "delete_failed"}
+        else:
+            uploaded_file.deleted = True
+        session.commit()
+
+    return CommitResult(
+        job=job,
+        inserted_count=len(new_items),
+        duplicate_count=duplicate_count,
+        excluded_count=excluded_count,
+        cleanup_failed=cleanup_failed,
+    )
+
+
+def retry_cleanup(session: Session, store: LocalUploadStore, job: ImportJob) -> ImportJob:
+    """Retry only a previously recorded post-commit or cancellation cleanup."""
+    final_statuses = {
+        "committed_cleanup_failed": "committed",
+        "canceled_cleanup_failed": "canceled",
+    }
+    final_status = final_statuses.get(job.status)
+    if final_status is None:
+        raise ImportStateError("cleanup_not_required", "This import has no pending cleanup.")
+    uploaded_file = job.uploaded_file
+    if uploaded_file is not None and not uploaded_file.deleted:
+        try:
+            store.delete(uploaded_file.storage_path)
+        except (OSError, UploadStorageError):
+            return job
+        uploaded_file.deleted = True
+    job.status = final_status
+    job.validation_errors = None
+    session.commit()
+    return job
