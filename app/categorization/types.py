@@ -19,4 +19,5 @@ class CategorizationDecision:
 
     normalized_merchant: str
     category_id: int
+    is_subscription: bool
     source: CategorizationSource
