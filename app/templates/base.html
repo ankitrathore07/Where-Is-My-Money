@@ -12,6 +12,7 @@
       <nav class="site-nav" aria-label="Account navigation">
         {% if current_user %}
           <a href="/workspaces">Workspaces</a>
+          {% if workspace is defined %}<a href="/workspaces/{{ workspace.id }}/transactions">Transactions</a>{% endif %}
           <form action="/auth/sign-out" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="link-button" type="submit">Sign out</button>

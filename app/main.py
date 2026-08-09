@@ -20,6 +20,7 @@ from app.core.security import SlidingWindowRateLimiter
 from app.db.models import User
 from app.imports.routes import router as import_router
 from app.imports.storage import LocalUploadStore
+from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
 APP_DIRECTORY = Path(__file__).resolve().parent
@@ -90,6 +91,7 @@ def create_app(
     application.include_router(auth_router)
     application.include_router(workspace_router)
     application.include_router(import_router)
+    application.include_router(transaction_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")
 
