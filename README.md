@@ -4,12 +4,11 @@ Where Is My Money? is a privacy-conscious personal-finance learning project. It
 now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
 invitations, route-level workspace authorization, reviewed CSV imports, and a
-filterable transaction list.
+filterable transaction list with deterministic categorization.
 
-The application does not yet connect to banks, apply categorization rules,
-manually recategorize transactions, or call an LLM. Those are separate later
-pull requests so each privacy boundary can be reviewed and tested before
-financial workflows rely on it.
+The application does not yet connect to banks, import payslips, calculate
+budgets, or call an LLM. Those are separate later pull requests so each privacy
+boundary can be reviewed and tested before financial workflows rely on it.
 
 ## What you need
 
@@ -103,12 +102,12 @@ who creates it so they can share it privately.
 3. Map the date and description columns. Choose either one signed amount column
    or separate debit and credit columns, then select the CSV's explicit date
    format.
-4. Review every normalized row. You can correct its date, description, or amount
-   and exclude any row before committing. Nothing is added to the transaction
-   table before this step.
+4. Review every normalized row. You can correct its date, description, merchant,
+   category, Subscription label, or amount and exclude any row before committing.
+   Nothing is added to the transaction table before this step.
 5. Commit the selected rows. Negative values mean money out and positive values
    mean money in. The transaction page can filter by dates, category, direction,
-   description, or normalized merchant.
+   Subscription, description, or normalized merchant.
 
 The default retention choice deletes the raw CSV only after the database commit
 succeeds. Selecting **retain** keeps it below the configured private local data
@@ -116,9 +115,48 @@ directory; retained files have no browser download page. Uploading the same
 statement again resumes an unfinished import or safely reports an already
 committed import without adding duplicate transactions.
 
-PR 4 assigns imported rows to the built-in **Uncategorized** category. PR 5 adds
-categorization rules, custom categories, and manual recategorization; importing
-a CSV does not run those future rules yet.
+The review page applies the same workspace and built-in rules used everywhere
+else, but the visible reviewed decision is what commit saves. A rule change made
+after preview cannot silently replace the decision that the member approved.
+
+## Categorization rules in plain language
+
+Every transaction has one primary category and a separate **Subscription**
+label. For example, Netflix can be **Entertainment** and Subscription at the
+same time. Subscription means an app or service membership; it does not mean
+every repeating bill. Rent, electricity, insurance, and similar recurring bills
+keep their normal categories without the Subscription label. Later reporting
+will detect recurrence from transaction cadence.
+
+The built-in categories are Income, Transfers, Housing, Utilities, Groceries,
+Dining & Drinks, Transportation, Shopping, Entertainment, Software & Online
+Services, Health & Fitness, Insurance, Education, Travel, Personal Care, Pets,
+Childcare,
+Gifts & Donations, Taxes & Fees, Cash & ATM, and Uncategorized. Eating out,
+cafes, bars, takeout, and restaurant delivery belong in **Dining & Drinks**.
+Ambiguous payment processors such as generic PayPal, Venmo, Zelle, Square, or
+Stripe descriptions safely remain **Uncategorized** instead of guessing.
+
+Automatic categorization uses this order:
+
+1. Keep an explicit manual choice on an existing transaction.
+2. Apply an exact merchant rule saved in the active workspace.
+3. Apply a matching built-in merchant rule with the correct money direction.
+4. Fall back to the built-in **Uncategorized** category.
+
+To create a category, open a workspace, select **Categories**, enter a name, and
+choose expense, income, or transfer. Custom categories belong to that workspace:
+all accepted household members can use them, while another workspace cannot see
+or select them.
+
+Select **Edit** beside a transaction to correct its friendly merchant, category,
+or Subscription label. Saving normally changes only that transaction and records
+the source as manual. Select **Use for matching future transactions** to also
+save a workspace rule. That rule applies only to later transactions whose
+canonical merchant key exactly matches the original statement description. It
+does not use wildcards, fuzzy matching, or prefixes, and it does not rewrite old
+transactions. Import-review corrections are manual decisions but do not create
+future rules; use the transaction edit page when you want that behavior.
 
 ## Run the checks
 
@@ -178,8 +216,10 @@ database volume.
     app/main.py                 FastAPI factory, public routes, middleware assembly
     app/auth/                   Google OAuth, identity service, session dependencies
     app/workspaces/             Membership, invitation, and authorized routes
-    app/imports/                CSV mapping, parsing, review, duplicate checks, storage
-    app/transactions/           Workspace-scoped queries and transaction list route
+    app/imports/                CSV mapping, review, categorization, duplicates, storage
+    app/categorization/         Merchant normalization, built-in catalog, precedence
+    app/categories/             Workspace category validation and routes
+    app/transactions/           Scoped queries, manual edits, and future merchant rules
     app/core/config.py          Environment settings and production validation
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
     app/core/middleware.py      Browser CSRF cookie and form enforcement
@@ -197,6 +237,5 @@ database volume.
 
 ## Next step
 
-PR 5 adds manual recategorization, custom workspace categories, and isolated
-merchant rules. CSV imports deliberately remain Uncategorized until that logic
-is implemented and reviewed.
+PR 6 adds reviewed payslip income imports while keeping confirmed income records
+separate from matching bank deposits.

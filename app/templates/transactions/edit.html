@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Categorize transaction · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Categorize transaction</h1>
+    <p>The original statement description is preserved.</p>
+  </section>
+
+  {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+
+  <section class="panel">
+    <dl>
+      <dt>Statement description</dt><dd>{{ transaction.description }}</dd>
+      <dt>Amount</dt><dd>{{ format_money(transaction.amount_cents) if format_money is defined else transaction.amount_cents }}</dd>
+    </dl>
+    <form action="/workspaces/{{ workspace.id }}/transactions/{{ transaction.id }}/categorization" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="normalized_merchant">Merchant name</label>
+      <input id="normalized_merchant" name="normalized_merchant" maxlength="255" required value="{{ merchant_value }}">
+      <label for="category_id">Category</label>
+      <select id="category_id" name="category_id" required>
+        <optgroup label="Workspace categories">{% for category in choices.workspace %}<option value="{{ category.id }}" {% if category_value == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+        <optgroup label="Built-in categories">{% for category in choices.builtin %}<option value="{{ category.id }}" {% if category_value == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+      </select>
+      <label><input name="is_subscription" type="checkbox" {% if subscription_value %}checked{% endif %}> Subscription</label>
+      <label><input name="save_for_future" type="checkbox" {% if save_for_future_value %}checked{% endif %}> Use for matching future transactions</label>
+      <button class="button" type="submit">Save categorization</button>
+      <a href="/workspaces/{{ workspace.id }}/transactions">Cancel</a>
+    </form>
+  </section>
+{% endblock %}

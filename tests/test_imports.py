@@ -123,6 +123,99 @@ def test_merchant_rule(session: Session, workspace: Workspace) -> None:
     assert rule.category.name == "Groceries"
 
 
+def test_custom_category_name_key_is_unique_per_workspace(
+    session: Session, workspace: Workspace
+) -> None:
+    session.add_all(
+        [
+            Category(workspace_id=workspace.id, name="Trips", name_key="trips", kind="expense"),
+            Category(workspace_id=workspace.id, name="TRIPS", name_key="trips", kind="expense"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_same_category_name_key_is_allowed_in_different_workspaces(
+    session: Session, workspace: Workspace, other_workspace: Workspace
+) -> None:
+    session.add_all(
+        [
+            Category(workspace_id=workspace.id, name="Trips", name_key="trips", kind="expense"),
+            Category(
+                workspace_id=other_workspace.id, name="Trips", name_key="trips", kind="expense"
+            ),
+        ]
+    )
+
+    session.commit()
+
+
+def test_builtin_category_name_key_is_globally_unique(session: Session) -> None:
+    session.add_all(
+        [
+            Category(workspace_id=None, name="Shopping", name_key="shopping", kind="expense"),
+            Category(workspace_id=None, name="SHOPPING", name_key="shopping", kind="expense"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_merchant_key_is_unique_per_workspace(session: Session, workspace: Workspace) -> None:
+    category = Category(
+        workspace_id=None, name="Entertainment", name_key="entertainment", kind="expense"
+    )
+    session.add(category)
+    session.flush()
+    session.add_all(
+        [
+            MerchantRule(
+                workspace_id=workspace.id,
+                merchant_pattern="NETFLIX COM",
+                normalized_merchant="Netflix",
+                category_id=category.id,
+            ),
+            MerchantRule(
+                workspace_id=workspace.id,
+                merchant_pattern="NETFLIX COM",
+                normalized_merchant="Netflix 2",
+                category_id=category.id,
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_subscription_defaults_are_false(session: Session, workspace: Workspace) -> None:
+    category = Category(workspace_id=None, name="Shopping", name_key="shopping", kind="expense")
+    transaction = Transaction(
+        workspace_id=workspace.id,
+        date=datetime(2026, 1, 15),
+        description="LOCAL SHOP",
+        amount_cents=-1000,
+        category=category,
+    )
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        merchant_pattern="LOCAL SHOP",
+        normalized_merchant="Local Shop",
+        category=category,
+    )
+    session.add_all([transaction, rule])
+    session.flush()
+
+    assert transaction.is_subscription is False
+    assert rule.is_subscription is False
+
+
 def test_duplicate_fingerprint_rejects_duplicates(session: Session, workspace: Workspace) -> None:
     """The same fingerprint in the same workspace must be rejected."""
     tx1 = Transaction(

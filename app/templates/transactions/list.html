@@ -28,6 +28,12 @@
       <option value="expense" {% if filter_values.direction == "expense" %}selected{% endif %}>Money out</option>
       <option value="income" {% if filter_values.direction == "income" %}selected{% endif %}>Money in</option>
     </select>
+    <label for="subscription">Subscription</label>
+    <select id="subscription" name="subscription">
+      <option value="all" {% if filter_values.subscription in ["", "all"] %}selected{% endif %}>All</option>
+      <option value="yes" {% if filter_values.subscription == "yes" %}selected{% endif %}>Subscriptions only</option>
+      <option value="no" {% if filter_values.subscription == "no" %}selected{% endif %}>Not subscriptions</option>
+    </select>
     <label for="q">Description or merchant</label>
     <input id="q" name="q" type="search" maxlength="100" value="{{ filter_values.q }}">
     <div><button class="button" type="submit">Apply filters</button> <a href="/workspaces/{{ workspace.id }}/transactions">Clear</a></div>
@@ -36,12 +42,14 @@
   {% if page and page.items %}
     <div class="panel table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Subscription</th><th>Amount</th><th></th></tr></thead>
         <tbody>{% for transaction in page.items %}<tr>
           <td>{{ transaction.date.date().isoformat() }}</td>
           <td>{{ transaction.description }}</td>
           <td>{{ transaction.category.name if transaction.category else "Uncategorized" }}</td>
+          <td>{{ "Yes" if transaction.is_subscription else "No" }}</td>
           <td class="{{ 'money-out' if transaction.amount_cents < 0 else 'money-in' }}">{{ format_money(transaction.amount_cents) }} <span class="visually-explained">{{ "Money out" if transaction.amount_cents < 0 else "Money in" }}</span></td>
+          <td><a href="/workspaces/{{ workspace.id }}/transactions/{{ transaction.id }}/categorization">Edit</a></td>
         </tr>{% endfor %}</tbody>
       </table>
     </div>

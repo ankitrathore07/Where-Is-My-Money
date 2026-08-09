@@ -1,0 +1,194 @@
+from datetime import date
+
+import pytest
+from sqlalchemy.orm import Session
+
+from app.categorization.builtins import BUILTIN_CATEGORY_DEFINITIONS
+from app.categorization.service import (
+    CategorizationConfigurationError,
+    categorize_candidate,
+)
+from app.categorization.types import CategorizationSource
+from app.db.models import Category, MerchantRule, User, Workspace
+from app.imports.types import NormalizedTransaction
+
+
+def _seed_builtin_categories(session: Session) -> dict[str, Category]:
+    categories = {
+        name: Category(
+            workspace_id=None,
+            name=name,
+            name_key=" ".join(name.split()).casefold(),
+            kind=kind,
+        )
+        for name, kind in BUILTIN_CATEGORY_DEFINITIONS
+    }
+    session.add_all(categories.values())
+    session.flush()
+    return categories
+
+
+def _candidate(description: str, amount_cents: int = -1000) -> NormalizedTransaction:
+    return NormalizedTransaction(
+        row_number=2,
+        transaction_date=date(2026, 8, 9),
+        description=description,
+        normalized_merchant=description.upper(),
+        amount_cents=amount_cents,
+    )
+
+
+def test_workspace_rule_beats_builtin_rule(session: Session, workspace: Workspace) -> None:
+    _seed_builtin_categories(session)
+    custom = Category(
+        workspace_id=workspace.id,
+        name="Streaming Treats",
+        name_key="streaming treats",
+        kind="expense",
+    )
+    session.add(custom)
+    session.flush()
+    session.add(
+        MerchantRule(
+            workspace_id=workspace.id,
+            merchant_pattern="NETFLIX COM",
+            normalized_merchant="Streaming",
+            category_id=custom.id,
+            is_subscription=False,
+        )
+    )
+    session.commit()
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Netflix.com"))
+
+    assert decision.source is CategorizationSource.WORKSPACE_RULE
+    assert decision.category_id == custom.id
+    assert decision.normalized_merchant == "Streaming"
+    assert decision.is_subscription is False
+
+
+def test_builtin_rule_beats_uncategorized(session: Session, workspace: Workspace) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Netflix.com"))
+
+    assert decision.source is CategorizationSource.BUILTIN_RULE
+    assert decision.category_id == categories["Entertainment"].id
+    assert decision.normalized_merchant == "Netflix"
+    assert decision.is_subscription is True
+
+
+def test_no_rule_uses_builtin_uncategorized(session: Session, workspace: Workspace) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Unknown Shop"))
+
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+    assert decision.category_id == categories["Uncategorized"].id
+    assert decision.normalized_merchant == "Unknown Shop"
+    assert decision.is_subscription is False
+
+
+def test_income_rule_does_not_categorize_outgoing_charge(
+    session: Session, workspace: Workspace
+) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Payroll", -5000))
+
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+    assert decision.category_id == categories["Uncategorized"].id
+
+
+def test_income_rule_categorizes_incoming_deposit(session: Session, workspace: Workspace) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Payroll", 5000))
+
+    assert decision.source is CategorizationSource.BUILTIN_RULE
+    assert decision.category_id == categories["Income"].id
+
+
+def test_expense_rule_does_not_categorize_incoming_refund(
+    session: Session, workspace: Workspace
+) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(session, workspace.id, _candidate("Netflix.com", 1599))
+
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+    assert decision.category_id == categories["Uncategorized"].id
+    assert decision.is_subscription is False
+
+
+def test_same_key_uses_each_workspaces_own_rule(session: Session) -> None:
+    owner = User(google_sub="rule-owner", email="rules@example.com")
+    first = Workspace(name="First", is_personal=True, owner=owner)
+    second = Workspace(name="Second", is_personal=True, owner=owner)
+    first_category = Category(
+        workspace=first, name="First Choice", name_key="first choice", kind="expense"
+    )
+    second_category = Category(
+        workspace=second, name="Second Choice", name_key="second choice", kind="expense"
+    )
+    session.add_all([first_category, second_category])
+    session.flush()
+    _seed_builtin_categories(session)
+    session.add_all(
+        [
+            MerchantRule(
+                workspace=first,
+                merchant_pattern="LOCAL SHOP",
+                normalized_merchant="First Local Shop",
+                category=first_category,
+            ),
+            MerchantRule(
+                workspace=second,
+                merchant_pattern="LOCAL SHOP",
+                normalized_merchant="Second Local Shop",
+                category=second_category,
+            ),
+        ]
+    )
+    session.commit()
+
+    first_decision = categorize_candidate(session, first.id, _candidate("Local Shop"))
+    second_decision = categorize_candidate(session, second.id, _candidate("Local Shop"))
+
+    assert first_decision.category_id == first_category.id
+    assert first_decision.normalized_merchant == "First Local Shop"
+    assert second_decision.category_id == second_category.id
+    assert second_decision.normalized_merchant == "Second Local Shop"
+
+
+def test_rule_cannot_reference_another_workspaces_category(session: Session) -> None:
+    owner = User(google_sub="isolation-owner", email="isolation@example.com")
+    first = Workspace(name="First", is_personal=True, owner=owner)
+    second = Workspace(name="Second", is_personal=True, owner=owner)
+    foreign_category = Category(
+        workspace=second, name="Private", name_key="private", kind="expense"
+    )
+    session.add_all([first, foreign_category])
+    session.flush()
+    categories = _seed_builtin_categories(session)
+    session.add(
+        MerchantRule(
+            workspace=first,
+            merchant_pattern="LOCAL SHOP",
+            normalized_merchant="Leaky Shop",
+            category=foreign_category,
+        )
+    )
+    session.commit()
+
+    decision = categorize_candidate(session, first.id, _candidate("Local Shop"))
+
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+    assert decision.category_id == categories["Uncategorized"].id
+
+
+def test_missing_required_builtin_category_raises_configuration_error(
+    session: Session, workspace: Workspace
+) -> None:
+    with pytest.raises(CategorizationConfigurationError, match="Uncategorized"):
+        categorize_candidate(session, workspace.id, _candidate("Unknown Shop"))

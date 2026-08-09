@@ -63,6 +63,10 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add manual recategorization, custom workspace categories, merchant normalization, and save-for-future merchant rules.
 - Add tests for categorization precedence and rule isolation by workspace.
 - **Done when:** correcting a merchant can categorize matching future transactions without overriding manual choices.
+- **Status:** Implemented with 21 built-in categories, deterministic exact-key
+  rules, workspace-only custom categories, manual transaction corrections,
+  independent Subscription labels, categorized CSV review, and acceptance tests
+  for authorization, precedence, duplicate safety, and workspace isolation.
 
 ## PR 6 — Payslip income imports
 

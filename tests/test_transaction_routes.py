@@ -160,3 +160,52 @@ async def test_invalid_filter_renders_specific_422_without_private_rows(tmp_path
     assert response.status_code == 422
     assert "Search must be 100 characters or fewer" in response.text
     assert "SECRET OTHER TRANSACTION" not in response.text
+
+
+@pytest.mark.anyio
+async def test_subscription_filter_is_rendered_and_preserved(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                category = session.scalar(select(Category))
+                assert workspace is not None and category is not None
+                for index in range(51):
+                    session.add(
+                        Transaction(
+                            workspace_id=workspace.id,
+                            date=datetime(2026, 8, 1, tzinfo=UTC),
+                            description=f"Subscription {index}",
+                            amount_cents=-999,
+                            category_id=category.id,
+                            is_subscription=True,
+                        )
+                    )
+                session.add(
+                    Transaction(
+                        workspace_id=workspace.id,
+                        date=datetime(2026, 8, 2, tzinfo=UTC),
+                        description="Not recurring",
+                        amount_cents=-500,
+                        category_id=category.id,
+                        is_subscription=False,
+                    )
+                )
+                session.commit()
+                workspace_id = workspace.id
+            response = await client.get(
+                f"/workspaces/{workspace_id}/transactions",
+                params={"subscription": "yes"},
+            )
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert 'value="yes" selected' in response.text
+    assert "Subscription 50" in response.text
+    assert "Not recurring" not in response.text
+    assert "subscription=yes" in response.text

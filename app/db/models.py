@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -10,13 +11,21 @@ from sqlalchemy import (
     Index,
     String,
     UniqueConstraint,
+    false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+def _default_category_name_key(context: Any) -> str:
+    """Derive a stable key for legacy constructors; services still validate explicit input."""
+    name = str(context.get_current_parameters()["name"])
+    return " ".join(name.split()).casefold()
 
 
 class User(Base):
@@ -185,10 +194,28 @@ class AccountBalanceSnapshot(Base):
 
 class Category(Base):
     __tablename__ = "categories"
+    __table_args__ = (
+        Index(
+            "uix_custom_category_name_key",
+            "workspace_id",
+            "name_key",
+            unique=True,
+            sqlite_where=text("workspace_id IS NOT NULL"),
+            postgresql_where=text("workspace_id IS NOT NULL"),
+        ),
+        Index(
+            "uix_builtin_category_name_key",
+            "name_key",
+            unique=True,
+            sqlite_where=text("workspace_id IS NULL"),
+            postgresql_where=text("workspace_id IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"), index=True)
     name: Mapped[str] = mapped_column(String(100))
+    name_key: Mapped[str] = mapped_column(String(100), default=_default_category_name_key)
     kind: Mapped[str] = mapped_column(String(20), default="expense")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -217,6 +244,7 @@ class Transaction(Base):
     amount_cents: Mapped[int] = mapped_column()
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
     categorization_source: Mapped[str] = mapped_column(String(50), default="uncategorized")
+    is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     duplicate_fingerprint: Mapped[str | None] = mapped_column(String(64))
     import_job_id: Mapped[int | None] = mapped_column(ForeignKey("import_jobs.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -228,13 +256,20 @@ class Transaction(Base):
 
 class MerchantRule(Base):
     __tablename__ = "merchant_rules"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "merchant_pattern", name="uix_workspace_merchant_pattern"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     merchant_pattern: Mapped[str] = mapped_column(String(255))
     normalized_merchant: Mapped[str | None] = mapped_column(String(255))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
+    is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     workspace: Mapped["Workspace"] = relationship(back_populates="merchant_rules")
     category: Mapped["Category | None"] = relationship(back_populates="merchant_rules")

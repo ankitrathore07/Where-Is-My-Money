@@ -8,7 +8,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 import app.imports.service as import_service
-from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
+from app.db.models import (
+    Category,
+    ImportJob,
+    MerchantRule,
+    Transaction,
+    UploadedFile,
+    Workspace,
+)
 from app.imports.parser import CsvValidationError
 from app.imports.service import (
     ImportStateError,
@@ -252,6 +259,7 @@ def test_review_reports_valid_invalid_and_existing_duplicate_rows(
         )
     )
     session.commit()
+    add_uncategorized(session)
 
     review = build_review(session, store, created.job)
 
@@ -265,6 +273,7 @@ def test_review_reports_valid_invalid_and_existing_duplicate_rows(
     assert review.rows[2].field_errors == {"amount": "Enter a valid non-zero amount."}
     assert review.rows[3].duplicate is True
     assert review.rows[3].included is False
+    assert session.scalar(select(MerchantRule)) is None
 
 
 def test_review_requires_the_private_source(
@@ -359,7 +368,7 @@ def test_commit_uses_reviewed_edits_and_exclusions_atomically(
     assert transactions[0].date.date().isoformat() == "2026-08-01"
     assert transactions[0].category is not None
     assert transactions[0].category.name == "Uncategorized"
-    assert transactions[0].categorization_source == "uncategorized"
+    assert transactions[0].categorization_source == "manual"
     assert transactions[0].duplicate_fingerprint is not None
     assert job.uploaded_file is not None
     assert job.uploaded_file.deleted is True

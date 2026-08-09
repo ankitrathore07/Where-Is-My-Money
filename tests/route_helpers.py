@@ -1,3 +1,4 @@
+import re
 from collections.abc import Generator, Mapping
 from pathlib import Path
 
@@ -86,3 +87,12 @@ async def complete_sign_in(client: AsyncClient) -> None:
     assert started.status_code == 302
     callback = await client.get("/auth/google/callback", follow_redirects=False)
     assert callback.status_code == 303
+
+
+def review_token(page: str, row_number: int) -> str:
+    match = re.search(
+        rf'name="review_token_{row_number}" value="([^"]+)"',
+        page,
+    )
+    assert match is not None
+    return match.group(1)

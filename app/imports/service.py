@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import BinaryIO, Literal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.categorization.service import categorize_candidate
+from app.categorization.types import CategorizationSource
 from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
 from app.imports.mapping import mapping_from_json, validate_mapping
@@ -243,6 +245,12 @@ def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> I
         fingerprint = fingerprints_by_row.get(source_row.row_number)
         duplicate = fingerprint in existing if fingerprint is not None else False
         if normalized is not None:
+            decision = (
+                categorize_candidate(session, job.workspace_id, normalized)
+                if not duplicate
+                else None
+            )
+            category = session.get(Category, decision.category_id) if decision else None
             review_rows.append(
                 ReviewRow(
                     row_number=source_row.row_number,
@@ -254,6 +262,11 @@ def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> I
                     duplicate=duplicate,
                     included=not duplicate,
                     field_errors={},
+                    normalized_merchant=decision.normalized_merchant if decision else None,
+                    category_id=decision.category_id if decision else None,
+                    category_name=category.name if category else None,
+                    is_subscription=decision.is_subscription if decision else None,
+                    categorization_source=decision.source.value if decision else None,
                 )
             )
         else:
@@ -280,22 +293,93 @@ def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> I
     )
 
 
-def _uncategorized(session: Session) -> Category:
-    matches = list(
-        session.scalars(
-            select(Category).where(
-                Category.workspace_id.is_(None),
-                Category.name == "Uncategorized",
-                Category.kind == "expense",
-            )
+def _accessible_category(session: Session, workspace_id: int, category_id: int) -> Category | None:
+    return session.scalar(
+        select(Category).where(
+            Category.id == category_id,
+            or_(Category.workspace_id.is_(None), Category.workspace_id == workspace_id),
         )
     )
-    if len(matches) != 1:
-        raise ImportStateError(
-            "builtin_category_missing",
-            "The built-in Uncategorized category is unavailable.",
+
+
+def _reviewed_fields(
+    session: Session,
+    workspace_id: int,
+    candidate: NormalizedTransaction,
+    review_row: ReviewRow,
+    edit: RowEdit,
+) -> tuple[str, int, bool, str]:
+    if (
+        review_row.category_id is None
+        or review_row.normalized_merchant is None
+        or review_row.is_subscription is None
+        or review_row.categorization_source is None
+    ):
+        decision = categorize_candidate(session, workspace_id, candidate)
+        fallback_merchant = decision.normalized_merchant
+        fallback_category_id = decision.category_id
+        fallback_subscription = decision.is_subscription
+        fallback_source = decision.source.value
+    else:
+        fallback_merchant = review_row.normalized_merchant
+        fallback_category_id = review_row.category_id
+        fallback_subscription = review_row.is_subscription
+        fallback_source = review_row.categorization_source
+
+    merchant = (
+        edit.normalized_merchant if edit.normalized_merchant is not None else fallback_merchant
+    )
+    merchant = " ".join(merchant.split())
+    if not merchant or len(merchant) > 255:
+        raise ValueError("merchant")
+    category_id = edit.category_id if edit.category_id is not None else fallback_category_id
+    if _accessible_category(session, workspace_id, category_id) is None:
+        raise ValueError("category")
+    subscription = (
+        edit.is_subscription if edit.is_subscription is not None else fallback_subscription
+    )
+    if type(subscription) is not bool:
+        raise ValueError("subscription")
+    source = edit.categorization_source or fallback_source
+    if source not in {item.value for item in CategorizationSource}:
+        raise ValueError("source")
+
+    has_original = any(
+        value is not None
+        for value in (
+            edit.original_normalized_merchant,
+            edit.original_category_id,
+            edit.original_is_subscription,
+            edit.original_categorization_source,
         )
-    return matches[0]
+    )
+    baseline = (
+        (
+            edit.original_normalized_merchant,
+            edit.original_category_id,
+            edit.original_is_subscription,
+            edit.original_categorization_source,
+        )
+        if has_original
+        else (
+            review_row.normalized_merchant,
+            review_row.category_id,
+            review_row.is_subscription,
+            review_row.categorization_source,
+        )
+    )
+    changed = (
+        (merchant, category_id, subscription, source) != baseline
+        or edit.date_value != review_row.date_value
+        or edit.description_value != review_row.description_value
+        or edit.amount_value != review_row.amount_value
+    )
+    return (
+        merchant,
+        category_id,
+        subscription,
+        CategorizationSource.MANUAL.value if changed else source,
+    )
 
 
 def commit_import(
@@ -325,22 +409,33 @@ def commit_import(
         )
 
     normalized: list[NormalizedTransaction] = []
+    reviewed_fields: dict[int, tuple[str, int, bool, str]] = {}
+    review_by_row = {row.row_number: row for row in review.rows}
     row_errors: dict[int, dict[str, str]] = {}
     for edit in edits:
         if not edit.include:
             continue
         try:
-            normalized.append(
-                normalize_review_edit(
-                    edit.row_number,
-                    edit.date_value,
-                    edit.description_value,
-                    edit.amount_value,
-                    "iso",
-                )
+            candidate = normalize_review_edit(
+                edit.row_number,
+                edit.date_value,
+                edit.description_value,
+                edit.amount_value,
+                "iso",
+            )
+            normalized.append(candidate)
+            reviewed_fields[edit.row_number] = _reviewed_fields(
+                session,
+                job.workspace_id,
+                candidate,
+                review_by_row[edit.row_number],
+                edit,
             )
         except RowValidationError as exc:
             row_errors[edit.row_number] = exc.field_errors
+        except ValueError as exc:
+            field = str(exc)
+            row_errors[edit.row_number] = {field: "Choose a valid categorization value."}
     if row_errors:
         raise ReviewValidationError(
             "invalid_review_rows", "Correct the highlighted rows before committing.", row_errors
@@ -363,18 +458,19 @@ def commit_import(
             "no_rows_selected", "Select at least one new valid transaction."
         )
 
-    category = _uncategorized(session)
     for item in new_items:
         transaction = item.transaction
+        merchant, category_id, is_subscription, source = reviewed_fields[transaction.row_number]
         session.add(
             Transaction(
                 workspace_id=job.workspace_id,
                 date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
                 description=transaction.description,
-                normalized_merchant=transaction.normalized_merchant,
+                normalized_merchant=merchant,
                 amount_cents=transaction.amount_cents,
-                category_id=category.id,
-                categorization_source="uncategorized",
+                category_id=category_id,
+                categorization_source=source,
+                is_subscription=is_subscription,
                 duplicate_fingerprint=item.fingerprint,
                 import_job_id=job.id,
             )

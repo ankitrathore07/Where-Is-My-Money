@@ -10,6 +10,7 @@ from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
     csrf_token,
+    review_token,
     verified_claims,
 )
 
@@ -79,15 +80,18 @@ async def test_reviewed_csv_import_to_filtered_list_and_safe_reupload(tmp_path: 
                     ("date_2", "2026-08-01"),
                     ("description_2", "Example Grocery"),
                     ("amount_2", "-12.34"),
+                    ("review_token_2", review_token(review.text, 2)),
                     ("row_numbers", "3"),
                     ("include_3", "on"),
                     ("date_3", "2026-08-02"),
                     ("description_3", "EXAMPLE PAYROLL"),
                     ("amount_3", "2500.00"),
+                    ("review_token_3", review_token(review.text, 3)),
                     ("row_numbers", "4"),
                     ("date_4", "2026-08-03"),
                     ("description_4", "EXAMPLE COFFEE"),
                     ("amount_4", "-4.50"),
+                    ("review_token_4", review_token(review.text, 4)),
                 ]
             )
             committed = await owner_client.post(
