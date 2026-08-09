@@ -10,6 +10,7 @@ pydantic-settings. No secret is ever committed to source control.
 
 import logging
 import secrets
+from pathlib import Path
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///data/where-is-my-money.db"
     google_client_id: str = ""
     google_client_secret: str = ""
+    upload_directory: Path = Path("data/uploads")
+    max_csv_upload_bytes: int = 5 * 1024 * 1024
 
     @property
     def is_production(self) -> bool:
