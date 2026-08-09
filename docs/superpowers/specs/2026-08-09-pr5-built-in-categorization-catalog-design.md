@@ -474,8 +474,9 @@ Every built-in catalog addition requires:
 
 ## Reporting behavior
 
-Category summaries group every transaction once by primary category. Subscription summaries filter
-the same transactions by `is_subscription=True`; they do not create a second expense.
+When PR7 adds category summaries, it must group every transaction once by primary category.
+Subscription summaries filter the same transactions by `is_subscription=True`; they do not create
+a second expense.
 
 The transaction list supports category and Subscription filters after PR4 provides its list/filter
 interface. The import review shows both the suggested category and a Subscription badge/checkbox
@@ -493,8 +494,8 @@ before commit.
 - Workspace rules override built-ins for both category and subscription.
 - The same merchant key can have different workspace results without leakage.
 - Unknown and explicitly ambiguous keys fall back to Uncategorized and not Subscription.
-- Category reports count a subscription transaction once, while the subscription filter can also
-  find it.
+- PR5 stores one transaction with one category and a boolean Subscription value, giving PR7 enough
+  data to count it once in category reports and also find it in subscription summaries.
 
 ## Scope boundaries
 

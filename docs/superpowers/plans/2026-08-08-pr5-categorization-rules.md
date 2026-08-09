@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add deterministic, workspace-isolated manual and rule-based transaction categorization without allowing automatic rules to override manual choices.
+**Goal:** Add deterministic, workspace-isolated manual and rule-based transaction categorization, a useful built-in spending taxonomy, and an independent Subscription label without allowing automatic rules to override manual choices.
 
-**Architecture:** Pure normalization and built-in lookup functions feed a workspace-scoped categorization service. Thin PR3-authorized routes call focused category and transaction services, while PR4's import preview passes normalized candidates through the same categorizer before review and preserves the resulting decision through commit.
+**Architecture:** Pure normalization and an immutable 106-key built-in catalog feed a workspace-scoped categorization service. Each decision carries one primary category plus an independent Subscription boolean and respects amount direction. Thin PR3-authorized routes call focused category and transaction services, while PR4's import preview passes normalized candidates through the same categorizer before review and preserves the resulting decision through commit.
 
 **Tech Stack:** Python 3.12, FastAPI, Jinja2, SQLAlchemy 2.x, Alembic, SQLite/PostgreSQL-compatible schema, pytest, Ruff.
 
@@ -15,6 +15,13 @@
 - Do not duplicate PR4 CSV parsing, duplicate detection, review state, or transaction commit logic.
 - Categorization precedence is exactly: manual transaction choice, workspace merchant rule, built-in merchant rule, built-in `Uncategorized`.
 - Saved rules match an exact canonical merchant key; regex, glob, prefix, fuzzy, and learned matching are out of scope.
+- Seed exactly the 21 stable built-in categories defined in `docs/superpowers/specs/2026-08-09-pr5-built-in-categorization-catalog-design.md`.
+- The initial catalog contains exactly 106 unique canonical keys, of which exactly 30 carry `is_subscription=True`.
+- Subscription is a boolean dimension alongside the primary category; it never replaces the category or creates a second expense.
+- Built-in rules enforce `expense`, `income`, or `either` amount direction before matching.
+- Generic PayPal, Venmo, Zelle, Cash App, Apple.com/bill, Google, Square, and Stripe descriptions remain Uncategorized.
+- Eating out, cafés, bars, takeout, and restaurant delivery use `Dining & Drinks`.
+- Rent, utilities, insurance, and other recurring bills are not Subscriptions; PR7 owns cadence-based recurring-charge detection.
 - Every workspace-owned query includes the active `workspace_id`; browser input is never authoritative for workspace or user identity.
 - Owners and accepted members have equal access; pending invitees and non-members have none.
 - Statement `description` is immutable; friendly merchant text is stored separately in `normalized_merchant`.
@@ -72,6 +79,7 @@ class ReviewedTransaction:
     candidate: NormalizedTransactionCandidate
     normalized_merchant: str
     category_id: int
+    is_subscription: bool
     categorization_source: str
 ```
 
@@ -142,7 +150,7 @@ plan to that exact path during Preflight; semantic differences require the small
 | Current user | authenticated ORM/domain user | `app/auth/dependencies.py::require_current_user` |
 | CSRF | validates every state-changing form | `app/core/security.py::verify_csrf` |
 | Normalized candidate | row/date/description/cents/fingerprint | `app/imports/types.py::NormalizedTransactionCandidate` |
-| Review row | merchant/category/source survive to commit | `app/imports/types.py::ReviewedTransaction` |
+| Review row | merchant/category/subscription/source survive to commit | `app/imports/types.py::ReviewedTransaction` |
 | Preview builder | categorizer call after dedupe | `app/imports/service.py::build_import_preview` |
 | Commit service | persists authoritative workspace/review fields | `app/imports/service.py::commit_reviewed_transactions` |
 | Transaction list | scoped loader/template extension point | `app/transactions/service.py::list_transactions` |
@@ -163,7 +171,8 @@ plan to that exact path during Preflight; semantic differences require the small
 **Interfaces:**
 
 - Consumes: PR4's final Alembic revision and seeded built-in `Category` rows.
-- Produces: `Category.name_key: str`, `MerchantRule.updated_at: datetime`, unique same-scope
+- Produces: `Category.name_key: str`, `Transaction.is_subscription: bool`,
+  `MerchantRule.is_subscription: bool`, `MerchantRule.updated_at: datetime`, unique same-scope
   categories, and unique `(workspace_id, merchant_pattern)` rules.
 
 - [ ] **Step 1: Add a two-workspace fixture and write failing model constraint tests**
@@ -219,6 +228,20 @@ def test_merchant_key_is_unique_per_workspace(
     )
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_subscription_defaults_are_false(session: Session, transaction: Transaction) -> None:
+    rule = MerchantRule(
+        workspace_id=transaction.workspace_id,
+        merchant_pattern="LOCAL SHOP",
+        normalized_merchant="Local Shop",
+        category_id=transaction.category_id,
+    )
+    session.add(rule)
+    session.flush()
+
+    assert transaction.is_subscription is False
+    assert rule.is_subscription is False
 ```
 
 - [ ] **Step 2: Run the focused tests and confirm red**
@@ -233,9 +256,11 @@ Expected: FAIL because `name_key` and the new uniqueness constraints do not exis
 
 - [ ] **Step 3: Add the minimal ORM fields and indexes**
 
-Add `Category.name_key`, `MerchantRule.updated_at`, a custom-category partial unique index, a
-built-in partial unique index, and the workspace merchant-key unique constraint. Use both
-`sqlite_where` and `postgresql_where` predicates for partial indexes.
+Add `Category.name_key`, `Transaction.is_subscription`, `MerchantRule.is_subscription`,
+`MerchantRule.updated_at`, a custom-category partial unique index, a built-in partial unique index,
+and the workspace merchant-key unique constraint. Both subscription fields are non-null booleans
+with Python and server defaults of false. Use both `sqlite_where` and `postgresql_where` predicates
+for partial indexes.
 
 ```python
 Index(
@@ -260,9 +285,10 @@ raises a message containing `duplicate category name` rather than silently choos
 - [ ] **Step 5: Implement the Alembic migration**
 
 Set `down_revision = "0006_builtin_categories"`. Backfill `name_key` with Python normalization of
-existing names before making the column non-null. Check duplicates grouped by workspace scope and
-merchant-rule workspace/key before creating unique indexes. Preserve PR4 built-in IDs and existing
-transaction foreign keys.
+existing names before making the column non-null. Add and backfill both `is_subscription` columns
+to false before making them non-null. Check duplicates grouped by workspace scope and merchant-rule
+workspace/key before creating unique indexes. Preserve PR4 built-in IDs and existing transaction
+foreign keys.
 
 - [ ] **Step 6: Run model and migration tests**
 
@@ -284,24 +310,28 @@ git commit -m "feat: enforce categorization data invariants"
 
 ---
 
-### Task 2: Add pure merchant normalization and built-in rules
+### Task 2: Complete merchant normalization, built-in taxonomy, and subscription catalog
 
 **Files:**
 
-- Create: `app/categorization/__init__.py`
-- Create: `app/categorization/types.py`
-- Create: `app/categorization/normalization.py`
-- Create: `app/categorization/builtins.py`
-- Create: `tests/categorization/test_normalization.py`
-- Create: `tests/categorization/test_builtins.py`
+- Modify: `app/categorization/types.py`
+- Modify: `app/categorization/builtins.py`
+- Modify: `tests/categorization/test_builtins.py`
+- Existing and unchanged: `app/categorization/normalization.py`
+- Existing and unchanged: `tests/categorization/test_normalization.py`
 
 **Interfaces:**
 
 - Consumes: no PR3/PR4 runtime code.
-- Produces: `CategorizationSource`, `CategorizationDecision`, `merchant_key()`,
+- Produces: `CategorizationSource`, `CategorizationDecision`, `BuiltinMerchantRule`,
+  `BUILTIN_CATEGORY_DEFINITIONS`, `BUILTIN_MERCHANT_RULES`, `merchant_key()`,
   `merchant_display_fallback()`, and `find_builtin_rule()`.
 
-- [ ] **Step 1: Write failing normalization tests**
+**Current checkpoint:** Commit `a7ff978` already supplies normalization, source values, decision
+types, and three exact rules. The steps below expand that safe independent slice to the approved
+catalog and Subscription contract.
+
+- [x] **Step 1: Write failing normalization tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -322,24 +352,24 @@ def test_display_fallback_collapses_whitespace_and_caps_length() -> None:
     assert len(merchant_display_fallback("x" * 300)) == 255
 ```
 
-- [ ] **Step 2: Run normalization tests and confirm red**
+- [x] **Step 2: Run normalization tests and confirm red**
 
 Run: `uv run pytest tests/categorization/test_normalization.py -v`
 
 Expected: FAIL because the package/functions do not exist.
 
-- [ ] **Step 3: Implement the minimal pure functions**
+- [x] **Step 3: Implement the minimal pure functions**
 
 Use `unicodedata.normalize("NFKC", value)`, `str.upper()`, character-wise
 `character.isalnum()`, and whitespace collapse. Do not use regular expressions supplied by users.
 
-- [ ] **Step 4: Run normalization tests and confirm green**
+- [x] **Step 4: Run normalization tests and confirm green**
 
 Run: `uv run pytest tests/categorization/test_normalization.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Write failing type and built-in lookup tests**
+- [ ] **Step 5: Expand the failing type and catalog-contract tests**
 
 ```python
 def test_builtin_rule_lookup_is_exact() -> None:
@@ -350,16 +380,40 @@ def test_builtin_rule_lookup_is_exact() -> None:
     assert find_builtin_rule("NETFLIX COM 1234") is None
 
 
-def test_categorization_sources_are_stable_strings() -> None:
-    assert [source.value for source in CategorizationSource] == [
-        "manual",
-        "workspace_rule",
-        "builtin_rule",
-        "uncategorized",
+def test_catalog_has_complete_unique_v1_coverage() -> None:
+    keys = [key for rule in BUILTIN_MERCHANT_RULES for key in rule.merchant_keys]
+    subscriptions = [
+        key for rule in BUILTIN_MERCHANT_RULES if rule.is_subscription for key in rule.merchant_keys
     ]
+
+    assert len(BUILTIN_CATEGORY_DEFINITIONS) == 21
+    assert len(keys) == 106
+    assert len(set(keys)) == 106
+    assert len(subscriptions) == 30
+
+
+def test_ambiguous_processors_have_no_builtin_rule() -> None:
+    for key in (
+        "PAYPAL",
+        "VENMO",
+        "ZELLE",
+        "CASH APP",
+        "APPLE COM BILL",
+        "GOOGLE",
+        "SQUARE",
+        "STRIPE",
+    ):
+        assert find_builtin_rule(key) is None
 ```
 
-- [ ] **Step 6: Add immutable types and a small built-in catalog**
+- [ ] **Step 6: Run expanded tests and confirm red**
+
+Run: `uv run pytest tests/categorization/test_builtins.py -v`
+
+Expected: FAIL because `CategorizationDecision` and `BuiltinMerchantRule` lack Subscription and
+direction fields, and the catalog contains only three keys.
+
+- [ ] **Step 7: Add the Subscription-aware immutable types**
 
 ```python
 class CategorizationSource(StrEnum):
@@ -373,24 +427,42 @@ class CategorizationSource(StrEnum):
 class CategorizationDecision:
     normalized_merchant: str
     category_id: int
+    is_subscription: bool
     source: CategorizationSource
+
+
+@dataclass(frozen=True)
+class BuiltinMerchantRule:
+    merchant_keys: tuple[str, ...]
+    normalized_merchant: str
+    category_name: str
+    is_subscription: bool = False
+    amount_direction: Literal["expense", "income", "either"] = "expense"
 ```
 
-Keep built-in definitions in an immutable tuple/dict keyed by exact canonical keys. Add exactly the
-initial design catalog: `NETFLIX COM -> Netflix / Entertainment`,
-`SPOTIFY USA -> Spotify / Entertainment`, and `UBER TRIP -> Uber / Transportation`.
+Define `BUILTIN_CATEGORY_DEFINITIONS` as the exact 21 `(name, kind)` rows and
+`BUILTIN_MERCHANT_RULES` as the exact 106 keys from the approved catalog design. Flatten
+`merchant_keys` into a private immutable lookup mapping. Do not normalize inside
+`find_builtin_rule()`; callers must pass a canonical key so matching remains exact.
 
-- [ ] **Step 7: Run the pure unit tests**
+- [ ] **Step 8: Add catalog-validation behavior**
+
+At module import, build the lookup through a private `_build_rule_lookup()` that raises `ValueError`
+for a blank/noncanonical/duplicate key, unknown category name, invalid direction, or an incorrectly
+typed Subscription value. Test `_build_rule_lookup()` directly with one malformed immutable tuple
+per failure branch; no database or mocks are needed.
+
+- [ ] **Step 9: Run the pure unit tests**
 
 Run: `uv run pytest tests/categorization -v`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the pure domain slice**
+- [ ] **Step 10: Commit the expanded catalog slice**
 
 ```powershell
-git add app/categorization tests/categorization
-git commit -m "feat: add deterministic merchant normalization"
+git add app/categorization/types.py app/categorization/builtins.py tests/categorization/test_builtins.py
+git commit -m "feat: expand built-in categorization catalog"
 ```
 
 ---
@@ -412,9 +484,10 @@ git commit -m "feat: add deterministic merchant normalization"
 
 - [ ] **Step 1: Add explicit two-workspace and built-in-category fixtures**
 
-Create `two_workspaces`, `builtin_categories`, and `candidate_factory` fixtures. Keep all fixture
-values synthetic. `builtin_categories` must include `Uncategorized` and `Entertainment` with
-`workspace_id=None` and valid `name_key` values.
+Create `two_workspaces`, `builtin_categories`, and
+`candidate_factory(description: str, amount_cents: int = -1000)` fixtures. Keep all fixture values
+synthetic. `builtin_categories` must include all 21 seeded names with `workspace_id=None` and valid
+`name_key` values.
 
 - [ ] **Step 2: Write the three failing automatic-precedence tests**
 
@@ -429,12 +502,14 @@ def test_workspace_rule_beats_builtin_rule(
             merchant_pattern="NETFLIX COM",
             normalized_merchant="Streaming",
             category_id=workspace_category.id,
+            is_subscription=False,
         )
     )
     session.commit()
     decision = categorize_candidate(session, workspace.id, candidate_factory("Netflix.com"))
     assert decision.source is CategorizationSource.WORKSPACE_RULE
     assert decision.category_id == workspace_category.id
+    assert decision.is_subscription is False
 
 
 def test_builtin_rule_beats_uncategorized(
@@ -443,6 +518,7 @@ def test_builtin_rule_beats_uncategorized(
     decision = categorize_candidate(session, workspace.id, candidate_factory("Netflix.com"))
     assert decision.source is CategorizationSource.BUILTIN_RULE
     assert decision.category_id == builtin_categories["Entertainment"].id
+    assert decision.is_subscription is True
 
 
 def test_no_rule_uses_builtin_uncategorized(
@@ -451,6 +527,7 @@ def test_no_rule_uses_builtin_uncategorized(
     decision = categorize_candidate(session, workspace.id, candidate_factory("Unknown Shop"))
     assert decision.source is CategorizationSource.UNCATEGORIZED
     assert decision.category_id == builtin_categories["Uncategorized"].id
+    assert decision.is_subscription is False
 ```
 
 Manual precedence is proven in Task 5: saving or replacing a rule leaves the edited transaction
@@ -467,10 +544,30 @@ Expected: FAIL because `service.py` does not exist.
 
 Query `MerchantRule` by both `workspace_id` and exact `merchant_pattern`. Resolve its category only
 if built-in or owned by that workspace. Then resolve a built-in catalog entry by category
-`name_key`; finally resolve `Uncategorized`. Raise a named `CategorizationConfigurationError` when a
-required built-in row is absent.
+`name_key` and require its direction to match the candidate amount (`amount_cents < 0` is expense,
+`amount_cents > 0` is income); finally resolve `Uncategorized`. Copy category and Subscription from
+the same winning rule. Raise a named `CategorizationConfigurationError` when a required built-in row
+is absent.
 
-- [ ] **Step 5: Write failing workspace-isolation tests**
+- [ ] **Step 5: Write failing direction tests**
+
+```python
+def test_income_rule_does_not_categorize_outgoing_charge(
+    session, workspace, candidate_factory, builtin_categories
+):
+    decision = categorize_candidate(session, workspace.id, candidate_factory("Payroll", -5000))
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+
+
+def test_income_rule_categorizes_incoming_deposit(
+    session, workspace, candidate_factory, builtin_categories
+):
+    decision = categorize_candidate(session, workspace.id, candidate_factory("Payroll", 5000))
+    assert decision.source is CategorizationSource.BUILTIN_RULE
+    assert decision.category_id == builtin_categories["Income"].id
+```
+
+- [ ] **Step 6: Write failing workspace-isolation tests**
 
 ```python
 def test_same_key_uses_each_workspaces_own_rule(
@@ -520,13 +617,13 @@ def test_rule_cannot_reference_another_workspaces_category(
     assert decision.source is CategorizationSource.UNCATEGORIZED
 ```
 
-- [ ] **Step 6: Run all categorization service tests**
+- [ ] **Step 7: Run all categorization service tests**
 
 Run: `uv run pytest tests/categorization/test_service.py -v`
 
 Expected: PASS, including isolation and missing-built-in error tests.
 
-- [ ] **Step 7: Commit the precedence slice**
+- [ ] **Step 8: Commit the precedence slice**
 
 ```powershell
 git add app/categorization/service.py tests/categorization/test_service.py tests/conftest.py
@@ -572,6 +669,10 @@ git commit -m "feat: apply workspace-scoped categorization precedence"
 Test trimmed creation, allowed kinds (`expense`, `income`, `transfer`), blank/overlength names,
 invalid kind, case-insensitive duplicate rejection in one workspace, same name in two workspaces,
 and listing that includes built-ins plus only the active workspace's custom categories.
+
+Add a seeded-catalog assertion that the global built-ins contain exactly the 21 names and kinds from
+`BUILTIN_CATEGORY_DEFINITIONS`. This catches PR4 seed drift before an import preview attempts to
+resolve a catalog rule.
 
 ```python
 def test_list_accessible_categories_excludes_other_workspace(
@@ -629,10 +730,11 @@ git commit -m "feat: add workspace custom categories"
 
   ```python
   @dataclass(frozen=True)
-  class ManualCategorizationInput:
-      normalized_merchant: str
-      category_id: int
-      save_for_future: bool
+class ManualCategorizationInput:
+    normalized_merchant: str
+    category_id: int
+    is_subscription: bool
+    save_for_future: bool
 
 
   def manually_categorize_transaction(
@@ -655,11 +757,12 @@ def test_manual_edit_changes_transaction_but_not_description(
         session,
         workspace.id,
         transaction.id,
-        ManualCategorizationInput("Whole Foods", workspace_category.id, False),
+        ManualCategorizationInput("Whole Foods", workspace_category.id, False, False),
     )
     assert updated.description == original_description
     assert updated.normalized_merchant == "Whole Foods"
     assert updated.category_id == workspace_category.id
+    assert updated.is_subscription is False
     assert updated.categorization_source == "manual"
     assert session.scalar(select(func.count()).select_from(MerchantRule)) == 0
 
@@ -676,7 +779,7 @@ def test_manual_edit_cannot_use_other_workspace_category(
     session, two_workspaces, first_transaction, second_category
 ):
     first, _ = two_workspaces
-    values = ManualCategorizationInput("Local Shop", second_category.id, False)
+    values = ManualCategorizationInput("Local Shop", second_category.id, False, False)
     with pytest.raises(CategoryNotAccessibleError):
         manually_categorize_transaction(session, first.id, first_transaction.id, values)
 ```
@@ -691,8 +794,8 @@ Expected: FAIL because the mutation service does not exist.
 
 Load the transaction by `id AND workspace_id`. Load category by
 `id AND (workspace_id = active OR workspace_id IS NULL)`. Validate normalized merchant as trimmed,
-nonblank, maximum 255 characters. Set source to `manual`. Do not call `session.commit()` in the
-service.
+nonblank, maximum 255 characters and require `is_subscription` to be a real boolean. Set category,
+Subscription, and source `manual`. Do not call `session.commit()` in the service.
 
 - [ ] **Step 4: Write failing save-for-future tests**
 
@@ -712,6 +815,7 @@ def test_save_for_future_upserts_rule_and_keeps_current_manual(
     )
     assert rule is not None
     assert rule.category_id == values_true.category_id
+    assert rule.is_subscription is values_true.is_subscription
     assert updated.categorization_source == "manual"
 
 
@@ -728,9 +832,9 @@ def test_saved_rule_applies_only_to_later_candidate(
 
 - [ ] **Step 5: Implement exact-key rule upsert**
 
-Select by `(workspace_id, merchant_pattern)`. Update label/category if present, otherwise add. Leave
-an existing rule unchanged when `save_for_future=False`. Let the caller commit transaction and rule
-together.
+Select by `(workspace_id, merchant_pattern)`. Update label/category/Subscription if present,
+otherwise add. Leave an existing rule unchanged when `save_for_future=False`. Let the caller commit
+transaction and rule together.
 
 - [ ] **Step 6: Prove rollback is atomic**
 
@@ -768,6 +872,7 @@ git commit -m "feat: save manual categories and future merchant rules"
 - Modify: PR4's transaction list/detail template
 - Create: `app/templates/transactions/edit.html`
 - Create: `app/transactions/routes.py` or extend PR4's transaction router
+- Modify: `app/transactions/service.py` after PR4 provides `list_transactions()`
 - Create: `tests/categories/test_routes.py`
 - Create: `tests/transactions/test_categorization_routes.py`
 
@@ -814,8 +919,8 @@ Render separate `Workspace categories` and `Built-in categories` sections. The c
 - [ ] **Step 6: Add manual categorization UI**
 
 Show immutable description, normalized merchant input, grouped category picker, and unchecked
-`Use for matching future transactions` checkbox. Add a scoped edit link to PR4's transaction list.
-Do not expose raw merchant keys or workspace IDs in editable fields.
+Subscription and `Use for matching future transactions` checkboxes. Add a scoped edit link to PR4's
+transaction list. Do not expose raw merchant keys or workspace IDs in editable fields.
 
 - [ ] **Step 7: Add failing validation response tests**
 
@@ -823,7 +928,21 @@ Assert blank merchant, inaccessible category ID, duplicate category name, and bl
 redisplay errors and do not persist. Assert another workspace's category/transaction behaves as 404,
 not as a validation hint.
 
-- [ ] **Step 8: Run route and template tests**
+- [ ] **Step 8: Add a failing Subscription filter test to PR4's transaction list**
+
+Create one subscribed and one non-subscribed transaction in the same workspace. Assert
+`?subscription=yes` returns only the subscribed row, `?subscription=no` returns only the other row,
+and omitting the query parameter returns both. Repeat the request as another workspace and assert
+neither row is visible.
+
+- [ ] **Step 9: Implement the scoped Subscription filter**
+
+Extend PR4's centralized `list_transactions()` query with
+`subscription: Literal["all", "yes", "no"] = "all"`. Add the filter to the server-rendered
+transaction list without changing category/date filters. Invalid values render the standard safe
+400 response rather than silently selecting a different filter.
+
+- [ ] **Step 10: Run route and template tests**
 
 Run:
 
@@ -833,7 +952,7 @@ uv run pytest tests/categories/test_routes.py tests/transactions/test_categoriza
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit the authorized UI slice**
+- [ ] **Step 11: Commit the authorized UI slice**
 
 ```powershell
 git add app/categories app/transactions app/templates tests/categories/test_routes.py tests/transactions/test_categorization_routes.py
@@ -859,13 +978,14 @@ git commit -m "feat: add categorization forms"
 
 - Consumes: actual PR4 equivalents of `NormalizedTransactionCandidate` and
   `ReviewedTransaction`, plus `categorize_candidate()` from Task 3.
-- Produces: categorized preview rows whose merchant/category/source survive unchanged to commit,
-  except explicit review edits become `manual`.
+- Produces: categorized preview rows whose merchant/category/Subscription/source survive unchanged
+  to commit, except explicit review edits become `manual`.
 
 - [ ] **Step 1: Write a failing built-in preview integration test**
 
 Use PR4's existing synthetic CSV fixture. Include `Netflix.com` and assert the review response/DTO
-shows `Netflix`, `Entertainment`, and `builtin_rule` before any transaction is committed.
+shows `Netflix`, `Entertainment`, Subscription, and `builtin_rule` before any transaction is
+committed.
 
 - [ ] **Step 2: Run the focused integration test and confirm red**
 
@@ -881,20 +1001,23 @@ For every non-duplicate normalized candidate, call:
 decision = categorize_candidate(session, workspace_context.workspace_id, candidate)
 ```
 
-Copy `decision.normalized_merchant`, `decision.category_id`, and `decision.source.value` into PR4's
-review row. If PR4's types use different field names, make a small adapter at this exact boundary.
+Copy `decision.normalized_merchant`, `decision.category_id`, `decision.is_subscription`, and
+`decision.source.value` into PR4's review row. If PR4's types use different field names, make a small
+adapter at this exact boundary.
 
 - [ ] **Step 4: Write the failing workspace-rule-over-built-in test**
 
 Seed a saved `NETFLIX COM` rule in the active workspace and assert preview uses its category/label
-with `workspace_rule`. Seed a conflicting rule in another workspace and assert it is ignored.
+and Subscription value with `workspace_rule`. Seed a conflicting rule in another workspace and
+assert it is ignored.
 
 - [ ] **Step 5: Write the failing review-override commit test**
 
 Submit the reviewed row with a different accessible category. Assert the committed `Transaction`
-retains the original description, submitted merchant/category, and source `manual`. Assert no rule
-is created unless PR4's review UI explicitly includes and submits the future-rule checkbox; if that
-checkbox remains only on the post-import transaction edit form, document that path in the test.
+retains the original description, submitted merchant/category/Subscription, and source `manual`.
+Assert no rule is created unless PR4's review UI explicitly includes and submits the future-rule
+checkbox; if that checkbox remains only on the post-import transaction edit form, document that
+path in the test.
 
 - [ ] **Step 6: Preserve reviewed fields through commit**
 
@@ -946,10 +1069,11 @@ Exercise this exact sequence through HTTP/service boundaries established by PR3/
 
 1. An accepted workspace member opens a transaction.
 2. They choose a custom category and normalized merchant.
-3. They select `Use for matching future transactions` and submit valid CSRF.
+3. They set Subscription, select `Use for matching future transactions`, and submit valid CSRF.
 4. The current transaction is `manual`.
 5. A later CSV preview with the exact merchant key shows the saved category as `workspace_rule`.
-6. The same candidate in another workspace falls through to its own rule/built-in/uncategorized.
+6. The later preview also carries the saved Subscription value.
+7. The same candidate in another workspace falls through to its own rule/built-in/uncategorized.
 
 - [ ] **Step 2: Run the acceptance test and fix only integration defects**
 
@@ -980,6 +1104,8 @@ Update README with:
 - how a manual correction differs from saving a future rule;
 - exact-match limitation;
 - precedence in one short list;
+- the difference between Subscription and recurring bills;
+- `Dining & Drinks` boundaries and ambiguity-safe fallback behavior;
 - workspace-sharing behavior;
 - commands to run the tests.
 
@@ -1027,6 +1153,11 @@ feature, fuzzy matcher, bulk recategorization, LangGraph/LLM work, or unrelated 
 | Custom workspace categories | Task 4 service tests; Task 6 route tests |
 | Merchant normalization | Task 2 unit tests |
 | Save for future | Task 5 upsert/later-candidate tests |
+| Subscription alongside category | Tasks 1–8 decision, persistence, UI, and reporting tests |
+| 21-category seed contract | Tasks 2 and 4 catalog/seed tests |
+| 106 exact keys and 30 subscriptions | Task 2 catalog validation tests |
+| Amount-direction safety | Task 3 income/expense tests |
+| Ambiguous merchant fallback | Tasks 2, 3, and 7 no-match tests |
 | Manual precedence | Task 3 preservation test; Task 7 review override |
 | Workspace over built-in | Task 3 precedence tests; Task 7 preview test |
 | Built-in over Uncategorized | Task 3 precedence tests |
