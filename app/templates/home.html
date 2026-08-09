@@ -1,26 +1,30 @@
 {% extends "base.html" %}
 
 {% block content %}
-  {% if current_user %}
-    <p class="eyebrow">Signed in securely</p>
-    <p>Welcome, {{ current_user.display_name or current_user.email }}.</p>
-  {% endif %}
   <section class="hero">
     <p class="eyebrow">Personal finance, built carefully</p>
     <h1>Understand where your money goes.</h1>
-    <p>
-      The first foundation is working: a Python web app, automated tests, and a
-      repeatable development environment. Statement imports and financial data
-      will arrive in later pull requests.
-    </p>
-    <a class="button" href="/docs">Explore the API docs</a>
+    {% if current_user %}
+      <p>Welcome, {{ current_user.display_name or current_user.email }}.</p>
+      <p>Your personal and household spaces are separated by membership checks.</p>
+      <a class="button" href="/workspaces">Open your workspaces</a>
+    {% else %}
+      <p>
+        Sign in with a verified Google account to create a private personal
+        workspace and share only the household spaces you choose.
+      </p>
+      <form action="/auth/google" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button" type="submit">Continue with Google</button>
+      </form>
+    {% endif %}
   </section>
 
   <section class="next-step">
-    <h2>What comes next?</h2>
+    <h2>Privacy boundary</h2>
     <p>
-      The next pull request introduces the local database schema, so this app
-      can safely remember users, workspaces, and financial records.
+      Signing in proves who you are. A separate membership check decides which
+      workspace each route may load, so private and shared information cannot mix.
     </p>
   </section>
 {% endblock %}

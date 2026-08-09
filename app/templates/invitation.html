@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Workspace invitation · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">Household invitation</p>
+    <h1>Workspace invitation</h1>
+
+    {% if error %}
+      <p class="alert" role="alert">{{ error }}</p>
+    {% elif not available %}
+      <p>This invitation is unavailable. It may be invalid, expired, or already accepted.</p>
+    {% elif not current_user %}
+      <p>Sign in with the verified Google account that received this invitation.</p>
+      <form action="/auth/google" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button" type="submit">Continue with Google</button>
+      </form>
+    {% elif not matching_user %}
+      <p>This invitation is not addressed to your signed-in email.</p>
+    {% else %}
+      <p>You were invited to <strong>{{ invitation.workspace.name }}</strong>.</p>
+      <form action="/invitations/{{ invitation_token }}/accept" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button" type="submit">Accept invitation</button>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -18,6 +18,7 @@ from app.core.logging import configure_logging, logger
 from app.core.middleware import CSRFMiddleware
 from app.core.security import SlidingWindowRateLimiter
 from app.db.models import User
+from app.workspaces.routes import router as workspace_router
 
 APP_DIRECTORY = Path(__file__).resolve().parent
 
@@ -82,6 +83,7 @@ def create_app(
     application.add_middleware(CSRFMiddleware, configured=configured)
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
+    application.include_router(workspace_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")
 
@@ -94,7 +96,10 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="home.html",
-            context={"current_user": current_user},
+            context={
+                "current_user": current_user,
+                "csrf_token": request.state.csrf_token,
+            },
         )
 
     @application.get("/health")

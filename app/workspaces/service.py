@@ -163,6 +163,73 @@ def accept_workspace_invitation(
     return invitation.workspace
 
 
+def get_pending_invitation(
+    session: Session,
+    raw_token: str,
+    *,
+    now: datetime | None = None,
+) -> WorkspaceInvitation | None:
+    """Load one live, unaccepted invitation by its bearer token."""
+    invitation = session.scalar(
+        select(WorkspaceInvitation).where(
+            WorkspaceInvitation.token == hash_invitation_token(raw_token)
+        )
+    )
+    if (
+        invitation is None
+        or invitation.accepted
+        or _is_expired(invitation.expires_at, now or datetime.now(UTC))
+    ):
+        return None
+    return invitation
+
+
+def list_pending_invitations_for_email(
+    session: Session,
+    email: str,
+    *,
+    now: datetime | None = None,
+) -> list[WorkspaceInvitation]:
+    """List live invitations addressed to one normalized verified email."""
+    current_time = now or datetime.now(UTC)
+    invitations = session.scalars(
+        select(WorkspaceInvitation)
+        .where(
+            WorkspaceInvitation.email == normalize_email(email),
+            WorkspaceInvitation.accepted.is_(False),
+        )
+        .order_by(WorkspaceInvitation.id)
+    )
+    return [
+        invitation
+        for invitation in invitations
+        if not _is_expired(invitation.expires_at, current_time)
+    ]
+
+
+def list_workspace_pending_invitations(
+    session: Session,
+    workspace_id: int,
+    *,
+    now: datetime | None = None,
+) -> list[WorkspaceInvitation]:
+    """List live pending invitations for an authorized workspace page."""
+    current_time = now or datetime.now(UTC)
+    invitations = session.scalars(
+        select(WorkspaceInvitation)
+        .where(
+            WorkspaceInvitation.workspace_id == workspace_id,
+            WorkspaceInvitation.accepted.is_(False),
+        )
+        .order_by(WorkspaceInvitation.id)
+    )
+    return [
+        invitation
+        for invitation in invitations
+        if not _is_expired(invitation.expires_at, current_time)
+    ]
+
+
 def _is_expired(expires_at: datetime | None, now: datetime) -> bool:
     if expires_at is None:
         return False
