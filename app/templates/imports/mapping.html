@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Map CSV columns · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">Step 2 of 3 · {{ workspace.name }}</p>
+    <h1>Map your CSV columns</h1>
+    <p>Tell us which source columns contain the transaction fields.</p>
+  </section>
+  {% if errors.mapping %}<p class="alert" role="alert">{{ errors.mapping }}</p>{% endif %}
+  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/mapping" method="post" class="stacked-form panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for field, label in [("date_column", "Date column"), ("description_column", "Description column")] %}
+      <label for="{{ field }}">{{ label }}</label>
+      <select id="{{ field }}" name="{{ field }}" required>
+        <option value="">Choose a column</option>
+        {% for header in headers %}<option value="{{ header }}" {% if values.get(field) == header %}selected{% endif %}>{{ header }}</option>{% endfor %}
+      </select>
+      {% if errors.get(field) %}<p class="field-error">{{ errors.get(field) }}</p>{% endif %}
+    {% endfor %}
+    <label for="amount_mode">Amount layout</label>
+    <select id="amount_mode" name="amount_mode">
+      <option value="single" {% if values.get("amount_mode", "single") == "single" %}selected{% endif %}>One signed amount column</option>
+      <option value="split" {% if values.get("amount_mode") == "split" %}selected{% endif %}>Separate debit and credit columns</option>
+    </select>
+    <label for="amount_column">Signed amount column</label>
+    <select id="amount_column" name="amount_column"><option value="">Choose a column</option>{% for header in headers %}<option value="{{ header }}" {% if values.get("amount_column") == header %}selected{% endif %}>{{ header }}</option>{% endfor %}</select>
+    <label for="debit_column">Debit column (split layout)</label>
+    <select id="debit_column" name="debit_column"><option value="">Choose a column</option>{% for header in headers %}<option value="{{ header }}" {% if values.get("debit_column") == header %}selected{% endif %}>{{ header }}</option>{% endfor %}</select>
+    <label for="credit_column">Credit column (split layout)</label>
+    <select id="credit_column" name="credit_column"><option value="">Choose a column</option>{% for header in headers %}<option value="{{ header }}" {% if values.get("credit_column") == header %}selected{% endif %}>{{ header }}</option>{% endfor %}</select>
+    {% for field in ["amount_mode", "amount_column", "debit_column", "credit_column"] %}{% if errors.get(field) %}<p class="field-error">{{ errors.get(field) }}</p>{% endif %}{% endfor %}
+    <label for="date_format">Date format</label>
+    <select id="date_format" name="date_format"><option value="mdy" {% if values.get("date_format", "mdy") == "mdy" %}selected{% endif %}>MM/DD/YYYY</option><option value="dmy" {% if values.get("date_format") == "dmy" %}selected{% endif %}>DD/MM/YYYY</option><option value="iso" {% if values.get("date_format") == "iso" %}selected{% endif %}>YYYY-MM-DD</option></select>
+    {% if errors.get("date_format") %}<p class="field-error">{{ errors.get("date_format") }}</p>{% endif %}
+    <label for="amount_sign">Signed amount meaning</label>
+    <select id="amount_sign" name="amount_sign"><option value="as_is" {% if values.get("amount_sign", "as_is") == "as_is" %}selected{% endif %}>Use signs as shown</option><option value="invert" {% if values.get("amount_sign") == "invert" %}selected{% endif %}>Invert every sign</option></select>
+    {% if errors.get("amount_sign") %}<p class="field-error">{{ errors.get("amount_sign") }}</p>{% endif %}
+    <button class="button" type="submit">Review transactions</button>
+  </form>
+  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/cancel" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="link-button" type="submit">Cancel import and delete source</button>
+  </form>
+
+  <section class="panel table-wrap">
+    <h2>Source preview</h2>
+    <table><thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in preview_rows %}<tr>{% for header in headers %}<td>{{ row.values.get(header, "") }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+  </section>
+{% endblock %}

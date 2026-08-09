@@ -26,3 +26,16 @@ def workspace(session: Session):
     session.add(ws)
     session.commit()
     return ws
+
+
+@pytest.fixture
+def other_workspace(session: Session):
+    """Create an unrelated owner and workspace for privacy-boundary tests."""
+    owner = User(google_sub="sub-other", email="other@example.com", display_name="Other")
+    session.add(owner)
+    session.commit()
+
+    ws = Workspace(name="Other Personal", is_personal=True, owner_id=owner.id)
+    session.add(ws)
+    session.commit()
+    return ws

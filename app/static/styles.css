@@ -14,7 +14,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -175,11 +176,65 @@ button.button {
   max-width: 30rem;
 }
 
-.stacked-form input:not([type="hidden"]) {
+.stacked-form input:not([type="hidden"]),
+.stacked-form select {
   border: 1px solid #aebbad;
   border-radius: 0.4rem;
   padding: 0.65rem;
   width: 100%;
+}
+
+.stacked-form fieldset {
+  border: 1px solid #dbe3d7;
+  border-radius: 0.4rem;
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  width: 100%;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #dbe3d7;
+  padding: 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.field-error,
+.money-out {
+  color: #92351d;
+}
+
+.field-error {
+  display: block;
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
+
+.money-in {
+  color: #176338;
+}
+
+.money-in,
+.money-out {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.visually-explained {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
 }
 
 .alert,

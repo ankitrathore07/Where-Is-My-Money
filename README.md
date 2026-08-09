@@ -3,12 +3,13 @@
 Where Is My Money? is a privacy-conscious personal-finance learning project. It
 now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
-invitations, and route-level workspace authorization.
+invitations, route-level workspace authorization, reviewed CSV imports, and a
+filterable transaction list.
 
-The application does not yet import statements, connect to banks, categorize
-transactions, or call an LLM. Those are separate later pull requests so each
-privacy boundary can be reviewed and tested before financial workflows rely on
-it.
+The application does not yet connect to banks, apply categorization rules,
+manually recategorize transactions, or call an LLM. Those are separate later
+pull requests so each privacy boundary can be reviewed and tested before
+financial workflows rely on it.
 
 ## What you need
 
@@ -93,6 +94,32 @@ matching verified email, and are stored only as SHA-256 digests. Until an email
 delivery service exists, the app shows the one-time link to the household member
 who creates it so they can share it privately.
 
+## Import a CSV statement
+
+1. Sign in, open a personal or household workspace, and select **Import CSV**.
+2. Choose a synthetic or personal UTF-8 CSV no larger than 5 MiB. Select whether
+   the app should delete the raw file after a successful import or retain it
+   privately.
+3. Map the date and description columns. Choose either one signed amount column
+   or separate debit and credit columns, then select the CSV's explicit date
+   format.
+4. Review every normalized row. You can correct its date, description, or amount
+   and exclude any row before committing. Nothing is added to the transaction
+   table before this step.
+5. Commit the selected rows. Negative values mean money out and positive values
+   mean money in. The transaction page can filter by dates, category, direction,
+   description, or normalized merchant.
+
+The default retention choice deletes the raw CSV only after the database commit
+succeeds. Selecting **retain** keeps it below the configured private local data
+directory; retained files have no browser download page. Uploading the same
+statement again resumes an unfinished import or safely reports an already
+committed import without adding duplicate transactions.
+
+PR 4 assigns imported rows to the built-in **Uncategorized** category. PR 5 adds
+categorization rules, custom categories, and manual recategorization; importing
+a CSV does not run those future rules yet.
+
 ## Run the checks
 
     uv run ruff check .
@@ -102,10 +129,11 @@ who creates it so they can share it privately.
 - Ruff lint catches common Python errors and risky patterns.
 - Ruff format checks that contributors produce the same layout.
 - Pytest runs synthetic unit and integration fixtures. No real financial or
-  identity data belongs in tests.
-- Alembic migrations describe database changes in source control. PR 3 uses the
-  existing user/workspace schema, so it adds no migration, but CI still upgrades
-  a fresh SQLite database through every existing revision.
+  identity data belongs in tests. CSV coverage uses only the included fictional
+  `synthetic_checking.csv` fixture.
+- Alembic migrations describe database changes in source control. PR 4 adds a
+  reversible data migration for the built-in categories, and CI upgrades a
+  fresh SQLite database through every revision.
 
 GitHub Actions is the continuous integration (CI) system. On every push to
 `main` and every pull request, a clean Linux runner installs Python 3.12 and the
@@ -150,6 +178,8 @@ database volume.
     app/main.py                 FastAPI factory, public routes, middleware assembly
     app/auth/                   Google OAuth, identity service, session dependencies
     app/workspaces/             Membership, invitation, and authorized routes
+    app/imports/                CSV mapping, parsing, review, duplicate checks, storage
+    app/transactions/           Workspace-scoped queries and transaction list route
     app/core/config.py          Environment settings and production validation
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
     app/core/middleware.py      Browser CSRF cookie and form enforcement
@@ -167,6 +197,6 @@ database volume.
 
 ## Next step
 
-PR 4 adds private CSV statement upload, mapping, review, duplicate protection,
-and transaction browsing. PR 5 categorization remains separate. Neither is
-implemented in this authentication/workspace change.
+PR 5 adds manual recategorization, custom workspace categories, and isolated
+merchant rules. CSV imports deliberately remain Uncategorized until that logic
+is implemented and reviewed.

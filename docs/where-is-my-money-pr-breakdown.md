@@ -53,6 +53,10 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add private CSV upload, optional raw-file retention, column mapping, normalization, duplicate checks, transaction review, and commit flow.
 - Add transaction list/filter pages and built-in categories.
 - **Done when:** a sample statement imports only after review and duplicate re-upload is safe.
+- **Status:** Implemented with private bounded uploads, explicit mapping and
+  normalization, editable review-before-commit, workspace duplicate protection,
+  optional source retention/cleanup retry, and workspace-scoped transaction
+  filters. PR 5 categorization rules and manual recategorization remain separate.
 
 ## PR 5 — Categorization rules
 

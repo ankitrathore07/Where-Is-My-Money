@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Review import · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">Step 3 of 3 · {{ workspace.name }}</p>
+    <h1>Review transactions</h1>
+    <p>{{ review.valid_rows }} valid, {{ review.invalid_rows }} invalid, and {{ review.duplicate_rows }} already imported.</p>
+  </section>
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/commit" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="table-wrap panel"><table>
+      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr>
+        <td><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"></td>
+        <td><input name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
+        <td><input name="description_{{ row.row_number }}" value="{{ edit.description_value if edit else row.description_value }}"></td>
+        <td><input name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
+        <td>{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    <button class="button" type="submit">Commit selected transactions</button>
+  </form>
+  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/cancel" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="link-button" type="submit">Cancel import and delete source</button>
+  </form>
+{% endblock %}

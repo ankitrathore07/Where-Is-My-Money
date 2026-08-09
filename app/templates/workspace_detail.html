@@ -15,6 +15,13 @@
     </p>
   </section>
 
+  <section class="panel">
+    <h2>Transactions</h2>
+    <p>Import a bank statement, review every row, then commit it to this workspace.</p>
+    <a class="button" href="/workspaces/{{ workspace.id }}/imports/new">Import CSV</a>
+    <a href="/workspaces/{{ workspace.id }}/transactions">View transactions</a>
+  </section>
+
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
   {% if invitation_url %}
     <div class="notice" role="status">
