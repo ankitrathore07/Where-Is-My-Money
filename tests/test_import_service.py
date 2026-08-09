@@ -1,3 +1,5 @@
+import hashlib
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -5,13 +7,15 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import ImportJob, UploadedFile, Workspace
+from app.db.models import ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.parser import CsvValidationError
 from app.imports.service import (
     ImportStateError,
+    build_review,
     cancel_import,
     create_csv_import,
     get_workspace_import,
+    save_mapping,
 )
 from app.imports.storage import LocalUploadStore, UploadStorageError
 
@@ -157,3 +161,129 @@ def test_committed_import_cannot_be_canceled(
         cancel_import(session, store, created.job)
 
     assert error.value.code == "cannot_cancel"
+
+
+def test_mapping_is_saved_and_can_change_during_review(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    created = create_csv_import(session, store, workspace, BytesIO(CSV_BYTES), "retain")
+    form = {
+        "date_column": "Date",
+        "description_column": "Description",
+        "amount_mode": "single",
+        "amount_column": "Amount",
+        "date_format": "mdy",
+        "amount_sign": "as_is",
+    }
+
+    save_mapping(session, store, created.job, form)
+
+    assert created.job.status == "reviewing"
+    assert created.job.column_mapping == {
+        "date_column": "Date",
+        "description_column": "Description",
+        "amount_mode": "single",
+        "amount_column": "Amount",
+        "debit_column": None,
+        "credit_column": None,
+        "date_format": "mdy",
+        "amount_sign": "as_is",
+    }
+
+    save_mapping(session, store, created.job, form | {"amount_sign": "invert"})
+    assert created.job.column_mapping["amount_sign"] == "invert"
+
+
+def test_committed_mapping_is_not_editable(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    created = create_csv_import(session, store, workspace, BytesIO(CSV_BYTES), "retain")
+    created.job.status = "committed"
+    session.commit()
+
+    with pytest.raises(ImportStateError) as error:
+        save_mapping(session, store, created.job, {})
+
+    assert error.value.code == "mapping_not_editable"
+
+
+def test_review_reports_valid_invalid_and_existing_duplicate_rows(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    source = (
+        b"Date,Description,Amount\n"
+        b"08/01/2026,First,-1.00\n"
+        b"08/02/2026,Second,-2.00\n"
+        b"08/03/2026,Bad,nope\n"
+        b"08/04/2026,Existing,-4.00\n"
+    )
+    store = LocalUploadStore(tmp_path)
+    created = create_csv_import(session, store, workspace, BytesIO(source), "retain")
+    save_mapping(
+        session,
+        store,
+        created.job,
+        {
+            "date_column": "Date",
+            "description_column": "Description",
+            "amount_mode": "single",
+            "amount_column": "Amount",
+            "date_format": "mdy",
+            "amount_sign": "as_is",
+        },
+    )
+    payload = "v1\n2026-08-04\n-400\nEXISTING\n1"
+    fingerprint = hashlib.sha256(payload.encode()).hexdigest()
+    session.add(
+        Transaction(
+            workspace_id=workspace.id,
+            date=datetime(2026, 8, 4, tzinfo=UTC),
+            description="Existing",
+            normalized_merchant="EXISTING",
+            amount_cents=-400,
+            duplicate_fingerprint=fingerprint,
+        )
+    )
+    session.commit()
+
+    review = build_review(session, store, created.job)
+
+    assert review.total_rows == 4
+    assert review.valid_rows == 3
+    assert review.invalid_rows == 1
+    assert review.duplicate_rows == 1
+    assert review.rows[0].date_value == "2026-08-01"
+    assert review.rows[0].amount_value == "-1.00"
+    assert review.rows[0].included is True
+    assert review.rows[2].field_errors == {"amount": "Enter a valid non-zero amount."}
+    assert review.rows[3].duplicate is True
+    assert review.rows[3].included is False
+
+
+def test_review_requires_the_private_source(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    created = create_csv_import(session, store, workspace, BytesIO(CSV_BYTES), "retain")
+    save_mapping(
+        session,
+        store,
+        created.job,
+        {
+            "date_column": "Date",
+            "description_column": "Description",
+            "amount_mode": "single",
+            "amount_column": "Amount",
+            "date_format": "mdy",
+            "amount_sign": "as_is",
+        },
+    )
+    assert created.job.uploaded_file is not None
+    store.delete(created.job.uploaded_file.storage_path)
+
+    with pytest.raises(ImportStateError) as error:
+        build_review(session, store, created.job)
+
+    assert error.value.code == "source_missing"

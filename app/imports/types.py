@@ -58,3 +58,25 @@ class FingerprintedTransaction:
     transaction: NormalizedTransaction
     occurrence: int
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class ReviewRow:
+    row_number: int
+    date_value: str
+    description_value: str
+    amount_value: str
+    normalized: NormalizedTransaction | None
+    fingerprint: str | None
+    duplicate: bool
+    included: bool
+    field_errors: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ImportReview:
+    rows: tuple[ReviewRow, ...]
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    duplicate_rows: int
