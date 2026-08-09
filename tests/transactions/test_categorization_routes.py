@@ -94,6 +94,7 @@ async def test_owner_can_open_and_submit_manual_categorization(tmp_path: Path) -
         in transaction_list.text
     )
     assert "LOCAL CAFE 123" in page.text
+    assert "$24.50" in page.text
     assert "Neighborhood Cafe" not in page.text
     assert response.status_code == 303
     assert response.headers["location"] == f"/workspaces/{workspace_id}/transactions"

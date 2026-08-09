@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_current_user
+from app.categories.service import list_accessible_categories
 from app.core.middleware import require_csrf
 from app.db.models import ImportJob, User, Workspace
 from app.db.session import get_db
@@ -72,6 +73,19 @@ def _mapping_values(job: ImportJob) -> dict[str, object]:
     return job.column_mapping if isinstance(job.column_mapping, dict) else {}
 
 
+def _optional_form_int(value: object) -> int | None:
+    try:
+        return int(str(value)) if value is not None and str(value) else None
+    except ValueError:
+        return None
+
+
+def _optional_form_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return str(value).casefold() in {"1", "true", "yes", "on"}
+
+
 def _mapping_page(
     request: Request,
     user: User,
@@ -127,6 +141,7 @@ def _review_page(
             row_errors=row_errors or {},
             submitted=bool(submitted_edits is not None),
             submitted_by_row={edit.row_number: edit for edit in submitted_edits or ()},
+            category_choices=list_accessible_categories(session, workspace.id),
         ),
         status_code=status_code,
     )
@@ -286,6 +301,36 @@ async def commit_review(
             date_value=str(form.get(f"date_{row_number}", "")),
             description_value=str(form.get(f"description_{row_number}", "")),
             amount_value=str(form.get(f"amount_{row_number}", "")),
+            normalized_merchant=(
+                str(form.get(f"normalized_merchant_{row_number}"))
+                if form.get(f"normalized_merchant_{row_number}") is not None
+                else None
+            ),
+            category_id=_optional_form_int(form.get(f"category_{row_number}")),
+            is_subscription=(
+                form.get(f"is_subscription_{row_number}") is not None
+                if form.get(f"category_{row_number}") is not None
+                else None
+            ),
+            categorization_source=(
+                str(form.get(f"categorization_source_{row_number}"))
+                if form.get(f"categorization_source_{row_number}") is not None
+                else None
+            ),
+            original_normalized_merchant=(
+                str(form.get(f"original_normalized_merchant_{row_number}"))
+                if form.get(f"original_normalized_merchant_{row_number}") is not None
+                else None
+            ),
+            original_category_id=_optional_form_int(form.get(f"original_category_{row_number}")),
+            original_is_subscription=_optional_form_bool(
+                form.get(f"original_is_subscription_{row_number}")
+            ),
+            original_categorization_source=(
+                str(form.get(f"original_categorization_source_{row_number}"))
+                if form.get(f"original_categorization_source_{row_number}") is not None
+                else None
+            ),
         )
         for row_number in row_numbers
     )

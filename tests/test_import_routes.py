@@ -4,7 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
-from app.db.models import ImportJob, Transaction, UploadedFile, User, Workspace
+from app.db.models import Category, ImportJob, Transaction, UploadedFile, User, Workspace
 from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
@@ -108,6 +108,10 @@ async def test_valid_upload_maps_and_previews_before_commit(tmp_path: Path) -> N
     assert mapped.status_code == 303
     assert review.status_code == 200
     assert "-12.34" in review.text
+    assert "Uncategorized" in review.text
+    assert 'name="normalized_merchant_2"' in review.text
+    assert 'name="category_2"' in review.text
+    assert 'name="is_subscription_2"' in review.text
 
 
 @pytest.mark.anyio
@@ -312,6 +316,9 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                     "amount_sign": "as_is",
                 },
             )
+            with factory() as session:
+                category_id = session.scalar(select(Category.id))
+                assert category_id is not None
             response = await client.post(
                 f"/workspaces/{workspace_id}/imports/{import_id}/commit",
                 data={
@@ -321,6 +328,14 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                     "date_2": "2026-08-01",
                     "description_2": "Example Market",
                     "amount_2": "-12.34",
+                    "normalized_merchant_2": "Reviewed Market",
+                    "category_2": str(category_id),
+                    "is_subscription_2": "on",
+                    "categorization_source_2": "uncategorized",
+                    "original_normalized_merchant_2": "Example Market",
+                    "original_category_2": str(category_id),
+                    "original_is_subscription_2": "no",
+                    "original_categorization_source_2": "uncategorized",
                 },
                 follow_redirects=False,
             )
@@ -330,6 +345,9 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
             uploaded_file = session.scalar(select(UploadedFile))
             assert transaction is not None
             assert transaction.amount_cents == -1234
+            assert transaction.normalized_merchant == "Reviewed Market"
+            assert transaction.is_subscription is True
+            assert transaction.categorization_source == "manual"
             assert job is not None and job.status == "committed"
             assert uploaded_file is not None and uploaded_file.deleted is True
     finally:

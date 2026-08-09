@@ -156,6 +156,7 @@ def _categorization_response(
             "csrf_token": request.state.csrf_token,
             "workspace": workspace,
             "transaction": transaction,
+            "format_money": _format_money,
             "choices": list_accessible_categories(session, workspace.id),
             "error": error,
             "merchant_value": submitted_merchant

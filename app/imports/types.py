@@ -71,6 +71,11 @@ class ReviewRow:
     duplicate: bool
     included: bool
     field_errors: dict[str, str]
+    normalized_merchant: str | None = None
+    category_id: int | None = None
+    category_name: str | None = None
+    is_subscription: bool | None = None
+    categorization_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,3 +94,11 @@ class RowEdit:
     date_value: str
     description_value: str
     amount_value: str
+    normalized_merchant: str | None = None
+    category_id: int | None = None
+    is_subscription: bool | None = None
+    categorization_source: str | None = None
+    original_normalized_merchant: str | None = None
+    original_category_id: int | None = None
+    original_is_subscription: bool | None = None
+    original_categorization_source: str | None = None

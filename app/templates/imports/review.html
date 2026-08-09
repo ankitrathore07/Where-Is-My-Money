@@ -12,13 +12,34 @@
   <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/commit" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="table-wrap panel"><table>
-      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead>
+      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Merchant</th><th>Category</th><th>Subscription</th><th>Amount</th><th>Status</th></tr></thead>
       <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr>
         <td><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"></td>
         <td><input name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
         <td><input name="description_{{ row.row_number }}" value="{{ edit.description_value if edit else row.description_value }}"></td>
+        <td>
+          <input name="normalized_merchant_{{ row.row_number }}" maxlength="255" value="{{ edit.normalized_merchant if edit and edit.normalized_merchant is not none else row.normalized_merchant or row.description_value }}">
+          {% if row.normalized_merchant is not none %}<input type="hidden" name="original_normalized_merchant_{{ row.row_number }}" value="{{ row.normalized_merchant }}">{% endif %}
+        </td>
+        <td>
+          {% set chosen_category = edit.category_id if edit and edit.category_id is not none else row.category_id %}
+          <select name="category_{{ row.row_number }}">
+            <option value="">Automatic</option>
+            <optgroup label="Workspace categories">{% for category in category_choices.workspace %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+            <optgroup label="Built-in categories">{% for category in category_choices.builtin %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+          </select>
+          {% if row.category_id is not none %}<input type="hidden" name="original_category_{{ row.row_number }}" value="{{ row.category_id }}">{% endif %}
+          {% if row.category_name %}<span class="badge">{{ row.category_name }}</span>{% endif %}
+        </td>
+        <td>
+          {% set chosen_subscription = edit.is_subscription if edit and edit.is_subscription is not none else row.is_subscription %}
+          <input type="checkbox" name="is_subscription_{{ row.row_number }}" {% if chosen_subscription %}checked{% endif %}>
+          {% if row.is_subscription is not none %}<input type="hidden" name="original_is_subscription_{{ row.row_number }}" value="{{ 'yes' if row.is_subscription else 'no' }}">{% endif %}
+          {% if row.is_subscription %}<span class="badge">Subscription</span>{% endif %}
+        </td>
         <td><input name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
-        <td>{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
+        {% set source = edit.categorization_source if edit and edit.categorization_source else row.categorization_source %}
+        <td>{% if source %}<input type="hidden" name="categorization_source_{{ row.row_number }}" value="{{ source }}"><input type="hidden" name="original_categorization_source_{{ row.row_number }}" value="{{ row.categorization_source }}">{% endif %}{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
       </tr>{% endfor %}</tbody>
     </table></div>
     <button class="button" type="submit">Commit selected transactions</button>
