@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Import result · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Import {{ "complete" if job.status.startswith("committed") else job.status.replace("_", " ") }}</h1>
+    {% if job.status == "committed_cleanup_failed" or job.status == "canceled_cleanup_failed" %}
+      <p class="alert" role="alert">Transactions are safe, but the private source file could not be deleted.</p>
+      <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/cleanup" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button" type="submit">Retry source cleanup</button>
+      </form>
+    {% elif job.uploaded_file and job.uploaded_file.retention_choice == "retain" %}
+      <p>The raw CSV is retained privately for this workspace.</p>
+    {% else %}
+      <p>The raw CSV has been deleted.</p>
+    {% endif %}
+    <a class="button" href="/workspaces/{{ workspace.id }}/transactions">View transactions</a>
+  </section>
+{% endblock %}

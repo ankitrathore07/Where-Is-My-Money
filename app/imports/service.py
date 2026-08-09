@@ -166,7 +166,7 @@ def cancel_import(session: Session, store: LocalUploadStore, job: ImportJob) -> 
     return job
 
 
-def _source_document(store: LocalUploadStore, job: ImportJob) -> CsvDocument:
+def load_source_document(store: LocalUploadStore, job: ImportJob) -> CsvDocument:
     uploaded_file = job.uploaded_file
     if uploaded_file is None or uploaded_file.deleted:
         raise ImportStateError("source_missing", "The private source file is missing.")
@@ -185,7 +185,7 @@ def save_mapping(
     """Validate mapping fields against the job's exact private source headers."""
     if job.status not in ACTIVE_STATUSES:
         raise ImportStateError("mapping_not_editable", "This import can no longer be mapped.")
-    document = _source_document(store, job)
+    document = load_source_document(store, job)
     mapping = validate_mapping(document.headers, form)
     job.column_mapping = mapping.to_json()
     job.validation_errors = None
@@ -217,7 +217,7 @@ def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> I
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
         raise ImportStateError("not_ready_for_review", "Map the CSV before reviewing it.")
-    document = _source_document(store, job)
+    document = load_source_document(store, job)
     if not isinstance(job.column_mapping, dict):
         raise ImportStateError("mapping_missing", "Map the CSV before reviewing it.")
     mapping = mapping_from_json(document.headers, job.column_mapping)

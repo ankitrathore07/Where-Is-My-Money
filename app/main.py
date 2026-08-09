@@ -18,6 +18,8 @@ from app.core.logging import configure_logging, logger
 from app.core.middleware import CSRFMiddleware
 from app.core.security import SlidingWindowRateLimiter
 from app.db.models import User
+from app.imports.routes import router as import_router
+from app.imports.storage import LocalUploadStore
 from app.workspaces.routes import router as workspace_router
 
 APP_DIRECTORY = Path(__file__).resolve().parent
@@ -71,6 +73,9 @@ def create_app(
         limit=10,
         window_seconds=60,
     )
+    application.state.upload_store = LocalUploadStore(
+        configured.upload_directory, configured.max_csv_upload_bytes
+    )
 
     application.add_middleware(
         SessionMiddleware,
@@ -84,6 +89,7 @@ def create_app(
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
     application.include_router(workspace_router)
+    application.include_router(import_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")
 
