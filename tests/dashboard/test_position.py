@@ -98,6 +98,23 @@ def test_position_uses_larger_snapshot_id_for_same_day_corrections(
     assert summary.accounts[0].as_of_date == date(2026, 8, 10)
 
 
+def test_position_preserves_exceptional_negative_asset_balance(
+    session: Session, workspace: Workspace
+) -> None:
+    checking = _account(session, workspace.id, "Checking", "checking", False)
+    mortgage = _account(session, workspace.id, "Mortgage", "mortgage", True)
+    _snapshot(session, workspace.id, checking.id, -25_000, date(2026, 8, 10))
+    _snapshot(session, workspace.id, mortgage.id, 50_000, date(2026, 8, 10))
+
+    summary = get_position_summary(session, workspace.id, date(2026, 8, 10))
+
+    assert summary.accounts[0].balance_cents == -25_000
+    assert summary.assets_cents == -25_000
+    assert summary.liabilities_cents == 50_000
+    assert summary.cash_cents == -25_000
+    assert summary.net_worth_cents == -75_000
+
+
 def test_position_ignores_foreign_account_and_foreign_workspace_snapshots(
     session: Session, workspace: Workspace, other_workspace: Workspace
 ) -> None:
