@@ -290,6 +290,35 @@ for interaction tests. CI installs the pinned Playwright Chromium build before
 Pytest. This keeps the test API in Python while providing a real browser for
 drag/drop and queue behavior that HTTP-only tests cannot verify.
 
+## Remaining processor roadmap
+
+The unified uploader is complete only as an entry point; follow-on work must add
+processors for every account-statement category that V1 displays as unavailable.
+Each processor requires its own approved design and implementation plan before its
+catalog entry receives a processor key.
+
+- `retirement_401k_statement` and `brokerage_statement` processors must extract a
+  candidate account balance, as-of date, institution, and account identity; require
+  editable confirmation; associate or create the correct asset account; and save a
+  confirmed `AccountBalanceSnapshot`.
+- `mortgage_statement` and `loan_statement` processors must extract candidate
+  outstanding principal, as-of date, lender, and account identity; require editable
+  confirmation; associate or create the correct liability account; and save a
+  confirmed `AccountBalanceSnapshot`.
+- `other_account_statement` must provide a conservative account-type and
+  asset/liability selection with manual balance and date confirmation when a more
+  specific processor does not apply.
+
+All remaining processors must support private bounded uploads, validate actual
+file contents, prefer embedded PDF text before local OCR, use synthetic fixtures,
+and create no balance snapshot until the member confirms the extracted or entered
+values. They must preserve workspace isolation, integer-cent money storage, source
+retention choices, safe cleanup, and redacted logging.
+
+Implementing a processor changes only its catalog capability and adds its review
+workflow; it must not require a rewrite of the multi-file queue. Completion is
+tracked in PR 8b of `docs/where-is-my-money-pr-breakdown.md`.
+
 ## Future AI/ML classification
 
 A future classifier may suggest a category and confidence for each file while the
