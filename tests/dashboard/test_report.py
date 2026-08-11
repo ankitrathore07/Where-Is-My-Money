@@ -55,6 +55,25 @@ def _income(session: Session, workspace_id: int, amount: int, when: datetime) ->
     session.flush()
 
 
+def _expense(session: Session, workspace_id: int, amount: int, when: datetime) -> None:
+    category = session.scalar(select(Category).where(Category.name == "Expense"))
+    if category is None:
+        category = Category(name="Expense", kind="expense")
+        session.add(category)
+        session.flush()
+    session.add(
+        Transaction(
+            workspace_id=workspace_id,
+            date=when,
+            description="Synthetic expense",
+            amount_cents=-amount,
+            category_id=category.id,
+            categorization_source="test",
+        )
+    )
+    session.flush()
+
+
 def test_report_is_frozen_repeatable_and_prioritizes_net_worth_then_savings_then_position(
     session: Session, workspace: Workspace
 ) -> None:
@@ -121,3 +140,35 @@ def test_report_without_workspace_data_is_truthful_and_uses_setup_highlight(
         report.highlights[0].detail
         == "Add an account, balance, or transaction to see your dashboard."
     )
+
+
+def test_report_describes_negative_savings_as_a_deficit_with_negative_tone(
+    session: Session, workspace: Workspace
+) -> None:
+    _income(session, workspace.id, 1_000, datetime(2025, 1, 1, tzinfo=UTC))
+    _expense(session, workspace.id, 500, datetime(2025, 1, 1, tzinfo=UTC))
+    _income(session, workspace.id, 1_000, datetime(2026, 1, 1, tzinfo=UTC))
+    _expense(session, workspace.id, 1_500, datetime(2026, 1, 1, tzinfo=UTC))
+
+    report = build_dashboard_report(session, workspace.id, date(2026, 8, 10))
+
+    highlight = report.highlights[0]
+    assert highlight.kind == "savings"
+    assert highlight.title == "Savings deficit of $5.00"
+    assert highlight.detail == (
+        "Income minus spending was -$5.00, a -50.0% savings rate. That is -100.0% versus 2025."
+    )
+    assert highlight.tone == "negative"
+
+
+def test_report_describes_zero_savings_neutrally(session: Session, workspace: Workspace) -> None:
+    _income(session, workspace.id, 1_000, datetime(2026, 1, 1, tzinfo=UTC))
+    _expense(session, workspace.id, 1_000, datetime(2026, 1, 1, tzinfo=UTC))
+
+    report = build_dashboard_report(session, workspace.id, date(2026, 8, 10))
+
+    highlight = report.highlights[0]
+    assert highlight.kind == "savings"
+    assert highlight.title == "Income matched spending"
+    assert highlight.detail == "Income minus spending was $0.00, a 0.0% savings rate."
+    assert highlight.tone == "neutral"

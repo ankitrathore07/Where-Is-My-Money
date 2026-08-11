@@ -122,6 +122,8 @@ def resolve_as_of_date(session: Session, workspace_id: int) -> date | None:
 
 def _calendar_date(value: datetime | date | None) -> date | None:
     if isinstance(value, datetime):
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            return value.astimezone(UTC).date()
         return value.date()
     return value
 
@@ -264,21 +266,32 @@ def _build_highlights(
 
     if cash_flow_series and cash_flow_series[-1].income_cents is not None:
         current = cash_flow_series[-1]
-        detail = (
-            f"You saved {_format_money(current.savings_cents or 0)} "
-            f"at a {_format_basis_points(current.savings_rate_basis_points or 0)} savings rate."
-        )
+        savings = current.savings_cents or 0
+        if savings < 0:
+            title = f"Savings deficit of {_format_money(abs(savings))}"
+            detail = (
+                f"Income minus spending was {_format_money(savings)}, "
+                f"a {_format_basis_points(current.savings_rate_basis_points or 0)} savings rate."
+            )
+            tone = "negative"
+        elif savings == 0:
+            title = "Income matched spending"
+            detail = "Income minus spending was $0.00, a 0.0% savings rate."
+            tone = "neutral"
+        else:
+            title = f"Saved {_format_money(savings)}"
+            detail = (
+                f"You saved {_format_money(savings)} "
+                f"at a {_format_basis_points(current.savings_rate_basis_points or 0)} savings rate."
+            )
+            tone = "positive"
         if len(cash_flow_series) >= 2 and cash_flow_series[-2].income_cents is not None:
             prior = cash_flow_series[-2]
             change = (current.savings_rate_basis_points or 0) - (
                 prior.savings_rate_basis_points or 0
             )
             detail += f" That is {_format_basis_points(change)} versus {prior.year}."
-        highlights.append(
-            DashboardHighlight(
-                "savings", f"Saved {_format_money(current.savings_cents or 0)}", detail, "positive"
-            )
-        )
+        highlights.append(DashboardHighlight("savings", title, detail, tone))
 
     if position.missing_balance_count:
         count = position.missing_balance_count
