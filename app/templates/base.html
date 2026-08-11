@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Where Is My Money?{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+    {% block head %}{% endblock %}
   </head>
   <body>
     <header class="site-header">
@@ -25,5 +26,6 @@
     <main class="page-content">
       {% block content %}{% endblock %}
     </main>
+    {% block scripts %}{% endblock %}
   </body>
 </html>
