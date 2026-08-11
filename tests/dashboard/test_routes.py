@@ -49,6 +49,7 @@ async def test_empty_dashboard_offers_account_and_transaction_setup(tmp_path: Pa
         engine.dispose()
 
     assert response.status_code == 200
+    assert "No accounts or transactions yet." in response.text
     assert "Add your first account" in response.text
     assert "Import transactions" in response.text
 
@@ -188,6 +189,7 @@ async def test_dashboard_renders_aggregate_totals_five_year_fallbacks_and_safe_p
     )
     assert "$2,000.00" in response.text
     assert "$500.00" in response.text
+    assert "75.0%" in response.text
     assert 'href="/workspaces/' + str(workspace_id) + '/dashboard"' in response.text
     assert "SECRET OTHER" not in response.text
     assert foreign_response.status_code == 404
@@ -251,3 +253,101 @@ async def test_dashboard_rejects_bad_dates_and_keeps_partial_data_truthful(tmp_p
     assert "Unavailable" in current.text
     assert "1 account needs balances added" in current.text
     assert future.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_dashboard_surfaces_review_needed_transactions_with_existing_review_link(
+    tmp_path: Path,
+) -> None:
+    """Removing the review aggregate would hide transactions excluded from dashboard rates."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = _account(session, workspace_id, "Checking", "checking", False)
+                _snapshot(session, workspace_id, account.id, 1_000, date(2026, 8, 10))
+                session.add(
+                    Transaction(
+                        workspace_id=workspace_id,
+                        date=datetime(2025, 8, 10, tzinfo=UTC),
+                        description="Needs a category",
+                        amount_cents=-500,
+                        categorization_source="test",
+                    )
+                )
+                session.commit()
+            response = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=2026-08-10")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert "1 transaction needs review" in response.text
+    assert f'href="/workspaces/{workspace_id}/transactions"' in response.text
+
+
+@pytest.mark.anyio
+async def test_dashboard_distinguishes_missing_accounts_from_missing_transactions(
+    tmp_path: Path,
+) -> None:
+    """Collapsing partial states into one empty message would give the wrong setup action."""
+    transaction_application, transaction_factory, transaction_engine = build_route_test_app(
+        tmp_path
+    )
+    account_application, account_factory, account_engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=transaction_application), base_url="http://testserver"
+        ) as transaction_client:
+            await complete_sign_in(transaction_client)
+            with transaction_factory() as session:
+                transaction_workspace_id = session.scalar(select(Workspace.id))
+                assert transaction_workspace_id is not None
+                income = Category(workspace_id=None, name="Salary", kind="income")
+                session.add(income)
+                session.flush()
+                session.add(
+                    Transaction(
+                        workspace_id=transaction_workspace_id,
+                        date=datetime(2026, 8, 10, tzinfo=UTC),
+                        description="Synthetic income",
+                        amount_cents=100_000,
+                        category_id=income.id,
+                        categorization_source="test",
+                    )
+                )
+                session.commit()
+            transaction_only = await transaction_client.get(
+                f"/workspaces/{transaction_workspace_id}/dashboard?as_of=2026-08-10"
+            )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=account_application), base_url="http://testserver"
+        ) as account_client:
+            await complete_sign_in(account_client)
+            with account_factory() as session:
+                account_workspace_id = session.scalar(select(Workspace.id))
+                assert account_workspace_id is not None
+                account = _account(session, account_workspace_id, "Checking", "checking", False)
+                _snapshot(session, account_workspace_id, account.id, 100_000, date(2026, 8, 10))
+                session.commit()
+            account_only = await account_client.get(
+                f"/workspaces/{account_workspace_id}/dashboard?as_of=2026-08-10"
+            )
+    finally:
+        transaction_engine.dispose()
+        account_engine.dispose()
+
+    assert transaction_only.status_code == 200
+    assert "No accounts have been added yet." in transaction_only.text
+    assert f'href="/workspaces/{transaction_workspace_id}/accounts/new"' in transaction_only.text
+    assert "No transactions have been imported yet." not in transaction_only.text
+    assert account_only.status_code == 200
+    assert "No transactions have been imported yet." in account_only.text
+    assert f'href="/workspaces/{account_workspace_id}/imports/new"' in account_only.text
+    assert "No accounts have been added yet." not in account_only.text
+    assert "No earlier account-balance history is available yet." in account_only.text

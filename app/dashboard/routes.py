@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.accounts.types import ACCOUNT_TYPE_OPTIONS
 from app.auth.dependencies import require_current_user
-from app.dashboard.presentation import chart_payload, format_basis_points, format_money
+from app.dashboard.presentation import (
+    chart_payload,
+    dashboard_page_data,
+    format_basis_points,
+    format_money,
+)
 from app.dashboard.service import build_dashboard_report
 from app.db.models import User, Workspace
 from app.db.session import get_db
@@ -68,6 +73,7 @@ async def dashboard(
                 workspace,
                 error="Use a valid date in YYYY-MM-DD format.",
                 report=None,
+                page_data=None,
                 chart_data=None,
                 format_money=format_money,
                 format_basis_points=format_basis_points,
@@ -85,6 +91,7 @@ async def dashboard(
             user,
             workspace,
             report=report,
+            page_data=dashboard_page_data(report),
             chart_data=chart_payload(report),
             format_money=format_money,
             format_basis_points=format_basis_points,

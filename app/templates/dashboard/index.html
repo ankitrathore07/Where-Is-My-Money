@@ -6,7 +6,7 @@
   <section class="page-heading">
     <p class="eyebrow">{{ workspace.name }}</p>
     <h1>Financial dashboard</h1>
-    {% if report and report.as_of_date %}
+    {% if page_data and not page_data.is_empty %}
       <p>As of {{ report.as_of_date.isoformat() }}.</p>
     {% else %}
       <p>Track the accounts and transactions in this workspace.</p>
@@ -16,10 +16,10 @@
   {% if error %}
     <p class="alert" role="alert">{{ error }}</p>
   {% elif report %}
-    {% if report.as_of_date is none %}
+    {% if page_data.is_empty %}
       <section class="panel" aria-labelledby="dashboard-empty-heading">
         <h2 id="dashboard-empty-heading">No financial data yet</h2>
-        <p>Add an account and a balance, or import transactions, to begin.</p>
+        <p>No accounts or transactions yet. Add an account and a balance, or import transactions, to begin.</p>
         <a class="button" href="/workspaces/{{ workspace.id }}/accounts/new">Add your first account</a>
         <a href="/workspaces/{{ workspace.id }}/imports/new">Import transactions</a>
       </section>
@@ -34,11 +34,23 @@
         <article class="card"><span class="eyebrow">Assets</span><strong>{{ format_money(report.position.assets_cents) }}</strong></article>
         <article class="card"><span class="eyebrow">Liabilities</span><strong>{{ format_money(report.position.liabilities_cents) }} owed</strong></article>
         <article class="card"><span class="eyebrow">Cash available</span><strong>{{ format_money(report.position.cash_cents) }}</strong></article>
-        <article class="card"><span class="eyebrow">Savings rate</span><strong>{% set latest_flow = report.cash_flow_series[-1] if report.cash_flow_series else none %}{% if latest_flow and latest_flow.savings_rate_basis_points is not none %}{{ format_basis_points(latest_flow.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</strong></article>
+        <article class="card"><span class="eyebrow">Savings rate</span><strong>{% if page_data.savings_rate_basis_points is not none %}{{ format_basis_points(page_data.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</strong></article>
       </section>
 
+      {% if not page_data.has_accounts %}
+        <p class="notice" role="status">No accounts have been added yet. <a href="/workspaces/{{ workspace.id }}/accounts/new">Add an account</a> to track where money is held.</p>
+      {% endif %}
+      {% if not page_data.has_transactions %}
+        <p class="notice" role="status">No transactions have been imported yet. <a href="/workspaces/{{ workspace.id }}/imports/new">Import transactions</a> to see income and spending.</p>
+      {% endif %}
+      {% if page_data.has_accounts and not page_data.has_position_history %}
+        <p class="notice" role="status">No earlier account-balance history is available yet.</p>
+      {% endif %}
       {% if report.position.missing_balance_count %}
         <p class="notice" role="status">{{ report.position.missing_balance_count }} account{% if report.position.missing_balance_count == 1 %} needs{% else %}s need{% endif %} balances added before the current position is complete.</p>
+      {% endif %}
+      {% if page_data.needs_review_count %}
+        <p class="notice" role="status">{{ page_data.needs_review_count }} transaction{% if page_data.needs_review_count != 1 %}s{% endif %} needs review before it can be included in income and spending. <a href="/workspaces/{{ workspace.id }}/transactions">Review transactions</a>.</p>
       {% endif %}
 
       <section class="panel" aria-labelledby="net-worth-trend-heading">

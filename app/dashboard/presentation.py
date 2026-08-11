@@ -1,8 +1,21 @@
 """Presentation-safe formatting and aggregate chart data for dashboard reports."""
 
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.dashboard.types import DashboardReport
+
+
+@dataclass(frozen=True)
+class DashboardPageData:
+    """Precomputed dashboard display state for declarative templates."""
+
+    is_empty: bool
+    has_accounts: bool
+    has_transactions: bool
+    has_position_history: bool
+    savings_rate_basis_points: int | None
+    needs_review_count: int
 
 
 def format_money(cents: int) -> str:
@@ -18,6 +31,29 @@ def format_basis_points(basis_points: int) -> str:
         Decimal("0.1"), rounding=ROUND_HALF_UP
     )
     return f"{percentage}%"
+
+
+def dashboard_page_data(report: DashboardReport) -> DashboardPageData:
+    """Derive bounded display-state facts without putting report logic in Jinja."""
+    current_cash_flow = report.cash_flow_series[-1] if report.cash_flow_series else None
+    return DashboardPageData(
+        is_empty=report.as_of_date is None,
+        has_accounts=bool(report.position.accounts),
+        has_transactions=any(
+            point.income_cents is not None
+            or point.spending_cents is not None
+            or point.needs_review_count > 0
+            for point in report.cash_flow_series
+        ),
+        has_position_history=sum(
+            point.net_worth_cents is not None for point in report.net_worth_series
+        )
+        >= 2,
+        savings_rate_basis_points=(
+            current_cash_flow.savings_rate_basis_points if current_cash_flow is not None else None
+        ),
+        needs_review_count=sum(point.needs_review_count for point in report.cash_flow_series),
+    )
 
 
 def chart_payload(report: DashboardReport) -> dict[str, dict[str, list[str | int | None]]]:
