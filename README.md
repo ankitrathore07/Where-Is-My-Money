@@ -3,18 +3,21 @@
 Where Is My Money? is a privacy-conscious personal-finance learning project. It
 now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
-invitations, route-level workspace authorization, reviewed CSV imports, and a
-filterable transaction list with deterministic categorization.
+invitations, route-level workspace authorization, reviewed CSV imports,
+deterministic transaction categorization, and reviewed local payslip imports with
+gross/net income summaries.
 
-The application does not yet connect to banks, import payslips, calculate
-budgets, or call an LLM. Those are separate later pull requests so each privacy
-boundary can be reviewed and tested before financial workflows rely on it.
+The application does not yet connect to banks, calculate budgets, or call an
+LLM. Those are separate later pull requests so each privacy boundary can be
+reviewed and tested before financial workflows rely on it.
 
 ## What you need
 
 - Python 3.12. The project uses uv to find or install it.
 - uv. It manages Python, the virtual environment, and locked dependencies.
 - A Google Cloud OAuth web client for interactive sign-in.
+- The local Tesseract OCR executable only for image or scanned-PDF payslips.
+  Text-based PDFs do not need it. The Docker image installs it automatically.
 - Docker Desktop only if you want to run the container workflow.
 
 ## Configure Google sign-in
@@ -119,6 +122,38 @@ The review page applies the same workspace and built-in rules used everywhere
 else, but the visible reviewed decision is what commit saves. A rule change made
 after preview cannot silently replace the decision that the member approved.
 
+## Import a payslip and confirm income
+
+1. Sign in, open a workspace, and select **Import payslip**.
+2. Choose a PDF, PNG, or JPEG no larger than 10 MiB. Choose whether the raw
+   source should be deleted after confirmation or retained privately.
+3. The app first reads embedded PDF text. For an image or scanned PDF, it runs
+   the Tesseract executable on this computer. It never sends the document to an
+   OCR website or API.
+4. Review and edit the employer, pay period, pay date, gross pay, net pay,
+   taxes, and deductions. Extraction is only a suggestion: no income record
+   exists yet.
+5. Select **Confirm income record**. The app saves exactly the reviewed values
+   and shows workspace totals for gross and net pay.
+
+Income records are intentionally separate from bank transactions. If a CSV
+statement also contains the paycheck deposit, confirming the payslip does not
+create a second transaction or attempt to link the two rows.
+
+### Install local OCR for scanned payslips
+
+Run this first to see whether Tesseract is already available:
+
+    tesseract --version
+
+If the command is missing, install Tesseract 5 with English language data using
+the instructions for your operating system in the
+[official Tesseract installation guide](https://tesseract-ocr.github.io/tessdoc/Installation.html),
+then make sure `tesseract` is on your `PATH`. Restart the terminal and run the
+version command again. You can still import text-based PDFs while Tesseract is
+not installed; scanned files display a local setup message instead of being
+sent elsewhere.
+
 ## Categorization rules in plain language
 
 Every transaction has one primary category and a separate **Subscription**
@@ -168,10 +203,12 @@ future rules; use the transaction edit page when you want that behavior.
 - Ruff format checks that contributors produce the same layout.
 - Pytest runs synthetic unit and integration fixtures. No real financial or
   identity data belongs in tests. CSV coverage uses only the included fictional
-  `synthetic_checking.csv` fixture.
+  `synthetic_checking.csv` fixture, and payslip coverage uses only the fictional
+  Northstar Bicycle Works fixture.
 - Alembic migrations describe database changes in source control. PR 4 adds a
-  reversible data migration for the built-in categories, and CI upgrades a
-  fresh SQLite database through every revision.
+  reversible data migration for the built-in categories, PR 6 adds the unique
+  one-income-record-per-payslip rule, and CI upgrades a fresh SQLite database
+  through every revision.
 
 GitHub Actions is the continuous integration (CI) system. On every push to
 `main` and every pull request, a clean Linux runner installs Python 3.12 and the
@@ -195,6 +232,9 @@ Docker Desktop is running:
 
     docker compose up --build
 
+The image includes Tesseract and its English data locally, so scanned payslips
+work inside Docker without installing a separate host executable.
+
 Compose reads the same `APP_ENV`, `SECRET_KEY`, `DATABASE_URL`,
 `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` values from `.env`, and mounts a
 named `app_data` volume for SQLite persistence. Open http://127.0.0.1:8000. Stop
@@ -217,6 +257,7 @@ database volume.
     app/auth/                   Google OAuth, identity service, session dependencies
     app/workspaces/             Membership, invitation, and authorized routes
     app/imports/                CSV mapping, review, categorization, duplicates, storage
+    app/payslips/               PDF/image storage, local extraction/OCR, review, income
     app/categorization/         Merchant normalization, built-in catalog, precedence
     app/categories/             Workspace category validation and routes
     app/transactions/           Scoped queries, manual edits, and future merchant rules
@@ -237,5 +278,5 @@ database volume.
 
 ## Next step
 
-PR 6 adds reviewed payslip income imports while keeping confirmed income records
-separate from matching bank deposits.
+PR 7 adds deterministic, evidence-backed spending and income insights without an
+LLM or automatic financial actions.

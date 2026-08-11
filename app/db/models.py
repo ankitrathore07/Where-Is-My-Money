@@ -300,6 +300,7 @@ class Payslip(Base):
 
 class IncomeRecord(Base):
     __tablename__ = "income_records"
+    __table_args__ = (Index("uix_income_records_payslip_id", "payslip_id", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)

@@ -16,11 +16,14 @@ from app.auth.routes import router as auth_router
 from app.categories.routes import router as category_router
 from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
-from app.core.middleware import CSRFMiddleware
+from app.core.middleware import CSRFMiddleware, PayslipUploadBodyLimitMiddleware
 from app.core.security import SlidingWindowRateLimiter
 from app.db.models import User
 from app.imports.routes import router as import_router
 from app.imports.storage import LocalUploadStore
+from app.payslips.extraction import DocumentExtractor, TesseractOcrEngine
+from app.payslips.routes import router as payslip_router
+from app.payslips.storage import PayslipUploadStore
 from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
@@ -78,6 +81,10 @@ def create_app(
     application.state.upload_store = LocalUploadStore(
         configured.upload_directory, configured.max_csv_upload_bytes
     )
+    application.state.payslip_store = PayslipUploadStore(
+        configured.upload_directory, configured.max_payslip_upload_bytes
+    )
+    application.state.payslip_extractor = DocumentExtractor(TesseractOcrEngine())
 
     application.add_middleware(
         SessionMiddleware,
@@ -88,11 +95,16 @@ def create_app(
         https_only=configured.session_https_only,
     )
     application.add_middleware(CSRFMiddleware, configured=configured)
+    application.add_middleware(
+        PayslipUploadBodyLimitMiddleware,
+        max_file_bytes=configured.max_payslip_upload_bytes,
+    )
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
     application.include_router(workspace_router)
     application.include_router(category_router)
     application.include_router(import_router)
+    application.include_router(payslip_router)
     application.include_router(transaction_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")

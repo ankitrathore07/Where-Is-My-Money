@@ -73,6 +73,11 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add PDF/image payslip upload, local text extraction, OCR fallback, editable extraction review, and confirmed income records.
 - Add income summaries based on net and gross pay; avoid automatically duplicating a bank deposit as a transaction.
 - **Done when:** text and scanned sample payslips require confirmation and produce correct income totals.
+- **Status:** Implemented with private bounded uploads, embedded PDF text
+  extraction, local Tesseract OCR fallback for images and scanned PDFs, editable
+  confirmation, pre-decode/render safety limits, atomic duplicate prevention,
+  optional source cleanup, workspace-scoped gross/net summaries, and acceptance
+  tests proving no bank transaction is created automatically.
 
 ## PR 7 — Deterministic LangGraph insights
 
