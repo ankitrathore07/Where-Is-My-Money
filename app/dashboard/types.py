@@ -29,3 +29,30 @@ class AnnualPosition:
     assets_cents: int | None
     liabilities_cents: int | None
     net_worth_cents: int | None
+
+
+@dataclass(frozen=True)
+class AnnualCashFlow:
+    year: int
+    income_cents: int | None
+    spending_cents: int | None
+    savings_cents: int | None
+    savings_rate_basis_points: int | None
+    needs_review_count: int
+
+
+@dataclass(frozen=True)
+class DashboardHighlight:
+    kind: str
+    title: str
+    detail: str
+    tone: str
+
+
+@dataclass(frozen=True)
+class DashboardReport:
+    as_of_date: date | None
+    position: PositionSummary
+    net_worth_series: tuple[AnnualPosition, ...]
+    cash_flow_series: tuple[AnnualCashFlow, ...]
+    highlights: tuple[DashboardHighlight, ...]

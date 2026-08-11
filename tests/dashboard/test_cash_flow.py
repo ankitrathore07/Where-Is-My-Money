@@ -1,0 +1,86 @@
+from datetime import UTC, date, datetime
+
+from sqlalchemy.orm import Session
+
+from app.dashboard.service import build_cash_flow_series
+from app.dashboard.types import AnnualCashFlow
+from app.db.models import Category, Transaction, Workspace
+
+
+def _category(session: Session, name: str, kind: str, workspace_id: int | None = None) -> Category:
+    category = Category(workspace_id=workspace_id, name=name, kind=kind)
+    session.add(category)
+    session.flush()
+    return category
+
+
+def _transaction(
+    session: Session,
+    workspace_id: int,
+    occurred_at: datetime,
+    amount_cents: int,
+    category_id: int | None,
+) -> None:
+    session.add(
+        Transaction(
+            workspace_id=workspace_id,
+            date=occurred_at,
+            description="SECRET DESCRIPTION",
+            amount_cents=amount_cents,
+            category_id=category_id,
+            categorization_source="test",
+        )
+    )
+    session.flush()
+
+
+def test_cash_flow_classifies_valid_signed_rows_and_reviews_bad_rows(
+    session: Session, workspace: Workspace, other_workspace: Workspace
+) -> None:
+    income = _category(session, "Salary", "income")
+    expense = _category(session, "Housing", "expense", workspace.id)
+    transfer = _category(session, "Transfer", "transfer")
+    day = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    _transaction(session, workspace.id, day, 500_000, income.id)
+    _transaction(session, workspace.id, day, -300_000, expense.id)
+    _transaction(session, workspace.id, day, 1_000, transfer.id)
+    _transaction(session, workspace.id, day, -1_000, transfer.id)
+    _transaction(session, workspace.id, day, 2_000, expense.id)
+    _transaction(session, workspace.id, day, -2_000, income.id)
+    _transaction(session, workspace.id, day, -3_000, None)
+    _transaction(session, other_workspace.id, day, 99_999_999, income.id)
+
+    series = build_cash_flow_series(session, workspace.id, date(2026, 8, 10), years=5)
+
+    assert series[-1] == AnnualCashFlow(2026, 500_000, 300_000, 200_000, 4_000, 3)
+    assert series[0] == AnnualCashFlow(2022, None, None, None, None, 0)
+
+
+def test_cash_flow_uses_half_up_basis_point_rounding_and_spending_only_semantics(
+    session: Session, workspace: Workspace
+) -> None:
+    income = _category(session, "Income", "income")
+    expense = _category(session, "Expense", "expense")
+    _transaction(session, workspace.id, datetime(2025, 1, 1, tzinfo=UTC), 8_000, income.id)
+    _transaction(session, workspace.id, datetime(2025, 1, 1, tzinfo=UTC), -7_998, expense.id)
+    _transaction(session, workspace.id, datetime(2026, 1, 1, tzinfo=UTC), -2_500, expense.id)
+
+    series = build_cash_flow_series(session, workspace.id, date(2026, 8, 10), years=2)
+
+    assert series == (
+        AnnualCashFlow(2025, 8_000, 7_998, 2, 3, 0),
+        AnnualCashFlow(2026, None, 2_500, -2_500, None, 0),
+    )
+
+
+def test_cash_flow_excludes_rows_outside_the_inclusive_calendar_window(
+    session: Session, workspace: Workspace
+) -> None:
+    income = _category(session, "Income", "income")
+    _transaction(session, workspace.id, datetime(2021, 12, 31, 23, 59, tzinfo=UTC), 100, income.id)
+    _transaction(session, workspace.id, datetime(2026, 8, 10, 23, 59, tzinfo=UTC), 200, income.id)
+    _transaction(session, workspace.id, datetime(2026, 8, 11, tzinfo=UTC), 300, income.id)
+
+    series = build_cash_flow_series(session, workspace.id, date(2026, 8, 10), years=5)
+
+    assert series[-1] == AnnualCashFlow(2026, 200, 0, 200, 10_000, 0)

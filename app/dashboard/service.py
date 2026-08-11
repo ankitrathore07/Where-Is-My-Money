@@ -1,12 +1,20 @@
-"""Workspace-scoped, deterministic financial position calculations."""
+"""Workspace-scoped, deterministic financial dashboard calculations."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.dashboard.types import AccountPosition, AnnualPosition, PositionSummary
-from app.db.models import Account, AccountBalanceSnapshot, Transaction
+from app.dashboard.types import (
+    AccountPosition,
+    AnnualCashFlow,
+    AnnualPosition,
+    DashboardHighlight,
+    DashboardReport,
+    PositionSummary,
+)
+from app.db.models import Account, AccountBalanceSnapshot, Category, Transaction
 
 _CASH_ACCOUNT_TYPES = {"checking", "savings"}
 
@@ -138,3 +146,191 @@ def build_net_worth_series(
                 )
             )
     return tuple(points)
+
+
+def build_cash_flow_series(
+    session: Session, workspace_id: int, cutoff: date, *, years: int = 5
+) -> tuple[AnnualCashFlow, ...]:
+    """Build annual income, spending, and review totals through ``cutoff``."""
+    start_year = cutoff.year - years + 1
+    start_date = date(start_year, 1, 1)
+    end_date = cutoff + timedelta(days=1)
+    rows = session.execute(
+        select(Transaction, Category)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.date >= datetime.combine(start_date, time.min),
+            Transaction.date < datetime.combine(end_date, time.min),
+        )
+        .order_by(Transaction.date, Transaction.id)
+    )
+    totals = {
+        year: {"income": 0, "spending": 0, "review": 0, "valid": False}
+        for year in range(start_year, cutoff.year + 1)
+    }
+    for transaction, category in rows:
+        transaction_date = _calendar_date(transaction.date)
+        if transaction_date is None or transaction_date.year not in totals:
+            continue
+        total = totals[transaction_date.year]
+        category_is_available = category is not None and (
+            category.workspace_id is None or category.workspace_id == workspace_id
+        )
+        kind = category.kind if category_is_available else None
+        if kind == "transfer":
+            continue
+        if kind == "income" and transaction.amount_cents > 0:
+            total["income"] += transaction.amount_cents
+            total["valid"] = True
+        elif kind == "expense" and transaction.amount_cents < 0:
+            total["spending"] -= transaction.amount_cents
+            total["valid"] = True
+        else:
+            total["review"] += 1
+
+    series: list[AnnualCashFlow] = []
+    for year in range(start_year, cutoff.year + 1):
+        total = totals[year]
+        if not total["valid"]:
+            series.append(AnnualCashFlow(year, None, None, None, None, total["review"]))
+            continue
+        income = total["income"]
+        spending = total["spending"]
+        savings = income - spending
+        rate = None
+        if income:
+            rate = int(
+                (Decimal(savings) / Decimal(income) * Decimal(10_000)).quantize(
+                    Decimal("1"), rounding=ROUND_HALF_UP
+                )
+            )
+        series.append(
+            AnnualCashFlow(year, income or None, spending, savings, rate, total["review"])
+        )
+    return tuple(series)
+
+
+def build_dashboard_report(
+    session: Session, workspace_id: int, as_of_date: date | None = None
+) -> DashboardReport:
+    """Return a repeatable dashboard report for one workspace."""
+    cutoff = as_of_date if as_of_date is not None else resolve_as_of_date(session, workspace_id)
+    if cutoff is None:
+        position = _position_summary(session, workspace_id, date.min)
+        return DashboardReport(
+            as_of_date=None,
+            position=position,
+            net_worth_series=(),
+            cash_flow_series=(),
+            highlights=(_setup_highlight(),),
+        )
+    position = _position_summary(session, workspace_id, cutoff)
+    net_worth_series = build_net_worth_series(session, workspace_id, cutoff)
+    cash_flow_series = build_cash_flow_series(session, workspace_id, cutoff)
+    return DashboardReport(
+        as_of_date=cutoff,
+        position=position,
+        net_worth_series=net_worth_series,
+        cash_flow_series=cash_flow_series,
+        highlights=_build_highlights(position, net_worth_series, cash_flow_series),
+    )
+
+
+def _build_highlights(
+    position: PositionSummary,
+    net_worth_series: tuple[AnnualPosition, ...],
+    cash_flow_series: tuple[AnnualCashFlow, ...],
+) -> tuple[DashboardHighlight, ...]:
+    highlights: list[DashboardHighlight] = []
+    available_net_worth = [point for point in net_worth_series if point.net_worth_cents is not None]
+    if len(available_net_worth) >= 2:
+        previous, current = available_net_worth[-2:]
+        delta = current.net_worth_cents - previous.net_worth_cents
+        if delta > 0:
+            kind, verb, tone = "net_worth_improved", "increased", "positive"
+        elif delta < 0:
+            kind, verb, tone = "net_worth_declined", "decreased", "negative"
+        else:
+            kind, verb, tone = "net_worth_unchanged", "was unchanged", "neutral"
+        if delta:
+            detail = (
+                f"Net worth {verb} by {_format_money(abs(delta))} "
+                f"from {previous.year} to {current.year}."
+            )
+        else:
+            detail = f"Net worth {verb} from {previous.year} to {current.year}."
+        highlights.append(DashboardHighlight(kind, "Net worth change", detail, tone))
+
+    if cash_flow_series and cash_flow_series[-1].income_cents is not None:
+        current = cash_flow_series[-1]
+        detail = (
+            f"You saved {_format_money(current.savings_cents or 0)} "
+            f"at a {_format_basis_points(current.savings_rate_basis_points or 0)} savings rate."
+        )
+        if len(cash_flow_series) >= 2 and cash_flow_series[-2].income_cents is not None:
+            prior = cash_flow_series[-2]
+            change = (current.savings_rate_basis_points or 0) - (
+                prior.savings_rate_basis_points or 0
+            )
+            detail += f" That is {_format_basis_points(change)} versus {prior.year}."
+        highlights.append(
+            DashboardHighlight(
+                "savings", f"Saved {_format_money(current.savings_cents or 0)}", detail, "positive"
+            )
+        )
+
+    if position.missing_balance_count:
+        count = position.missing_balance_count
+        noun = "account balance needs" if count == 1 else "account balances need"
+        highlights.append(
+            DashboardHighlight(
+                "missing_balances",
+                "Balance missing" if count == 1 else "Balances missing",
+                f"{count} {noun} to be added.",
+                "warning",
+            )
+        )
+    else:
+        known_positions = [
+            account for account in position.accounts if account.balance_cents is not None
+        ]
+        if known_positions:
+            largest = min(
+                known_positions,
+                key=lambda account: (-abs(account.balance_cents or 0), account.account_id),
+            )
+            highlights.append(
+                DashboardHighlight(
+                    "largest_position",
+                    "Largest position",
+                    (
+                        f"{largest.name} is the largest known position "
+                        f"at {_format_money(largest.balance_cents or 0)}."
+                    ),
+                    "neutral",
+                )
+            )
+    return tuple(highlights[:3])
+
+
+def _setup_highlight() -> DashboardHighlight:
+    return DashboardHighlight(
+        "setup",
+        "Set up your dashboard",
+        "Add an account, balance, or transaction to see your dashboard.",
+        "neutral",
+    )
+
+
+def _format_money(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    dollars, remainder = divmod(abs(cents), 100)
+    return f"{sign}${dollars:,}.{remainder:02d}"
+
+
+def _format_basis_points(basis_points: int) -> str:
+    percentage = (Decimal(basis_points) / Decimal(100)).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    return f"{percentage}%"
