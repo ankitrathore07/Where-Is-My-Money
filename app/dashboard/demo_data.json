@@ -1,0 +1,48 @@
+{
+  "accounts": [
+    {"name": "Everyday Checking", "account_type": "checking", "institution": "Fictional Community Bank", "is_liability": false},
+    {"name": "Emergency Savings", "account_type": "savings", "institution": "Fictional Community Bank", "is_liability": false},
+    {"name": "Example 401(k)", "account_type": "investment_401k", "institution": "Fictional Retirement Plan", "is_liability": false},
+    {"name": "Example Brokerage", "account_type": "investment_brokerage", "institution": "Fictional Investments", "is_liability": false},
+    {"name": "Home Mortgage", "account_type": "mortgage", "institution": "Fictional Home Lending", "is_liability": true}
+  ],
+  "snapshots": [
+    {"account": "Everyday Checking", "as_of_date": "2022-12-31", "balance_cents": 750000},
+    {"account": "Emergency Savings", "as_of_date": "2022-12-31", "balance_cents": 550000},
+    {"account": "Example 401(k)", "as_of_date": "2022-12-31", "balance_cents": 9200000},
+    {"account": "Example Brokerage", "as_of_date": "2022-12-31", "balance_cents": 11000000},
+    {"account": "Home Mortgage", "as_of_date": "2022-12-31", "balance_cents": 11500000},
+    {"account": "Everyday Checking", "as_of_date": "2023-12-31", "balance_cents": 850000},
+    {"account": "Emergency Savings", "as_of_date": "2023-12-31", "balance_cents": 750000},
+    {"account": "Example 401(k)", "as_of_date": "2023-12-31", "balance_cents": 11000000},
+    {"account": "Example Brokerage", "as_of_date": "2023-12-31", "balance_cents": 13300000},
+    {"account": "Home Mortgage", "as_of_date": "2023-12-31", "balance_cents": 10600000},
+    {"account": "Everyday Checking", "as_of_date": "2024-12-31", "balance_cents": 980000},
+    {"account": "Emergency Savings", "as_of_date": "2024-12-31", "balance_cents": 1000000},
+    {"account": "Example 401(k)", "as_of_date": "2024-12-31", "balance_cents": 13000000},
+    {"account": "Example Brokerage", "as_of_date": "2024-12-31", "balance_cents": 15500000},
+    {"account": "Home Mortgage", "as_of_date": "2024-12-31", "balance_cents": 9700000},
+    {"account": "Everyday Checking", "as_of_date": "2025-12-31", "balance_cents": 1050000},
+    {"account": "Emergency Savings", "as_of_date": "2025-12-31", "balance_cents": 1200000},
+    {"account": "Example 401(k)", "as_of_date": "2025-12-31", "balance_cents": 14600000},
+    {"account": "Example Brokerage", "as_of_date": "2025-12-31", "balance_cents": 16850000},
+    {"account": "Home Mortgage", "as_of_date": "2025-12-31", "balance_cents": 9000000},
+    {"account": "Everyday Checking", "as_of_date": "2026-08-10", "balance_cents": 1120000},
+    {"account": "Emergency Savings", "as_of_date": "2026-08-10", "balance_cents": 1364000},
+    {"account": "Example 401(k)", "as_of_date": "2026-08-10", "balance_cents": 16000000},
+    {"account": "Example Brokerage", "as_of_date": "2026-08-10", "balance_cents": 18291000},
+    {"account": "Home Mortgage", "as_of_date": "2026-08-10", "balance_cents": 8313000}
+  ],
+  "transactions": [
+    {"date": "2022-06-15", "description": "Demo payroll 2022", "amount_cents": 7500000, "category": "Income"},
+    {"date": "2022-06-16", "description": "Demo household expenses 2022", "amount_cents": -4900000, "category": "Housing"},
+    {"date": "2023-06-15", "description": "Demo payroll 2023", "amount_cents": 8000000, "category": "Income"},
+    {"date": "2023-06-16", "description": "Demo household expenses 2023", "amount_cents": -5100000, "category": "Housing"},
+    {"date": "2024-06-15", "description": "Demo payroll 2024", "amount_cents": 8500000, "category": "Income"},
+    {"date": "2024-06-16", "description": "Demo household expenses 2024", "amount_cents": -5400000, "category": "Groceries"},
+    {"date": "2025-06-15", "description": "Demo payroll 2025", "amount_cents": 9000000, "category": "Income"},
+    {"date": "2025-06-16", "description": "Demo household expenses 2025", "amount_cents": -5400000, "category": "Housing"},
+    {"date": "2026-06-15", "description": "Demo payroll 2026", "amount_cents": 9000000, "category": "Income"},
+    {"date": "2026-06-16", "description": "Demo household expenses 2026", "amount_cents": -5300000, "category": "Groceries"}
+  ]
+}
