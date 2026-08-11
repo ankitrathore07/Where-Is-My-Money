@@ -39,12 +39,7 @@ def dashboard_page_data(report: DashboardReport) -> DashboardPageData:
     return DashboardPageData(
         is_empty=report.as_of_date is None,
         has_accounts=bool(report.position.accounts),
-        has_transactions=any(
-            point.income_cents is not None
-            or point.spending_cents is not None
-            or point.needs_review_count > 0
-            for point in report.cash_flow_series
-        ),
+        has_transactions=report.has_transactions,
         has_position_history=sum(
             point.net_worth_cents is not None for point in report.net_worth_series
         )

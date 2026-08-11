@@ -222,6 +222,7 @@ def build_dashboard_report(
         position = _position_summary(session, workspace_id, date.min)
         return DashboardReport(
             as_of_date=None,
+            has_transactions=False,
             position=position,
             net_worth_series=(),
             cash_flow_series=(),
@@ -232,10 +233,28 @@ def build_dashboard_report(
     cash_flow_series = build_cash_flow_series(session, workspace_id, cutoff)
     return DashboardReport(
         as_of_date=cutoff,
+        has_transactions=_has_workspace_transaction_before_or_on(session, workspace_id, cutoff),
         position=position,
         net_worth_series=net_worth_series,
         cash_flow_series=cash_flow_series,
         highlights=_build_highlights(position, net_worth_series, cash_flow_series),
+    )
+
+
+def _has_workspace_transaction_before_or_on(
+    session: Session, workspace_id: int, cutoff: date
+) -> bool:
+    return (
+        session.scalar(
+            select(Transaction.id)
+            .where(
+                Transaction.workspace_id == workspace_id,
+                Transaction.date
+                < datetime.combine(cutoff + timedelta(days=1), time.min, tzinfo=UTC),
+            )
+            .limit(1)
+        )
+        is not None
     )
 
 

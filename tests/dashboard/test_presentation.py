@@ -13,6 +13,7 @@ from app.dashboard.types import (
 def _report() -> DashboardReport:
     return DashboardReport(
         as_of_date=date(2026, 8, 10),
+        has_transactions=True,
         position=PositionSummary(0, 0, 0, 0, 0, ()),
         net_worth_series=(
             AnnualPosition(2025, None, None, None),

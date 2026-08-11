@@ -52,6 +52,7 @@ class DashboardHighlight:
 @dataclass(frozen=True)
 class DashboardReport:
     as_of_date: date | None
+    has_transactions: bool
     position: PositionSummary
     net_worth_series: tuple[AnnualPosition, ...]
     cash_flow_series: tuple[AnnualCashFlow, ...]

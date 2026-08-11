@@ -351,3 +351,77 @@ async def test_dashboard_distinguishes_missing_accounts_from_missing_transaction
     assert f'href="/workspaces/{account_workspace_id}/imports/new"' in account_only.text
     assert "No accounts have been added yet." not in account_only.text
     assert "No earlier account-balance history is available yet." in account_only.text
+
+
+@pytest.mark.anyio
+async def test_dashboard_treats_transfer_only_activity_as_transaction_history(
+    tmp_path: Path,
+) -> None:
+    """Using cash-flow participation as presence would falsely prompt an active member to import."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                transfer = Category(workspace_id=None, name="Transfer", kind="transfer")
+                session.add(transfer)
+                session.flush()
+                transfer_id = transfer.id
+                session.add(
+                    Transaction(
+                        workspace_id=workspace_id,
+                        date=datetime(2026, 8, 11, tzinfo=UTC),
+                        description="Future transfer",
+                        amount_cents=-10_000,
+                        category_id=transfer_id,
+                        categorization_source="test",
+                    )
+                )
+                foreign_user = User(
+                    google_sub="transfer-dashboard-foreign", email="transfer-foreign@example.com"
+                )
+                foreign_workspace = Workspace(
+                    name="Transfer foreign workspace", is_personal=True, owner=foreign_user
+                )
+                session.add(foreign_workspace)
+                session.flush()
+                session.add(
+                    Transaction(
+                        workspace_id=foreign_workspace.id,
+                        date=datetime(2026, 8, 10, tzinfo=UTC),
+                        description="Foreign transfer",
+                        amount_cents=-10_000,
+                        category_id=transfer_id,
+                        categorization_source="test",
+                    )
+                )
+                session.commit()
+            without_eligible_transfer = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=2026-08-10"
+            )
+            with factory() as session:
+                session.add(
+                    Transaction(
+                        workspace_id=workspace_id,
+                        date=datetime(2026, 8, 10, tzinfo=UTC),
+                        description="Synthetic transfer",
+                        amount_cents=-10_000,
+                        category_id=transfer_id,
+                        categorization_source="test",
+                    )
+                )
+                session.commit()
+            response = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=2026-08-10")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert without_eligible_transfer.status_code == 200
+    assert "No transactions have been imported yet." in without_eligible_transfer.text
+    assert "No transactions have been imported yet." not in response.text
+    assert "No income data" in response.text
+    assert "No spending data" in response.text
