@@ -1,6 +1,6 @@
 """Workspace-scoped, deterministic financial dashboard calculations."""
 
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
@@ -160,8 +160,8 @@ def build_cash_flow_series(
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Transaction.date >= datetime.combine(start_date, time.min),
-            Transaction.date < datetime.combine(end_date, time.min),
+            Transaction.date >= datetime.combine(start_date, time.min, tzinfo=UTC),
+            Transaction.date < datetime.combine(end_date, time.min, tzinfo=UTC),
         )
         .order_by(Transaction.date, Transaction.id)
     )

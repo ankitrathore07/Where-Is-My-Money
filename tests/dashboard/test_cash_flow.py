@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime
 
+from sqlalchemy import event
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.dashboard.service import build_cash_flow_series
@@ -84,3 +86,27 @@ def test_cash_flow_excludes_rows_outside_the_inclusive_calendar_window(
     series = build_cash_flow_series(session, workspace.id, date(2026, 8, 10), years=5)
 
     assert series[-1] == AnnualCashFlow(2026, 200, 0, 200, 10_000, 0)
+
+
+def test_cash_flow_compiles_utc_aware_postgresql_date_bounds(
+    session: Session, workspace: Workspace
+) -> None:
+    income = _category(session, "Income", "income")
+    _transaction(session, workspace.id, datetime(2026, 8, 10, tzinfo=UTC), 200, income.id)
+    statements = []
+
+    def capture_statement(execute_state: object) -> None:
+        statements.append(execute_state.statement)  # type: ignore[attr-defined]
+
+    event.listen(session, "do_orm_execute", capture_statement)
+    try:
+        build_cash_flow_series(session, workspace.id, date(2026, 8, 10))
+    finally:
+        event.remove(session, "do_orm_execute", capture_statement)
+
+    compiled = statements[0].compile(dialect=postgresql.dialect())
+    bounds = [value for value in compiled.params.values() if isinstance(value, datetime)]
+    assert bounds == [
+        datetime(2022, 1, 1, tzinfo=UTC),
+        datetime(2026, 8, 11, tzinfo=UTC),
+    ]
