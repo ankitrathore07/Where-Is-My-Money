@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Add balance · {{ account.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Add balance for {{ account.name }}</h1>
+    <p>{% if account.is_liability %}Enter the positive amount you owe for this liability.{% else %}Enter the current positive value of this asset.{% endif %}</p>
+  </section>
+
+  <section class="panel">
+    <form action="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/balances" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="balance-amount">Amount</label>
+      <input id="balance-amount" name="amount" type="number" min="0" step="0.01" value="{{ values.amount }}" required>
+      {% if field_errors.amount %}<p class="alert" role="alert">{{ field_errors.amount }}</p>{% endif %}
+
+      <label for="as-of-date">As of date</label>
+      <input id="as-of-date" name="as_of_date" type="date" max="{{ today.isoformat() }}" value="{{ values.as_of_date }}" required>
+      {% if field_errors.as_of_date %}<p class="alert" role="alert">{{ field_errors.as_of_date }}</p>{% endif %}
+
+      <button class="button" type="submit">Add balance</button>
+    </form>
+  </section>
+{% endblock %}

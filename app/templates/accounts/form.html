@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Edit" if account else "Add" }} account · {{ workspace.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>{{ "Edit" if account else "Add" }} account</h1>
+    <p>Liabilities use a positive amount owed when you add a balance.</p>
+  </section>
+
+  <section class="panel">
+    <form action="/workspaces/{{ workspace.id }}/accounts{% if account %}/{{ account.id }}{% endif %}" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="account-name">Name</label>
+      <input id="account-name" name="name" value="{{ values.name }}" maxlength="255" required>
+      {% if field_errors.name %}<p class="alert" role="alert">{{ field_errors.name }}</p>{% endif %}
+
+      <label for="account-type">Account type</label>
+      <select id="account-type" name="account_type">
+        {% for option in account_type_options %}
+          <option value="{{ option.value }}"{% if values.account_type == option.value %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% if field_errors.account_type %}<p class="alert" role="alert">{{ field_errors.account_type }}</p>{% endif %}
+
+      <label for="institution">Institution</label>
+      <input id="institution" name="institution" value="{{ values.institution }}" maxlength="255">
+      {% if field_errors.institution %}<p class="alert" role="alert">{{ field_errors.institution }}</p>{% endif %}
+
+      <fieldset>
+        <legend>Classification</legend>
+        <label><input type="radio" name="classification" value="asset"{% if values.classification == "asset" %} checked{% endif %}> Asset</label>
+        <label><input type="radio" name="classification" value="liability"{% if values.classification == "liability" %} checked{% endif %}> Liability</label>
+      </fieldset>
+      {% if field_errors.classification %}<p class="alert" role="alert">{{ field_errors.classification }}</p>{% endif %}
+      {% if field_errors.is_liability %}<p class="alert" role="alert">{{ field_errors.is_liability }}</p>{% endif %}
+
+      <button class="button" type="submit">{{ "Save account" if account else "Add account" }}</button>
+    </form>
+  </section>
+{% endblock %}
