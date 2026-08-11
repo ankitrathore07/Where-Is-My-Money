@@ -125,7 +125,8 @@ def seed_dashboard_demo(session: Session, user: User) -> Workspace:
 def seed_for_email(email: str) -> tuple[int | None, str | None]:
     """Seed the configured database for an already signed-in user email."""
     init_engine()
-    session = next(get_db())
+    db_generator = get_db()
+    session = next(db_generator)
     try:
         user = session.scalar(select(User).where(func.lower(User.email) == normalize_email(email)))
         if user is None:
@@ -142,7 +143,7 @@ def seed_for_email(email: str) -> tuple[int | None, str | None]:
         session.rollback()
         raise
     finally:
-        session.close()
+        db_generator.close()
 
 
 def main(argv: list[str] | None = None) -> int:

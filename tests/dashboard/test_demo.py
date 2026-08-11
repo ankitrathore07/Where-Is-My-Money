@@ -1,6 +1,7 @@
 import json
 from collections.abc import Generator
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -104,3 +105,72 @@ def test_seed_for_email_returns_a_dashboard_url_after_its_session_commits(
     assert error is None
     assert workspace_id is not None
     assert workspace_id > 0
+
+
+@pytest.mark.parametrize(
+    ("user", "expected_result", "expected_events"),
+    (
+        (
+            User(google_sub="tracked-user", email="tracked@example.com", display_name="Tracked"),
+            (71, None),
+            ("scalar", "commit", "generator-close", "generator-finally", "session-close"),
+        ),
+        (
+            None,
+            (None, "No signed-in user found for that email. Sign in once, then try again."),
+            ("scalar", "generator-close", "generator-finally", "session-close"),
+        ),
+    ),
+)
+def test_seed_for_email_keeps_its_database_generator_open_until_each_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    user: User | None,
+    expected_result: tuple[int | None, str | None],
+    expected_events: tuple[str, ...],
+) -> None:
+    """Dropping generator retention would finalize its session before the query or return path."""
+    events: list[str] = []
+
+    class TrackedSession:
+        def scalar(self, statement: object) -> User | None:
+            del statement
+            events.append("scalar")
+            return user
+
+        def commit(self) -> None:
+            events.append("commit")
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+        def close(self) -> None:
+            events.append("session-close")
+
+    session = TrackedSession()
+
+    class TrackedDatabaseGenerator:
+        def __next__(self) -> TrackedSession:
+            return session
+
+        def close(self) -> None:
+            events.append("generator-close")
+            events.append("generator-finally")
+            session.close()
+
+    def tracked_db() -> TrackedDatabaseGenerator:
+        return TrackedDatabaseGenerator()
+
+    monkeypatch.setattr(demo, "init_engine", lambda: None)
+    monkeypatch.setattr(demo, "get_db", tracked_db)
+    monkeypatch.setattr(
+        demo,
+        "seed_dashboard_demo",
+        lambda received_session, received_user: (
+            SimpleNamespace(id=71)
+            if received_session is session and received_user is user
+            else pytest.fail("seed received the wrong session or user")
+        ),
+    )
+
+    assert seed_for_email("tracked@example.com") == expected_result
+    assert events == list(expected_events)
