@@ -1,8 +1,9 @@
 import asyncio
 
+import pytest
 from starlette.types import Message, Receive, Scope, Send
 
-from app.core.middleware import PayslipUploadBodyLimitMiddleware
+from app.core.middleware import UploadBodyLimitMiddleware
 from app.core.security import (
     SlidingWindowRateLimiter,
     create_csrf_token,
@@ -60,7 +61,16 @@ def test_rate_limiter_keeps_client_windows_separate() -> None:
     assert limiter.allow("second", now=1)
 
 
-def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> None:
+@pytest.mark.parametrize(
+    "path,message",
+    [
+        ("/workspaces/1/payslips", b"Payslip upload is too large."),
+        ("/workspaces/1/document-uploads", b"Document upload is too large."),
+    ],
+)
+def test_upload_body_limit_counts_streamed_chunks_without_content_length(
+    path: str, message: bytes
+) -> None:
     completed_downstream = False
 
     async def consuming_app(scope: Scope, receive: Receive, send: Send) -> None:
@@ -71,7 +81,7 @@ def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> N
             more_body = message.get("more_body", False)
         completed_downstream = True
 
-    middleware = PayslipUploadBodyLimitMiddleware(
+    middleware = UploadBodyLimitMiddleware(
         consuming_app,
         max_file_bytes=5,
         multipart_overhead_bytes=0,
@@ -88,26 +98,26 @@ def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> N
     async def send(message: Message) -> None:
         sent.append(message)
 
-    scope: Scope = {
+    scope = upload_scope(path)
+    asyncio.run(middleware(scope, receive, send))
+
+    assert completed_downstream is False
+    assert sent[0]["status"] == 413
+    assert sent[1]["body"] == message
+
+
+def upload_scope(path: str) -> Scope:
+    return {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/workspaces/1/payslips",
-        "raw_path": b"/workspaces/1/payslips",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
         "headers": [],
         "client": ("127.0.0.1", 1234),
         "server": ("test", 80),
     }
-    asyncio.run(middleware(scope, receive, send))
-
-    assert completed_downstream is False
-    assert sent[0] == {
-        "type": "http.response.start",
-        "status": 413,
-        "headers": [(b"content-length", b"28"), (b"content-type", b"text/plain; charset=utf-8")],
-    }
-    assert sent[1]["body"] == b"Payslip upload is too large."

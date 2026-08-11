@@ -17,7 +17,7 @@ from app.auth.routes import router as auth_router
 from app.categories.routes import router as category_router
 from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
-from app.core.middleware import CSRFMiddleware, PayslipUploadBodyLimitMiddleware
+from app.core.middleware import CSRFMiddleware, UploadBodyLimitMiddleware
 from app.core.security import SlidingWindowRateLimiter
 from app.dashboard.routes import router as dashboard_router
 from app.db.models import User
@@ -99,7 +99,7 @@ def create_app(
     )
     application.add_middleware(CSRFMiddleware, configured=configured)
     application.add_middleware(
-        PayslipUploadBodyLimitMiddleware,
+        UploadBodyLimitMiddleware,
         max_file_bytes=configured.max_payslip_upload_bytes,
     )
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
