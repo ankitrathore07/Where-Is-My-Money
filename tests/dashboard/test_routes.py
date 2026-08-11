@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import UTC, date, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,53 @@ def _snapshot(session, workspace_id: int, account_id: int, cents: int, as_of_dat
             as_of_date=as_of_date,
             source="manual",
         )
+    )
+
+
+class _FallbackTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tables: list[tuple[str, list[str]]] = []
+        self._caption = ""
+        self._capture: str | None = None
+        self._current_row: list[str] | None = None
+        self._current_cell = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag == "table":
+            self._caption = ""
+        elif tag == "caption":
+            self._capture = "caption"
+            self._current_cell = ""
+        elif tag == "tr":
+            self._current_row = []
+        elif tag == "td" and self._current_row is not None:
+            self._capture = "cell"
+            self._current_cell = ""
+
+    def handle_data(self, data: str) -> None:
+        if self._capture is not None:
+            self._current_cell += data
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "caption" and self._capture == "caption":
+            self._caption = self._current_cell.strip()
+            self._capture = None
+        elif tag == "td" and self._capture == "cell" and self._current_row is not None:
+            self._current_row.append(self._current_cell.strip())
+            self._capture = None
+        elif tag == "tr" and self._current_row is not None:
+            if self._current_row:
+                self.tables.append((self._caption, self._current_row))
+            self._current_row = None
+
+
+def _fallback_row(page: str, caption: str, year: str) -> list[str]:
+    parser = _FallbackTableParser()
+    parser.feed(page)
+    return next(
+        row for table_caption, row in parser.tables if table_caption == caption and row[0] == year
     )
 
 
@@ -423,5 +471,11 @@ async def test_dashboard_treats_transfer_only_activity_as_transaction_history(
     assert without_eligible_transfer.status_code == 200
     assert "No transactions have been imported yet." in without_eligible_transfer.text
     assert "No transactions have been imported yet." not in response.text
-    assert "No income data" in response.text
-    assert "No spending data" in response.text
+    assert _fallback_row(response.text, "Income and spending fallback", "2026") == [
+        "2026",
+        "No income data",
+        "No spending data",
+        "No savings data",
+        "Unavailable",
+    ]
+    assert "needs review before it can be included in income and spending" not in response.text
