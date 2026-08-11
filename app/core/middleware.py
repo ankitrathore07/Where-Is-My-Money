@@ -1,8 +1,11 @@
 """Browser security middleware and CSRF enforcement."""
 
+import re
+
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
 from app.core.security import create_csrf_token, validate_csrf_token
@@ -11,6 +14,77 @@ CSRF_COOKIE_NAME = "wimm_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_MAX_AGE = 3600
+PAYSLIP_UPLOAD_PATH = re.compile(r"/workspaces/\d+/payslips")
+
+
+class _PayslipBodyTooLarge(Exception):
+    """Stop multipart parsing once the route-specific request limit is crossed."""
+
+
+class PayslipUploadBodyLimitMiddleware:
+    """Bound payslip multipart bodies before Starlette spools uploaded files."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_file_bytes: int,
+        multipart_overhead_bytes: int = 64 * 1024,
+    ) -> None:
+        self.app = app
+        self.max_body_bytes = max_file_bytes + multipart_overhead_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not self._targets_payslip_upload(scope):
+            await self.app(scope, receive, send)
+            return
+
+        content_length = self._content_length(scope)
+        if content_length is None or content_length <= self.max_body_bytes:
+            received_bytes = 0
+
+            async def limited_receive() -> Message:
+                nonlocal received_bytes
+                message = await receive()
+                if message["type"] == "http.request":
+                    received_bytes += len(message.get("body", b""))
+                    if received_bytes > self.max_body_bytes:
+                        raise _PayslipBodyTooLarge
+                return message
+
+            try:
+                await self.app(scope, limited_receive, send)
+            except _PayslipBodyTooLarge:
+                await self._reject(scope, receive, send)
+            return
+
+        await self._reject(scope, receive, send)
+
+    @staticmethod
+    def _targets_payslip_upload(scope: Scope) -> bool:
+        return (
+            scope["type"] == "http"
+            and scope.get("method") == "POST"
+            and PAYSLIP_UPLOAD_PATH.fullmatch(scope.get("path", "")) is not None
+        )
+
+    @staticmethod
+    def _content_length(scope: Scope) -> int | None:
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        response = PlainTextResponse(
+            "Payslip upload is too large.",
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        )
+        await response(scope, receive, send)
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):

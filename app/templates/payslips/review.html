@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Review payslip · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">Review required · {{ workspace.name }}</p>
+    <h1>Check the extracted pay details</h1>
+    <p>Nothing is saved as income until you confirm this form. Correct any OCR or PDF-reading mistakes first.</p>
+  </section>
+
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <section class="notice">
+    <strong>{{ extraction_label }}</strong>
+    <p>Extraction confidence: {{ ((payslip.confidence or 0) * 100)|round|int }}%. Every field remains editable.</p>
+  </section>
+
+  <form action="/workspaces/{{ workspace.id }}/payslips/{{ payslip.id }}/confirm" method="post" class="stacked-form panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <label for="employer">Employer</label>
+    <input id="employer" name="employer" maxlength="255" value="{{ values.employer }}">
+    {% if errors.employer %}<span class="field-error">{{ errors.employer }}</span>{% endif %}
+
+    <label for="pay-period-start">Pay-period start</label>
+    <input id="pay-period-start" name="pay_period_start" type="date" value="{{ values.pay_period_start }}">
+    {% if errors.pay_period_start %}<span class="field-error">{{ errors.pay_period_start }}</span>{% endif %}
+
+    <label for="pay-period-end">Pay-period end</label>
+    <input id="pay-period-end" name="pay_period_end" type="date" value="{{ values.pay_period_end }}">
+    {% if errors.pay_period_end %}<span class="field-error">{{ errors.pay_period_end }}</span>{% endif %}
+
+    <label for="pay-date">Pay date</label>
+    <input id="pay-date" name="pay_date" type="date" value="{{ values.pay_date }}" required>
+    {% if errors.pay_date %}<span class="field-error">{{ errors.pay_date }}</span>{% endif %}
+
+    <label for="gross-pay">Gross pay</label>
+    <input id="gross-pay" name="gross_pay" inputmode="decimal" value="{{ values.gross_pay }}" required>
+    {% if errors.gross_pay %}<span class="field-error">{{ errors.gross_pay }}</span>{% endif %}
+
+    <label for="net-pay">Net pay</label>
+    <input id="net-pay" name="net_pay" inputmode="decimal" value="{{ values.net_pay }}" required>
+    {% if errors.net_pay %}<span class="field-error">{{ errors.net_pay }}</span>{% endif %}
+
+    <label for="taxes">Taxes</label>
+    <input id="taxes" name="taxes" inputmode="decimal" value="{{ values.taxes }}" required>
+    {% if errors.taxes %}<span class="field-error">{{ errors.taxes }}</span>{% endif %}
+
+    <label for="deductions">Other deductions</label>
+    <input id="deductions" name="deductions" inputmode="decimal" value="{{ values.deductions }}" required>
+    {% if errors.deductions %}<span class="field-error">{{ errors.deductions }}</span>{% endif %}
+
+    <button class="button" type="submit">Confirm income record</button>
+  </form>
+{% endblock %}

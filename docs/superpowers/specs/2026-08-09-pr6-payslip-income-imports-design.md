@@ -56,22 +56,26 @@ objects that would otherwise invoke local system software.
 ### Upload and extraction
 
 1. The member opens the payslip upload form within an authorized workspace.
-2. The POST route validates the filename extension and declared content type.
-3. The storage service streams the source to an opaque private key while enforcing
+2. Route-specific ASGI middleware bounds the complete multipart request before
+   form parsing, including requests without a `Content-Length` header.
+3. The POST route validates the filename extension and required declared content
+   type.
+4. The storage service streams the source to an opaque private key while enforcing
    the 10 MiB maximum and calculating SHA-256.
-4. The extraction service validates the actual file signature and parses the
+5. The extraction service validates the actual file signature and parses the
    source. A PDF with meaningful embedded text uses that text. A text-empty PDF is
-   rendered page by page and OCRed locally. PNG/JPEG sources are normalized to PNG
-   and OCRed locally.
-5. Deterministic parsing creates candidate fields and a coarse confidence value
+   rendered and OCRed locally one page at a time, releasing each page before the
+   next is rendered. PNG/JPEG sources are normalized to PNG and OCRed locally.
+6. Deterministic parsing creates candidate fields and a coarse confidence value
    based on the extraction method and field coverage.
-6. One `UploadedFile` and one pending `Payslip` are committed together. Extraction
+7. One `UploadedFile` and one pending `Payslip` are committed together. Extraction
    failure removes the private source and creates no database records.
-7. The browser is redirected to the editable review page.
+8. The browser is redirected to the editable review page.
 
-PDF processing is limited to 10 pages and image processing uses Pillow's pixel
-safety limit. Encrypted, malformed, empty, or unsupported documents return a safe
-validation message.
+PDF processing is limited to 10 pages. Uploaded images and rendered PDF pages
+share an explicit 40-million-pixel safety limit that is checked before image
+decoding or page rendering. Encrypted, malformed, empty, oversized, or unsupported
+documents return a safe validation message.
 
 ### Review and confirmation
 
@@ -84,9 +88,13 @@ On confirmation, the service:
 1. Reloads the payslip through both `payslip_id` and `workspace_id`.
 2. Normalizes the submitted values independently of extraction output.
 3. Requires a pay date and non-negative gross, net, tax, and deduction amounts;
-   limits text lengths; and rejects a pay-period end before its start.
+   limits text and money values to database-safe bounds; and rejects a pay-period
+   end before its start. Extracted suggestions use the same bounds before they
+   enter candidate JSON.
 4. Creates exactly one `IncomeRecord`, updates the payslip's reviewed fields and
-   status, and commits the database transaction.
+   status, and commits the database transaction. A unique database index on
+   `payslip_id` makes this invariant atomic even when two confirmations arrive
+   together; the losing request reloads and returns the existing record.
 5. If delete-after-confirmation was selected, removes the source after the
    database commit and records cleanup failure without rolling back confirmed
    income.
@@ -124,10 +132,11 @@ Use strict red-green-refactor cycles for each behavior:
 - Parsing tests: representative synthetic OCR text, currency formats, optional
   fields, invalid dates, invalid money, and pay-period ordering.
 - Extraction tests: embedded PDF text, scanned-PDF and image OCR fallback through
-  a fake OCR engine, malformed files, page limits, and unavailable Tesseract.
+  a fake OCR engine, incremental multi-page processing, pixel/page limits,
+  malformed files, and unavailable Tesseract.
 - Service tests: pending candidates create no income, confirmed edited values,
-  idempotent confirmation, retention cleanup, cleanup failure, workspace scoping,
-  and no transaction side effect.
+  sequential and simultaneous idempotent confirmation, retention cleanup,
+  cleanup failure, workspace scoping, and no transaction side effect.
 - Summary tests: exact hand-calculated gross/net totals and isolation between two
   workspaces.
 - Route/acceptance tests: authentication and CSRF, upload validation, foreign
@@ -137,8 +146,8 @@ Use strict red-green-refactor cycles for each behavior:
 
 The final gate runs Ruff lint, Ruff format check, the complete Pytest suite, an
 Alembic upgrade of a fresh SQLite database, and an application startup/health
-check. No schema migration is planned because PR 2c already provides the required
-tables and relationships.
+check. Migration `0008` replaces the old non-unique payslip lookup index with a
+unique index so one payslip cannot produce duplicate confirmed income.
 
 ## Dependency and setup impact
 

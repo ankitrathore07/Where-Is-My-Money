@@ -17,7 +17,8 @@
 - Confirmation must never create, update, or link a `Transaction`.
 - Keep source files private and honor retain or delete-after-confirmation.
 - Use only representative synthetic data in fixtures and tests.
-- No schema migration is required; PR 2c already supplies the tables.
+- Reuse the PR 2c tables and add only the database invariant needed to guarantee
+  one confirmed `IncomeRecord` per payslip under simultaneous requests.
 
 ---
 
@@ -44,6 +45,7 @@ def test_save_uses_opaque_workspace_key(tmp_path: Path) -> None:
     saved = store.save(7, ".pdf", BytesIO(b"%PDF-synthetic"))
     assert re.fullmatch(r"7/[0-9a-f]{32}\.pdf", saved.storage_key)
     assert store.read(saved.storage_key) == b"%PDF-synthetic"
+
 
 def test_oversize_removes_partial_source(tmp_path: Path) -> None:
     store = PayslipUploadStore(tmp_path, max_bytes=4)
@@ -120,16 +122,18 @@ Normalize whitespace per line, use case-insensitive anchored label patterns, par
 
 ```python
 def test_review_uses_edited_literal_values() -> None:
-    values = validate_review({
-        "employer": "Edited Employer",
-        "pay_period_start": "2026-07-02",
-        "pay_period_end": "2026-07-16",
-        "pay_date": "2026-07-21",
-        "gross_pay": "5100.25",
-        "net_pay": "3800.10",
-        "taxes": "900.00",
-        "deductions": "400.15",
-    })
+    values = validate_review(
+        {
+            "employer": "Edited Employer",
+            "pay_period_start": "2026-07-02",
+            "pay_period_end": "2026-07-16",
+            "pay_date": "2026-07-21",
+            "gross_pay": "5100.25",
+            "net_pay": "3800.10",
+            "taxes": "900.00",
+            "deductions": "400.15",
+        }
+    )
     assert values.gross_pay_cents == 510025
     assert values.net_pay_cents == 380010
 ```
@@ -196,7 +200,7 @@ Expected: OCR fallback tests fail because rendering and `TesseractOcrEngine` are
 
 - [ ] **Step 7: Implement local rendering, image normalization, and Tesseract boundary**
 
-Render PDF pages at 200 DPI with `pypdfium2`, convert each page or uploaded image to RGB PNG with Pillow, and OCR sequentially. Invoke `subprocess.run([executable, "stdin", "stdout", "-l", "eng", "--psm", "6"], input=image_bytes, capture_output=True, timeout=30, check=False, shell=False)`. Convert native failures into safe `DocumentExtractionError` messages and never include OCR output or source bytes in logs/errors.
+Render PDF pages at 200 DPI with `pypdfium2`, convert each page or uploaded image to RGB PNG with Pillow, and OCR sequentially. Release each rendered page before preparing the next instead of accumulating every PNG in memory. Invoke `subprocess.run([executable, "stdin", "stdout", "-l", "eng", "--psm", "6"], input=image_bytes, capture_output=True, timeout=30, check=False, shell=False)`. Convert native failures into safe `DocumentExtractionError` messages and never include OCR output or source bytes in logs/errors.
 
 - [ ] **Step 8: Run extraction tests and verify GREEN**
 
@@ -209,6 +213,9 @@ Expected: all extraction tests pass.
 **Files:**
 - Create: `app/payslips/service.py`
 - Create: `tests/payslips/test_service.py`
+- Create: `migrations/versions/0008_unique_payslip_income.py`
+- Create: `tests/test_payslip_confirmation_migration.py`
+- Modify: `app/db/models.py`
 
 **Interfaces:**
 - Consumes: `PayslipUploadStore`, `DocumentExtractor`, `extract_candidates`, and `validate_review`.
@@ -246,7 +253,7 @@ Expected: tests fail because confirmation behavior is missing.
 
 - [ ] **Step 6: Implement confirmation and post-commit cleanup**
 
-Normalize the submitted form, return an existing income row for an already-confirmed payslip, update the payslip and insert one `IncomeRecord` in one database commit, then perform optional source deletion. A deletion exception changes status to `confirmed_cleanup_failed` without deleting income; successful cleanup marks `UploadedFile.deleted` and leaves status `confirmed`.
+Normalize the submitted form, return an existing income row for an already-confirmed payslip, update the payslip and insert one `IncomeRecord` in one database commit, then perform optional source deletion. Add a unique payslip index and handle the losing `IntegrityError` so simultaneous confirmation requests also return one existing record. A deletion exception changes status to `confirmed_cleanup_failed` without deleting income; successful cleanup marks `UploadedFile.deleted` and leaves status `confirmed`.
 
 - [ ] **Step 7: Add failing summary tests**
 
@@ -277,6 +284,7 @@ Expected: all service tests pass.
 - Create: `app/templates/payslips/income.html`
 - Create: `tests/payslips/test_routes.py`
 - Modify: `app/core/config.py`
+- Modify: `app/core/middleware.py`
 - Modify: `app/main.py`
 - Modify: `app/templates/base.html`
 - Modify: `app/templates/workspace_detail.html`

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Import payslip · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Import a payslip</h1>
+    <p>
+      PDF and image text is processed on this computer. No income is saved until
+      you review and confirm every value.
+    </p>
+  </section>
+
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <form action="/workspaces/{{ workspace.id }}/payslips" method="post" enctype="multipart/form-data" class="stacked-form panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="payslip-file">PDF, PNG, or JPEG payslip</label>
+    <input id="payslip-file" name="payslip_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required>
+    <p class="muted">Text PDFs are read directly. Images and scanned PDFs require the local Tesseract OCR executable.</p>
+    <fieldset>
+      <legend>After successful confirmation</legend>
+      <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete the raw payslip</label>
+      <label><input type="radio" name="retention_choice" value="retain"> Retain the raw payslip privately</label>
+    </fieldset>
+    <button class="button" type="submit">Upload and review</button>
+  </form>
+{% endblock %}

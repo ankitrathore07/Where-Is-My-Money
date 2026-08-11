@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Income · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Confirmed income</h1>
+    <p>{{ summary.record_count }} confirmed payslip{% if summary.record_count != 1 %}s{% endif %}. Bank deposits remain separate transactions.</p>
+    <a class="button" href="/workspaces/{{ workspace.id }}/payslips/new">Import another payslip</a>
+  </section>
+
+  {% if cleanup_failed %}
+    <p class="alert" role="alert">The income was confirmed, but the private source file could not be deleted. Its status was recorded truthfully.</p>
+  {% endif %}
+
+  <section class="card-grid" aria-label="Income totals">
+    <article class="card">
+      <span class="eyebrow">Gross pay</span>
+      <strong>{{ format_money(summary.gross_pay_cents) }}</strong>
+    </article>
+    <article class="card">
+      <span class="eyebrow">Net pay</span>
+      <strong>{{ format_money(summary.net_pay_cents) }}</strong>
+    </article>
+  </section>
+
+  {% if summary.records %}
+    <div class="table-wrap panel">
+      <table>
+        <thead><tr><th>Pay date</th><th>Employer</th><th>Gross</th><th>Net</th><th>Taxes</th><th>Deductions</th></tr></thead>
+        <tbody>
+          {% for record in summary.records %}
+            <tr>
+              <td>{{ record.pay_date.date().isoformat() }}</td>
+              <td>{{ record.employer or "Not provided" }}</td>
+              <td class="money-in">{{ format_money(record.gross_pay_cents) }}</td>
+              <td class="money-in">{{ format_money(record.net_pay_cents) }}</td>
+              <td>{{ format_money(record.taxes_cents) }}</td>
+              <td>{{ format_money(record.deductions_cents) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <section class="panel">
+      <h2>No confirmed income records yet</h2>
+      <p>Import a payslip, review the extracted values, and explicitly confirm it here.</p>
+    </section>
+  {% endif %}
+{% endblock %}
