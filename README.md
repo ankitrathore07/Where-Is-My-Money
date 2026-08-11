@@ -278,5 +278,11 @@ database volume.
 
 ## Next step
 
-PR 7 adds deterministic, evidence-backed spending and income insights without an
-LLM or automatic financial actions.
+PR 7 adds a centralized, responsive financial dashboard plus basic account setup
+and manual balance entry. It uses deterministic Python calculations and locally
+served charts, not AI.
+
+LangGraph is reserved for PR 10's optional financial coach, after accounts,
+budgets, and savings goals exist. That later assistant will answer scoped money
+questions and help draft goal plans, while explicit confirmation remains
+required before it can create or change a goal. It will never move money.

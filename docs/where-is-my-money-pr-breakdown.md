@@ -31,7 +31,9 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 
 ### PR 2d — Planning and insights
 
-- Add migrations for `budgets`, `savings_goals`, and `insight_snapshots` — the tables PR 7 and PR 8 depend on.
+- Add migrations for `budgets`, `savings_goals`, and `insight_snapshots` — the
+  planning tables PR 8 depends on and the snapshot table reserved for the later
+  PR 10 financial coach.
 - **Done when:** all remaining tables migrate cleanly and a fresh database can be created and migrated entirely from source control (the original PR 2 exit criterion).
 
 ### PR 2e — Accounts and balance snapshots
@@ -79,11 +81,20 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
   optional source cleanup, workspace-scoped gross/net summaries, and acceptance
   tests proving no bank transaction is created automatically.
 
-## PR 7 — Deterministic LangGraph insights
+## PR 7 — Centralized financial dashboard
 
-- Add import and insights graphs, spending/category/merchant trends, recurring-charge detection, unusual-spend detection, and explanation links.
-- Persist insight snapshots and render the dashboard report.
-- **Done when:** fixed fixture data yields repeatable, evidence-backed insight output.
+- Add workspace-scoped account setup and manual balance entry using the existing
+  account and balance-snapshot schema.
+- Add a responsive dashboard for assets, liabilities, net worth, available cash,
+  savings rate, account positions, and five-year net-worth and
+  income-versus-spending trends.
+- Use server-rendered Jinja, local Chart.js, and deterministic calculations; do
+  not add LangGraph or an LLM.
+- Add factual progress highlights, explicit partial-data states, and a synthetic
+  demo path.
+- **Done when:** fixed fixture data produces repeatable totals and charts, every
+  value is workspace-scoped, and a new contributor can enter balances and view
+  the polished dashboard.
 
 ## PR 8 — Budgets and savings goals
 
@@ -91,14 +102,27 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add savings goals with target amount, current savings, deadline/monthly contribution calculations, and on-track status.
 - **Done when:** the UI and tests correctly calculate a travel-goal contribution or target date.
 
-## PR 8b — Account statement imports and net worth view
+## PR 8b — Account statement balance imports
 
-- Add account management (create/edit accounts: checking, savings, credit card, 401k, brokerage, mortgage, auto loan, student loan, other) with asset/liability flag.
-- Add CSV/PDF statement import for 401k, brokerage (e.g., Robinhood, Fidelity NetBenefits), mortgage, and loan accounts: extract the balance as of a date, require confirmation, save a balance snapshot.
-- Add manual balance entry for accounts without a statement.
-- Add the net worth dashboard: total assets, total liabilities, net worth (assets − liabilities), and a trend over time from the latest snapshot per account.
-- Add tests that net worth correctly sums assets minus liabilities and that snapshots are workspace-scoped.
-- **Done when:** a sample 401k statement and a mortgage statement import produce confirmed snapshots and the net worth view shows the correct total.
+- Reuse PR 7 account management for checking, savings, credit card, 401(k),
+  brokerage, mortgage, auto loan, student loan, and other accounts, including
+  its manual-balance entry and net-worth dashboard.
+- Implement statement processors for 401(k), brokerage/stocks (for example,
+  Robinhood/Fidelity NetBenefits), mortgage, loan, and other account statements.
+  Accept documented CSV/PDF/image formats, extract candidate account identity,
+  balance, and as-of date locally, require editable confirmation, and save a
+  workspace-scoped asset/liability snapshot only after confirmation.
+- Keep categories unavailable until their processor and review workflow are
+  implemented and tested.
+- Refresh the PR 7 dashboard from confirmed snapshots without duplicating its
+  net-worth calculations or manual-entry flow.
+- Test workspace scoping, that totals do not change before confirmation, and
+  that unsupported categories never claim support.
+- **Done when:** synthetic examples produce confirmed snapshots, unsupported
+  categories never claim support, and the existing dashboard shows correct
+  totals.
+- **Status:** Planned. PR 7 supplies accounts, manual balance entry, and the
+  dashboard; processors and review workflows are not implemented yet.
 
 ## PR 9 — Production readiness and learning documentation
 
@@ -106,12 +130,26 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Expand README and `docs/` with environment setup, architecture diagrams, troubleshooting, and a beginner learning path.
 - **Done when:** a new contributor can run, test, back up, and restore the app locally from documented steps.
 
-## Deferred future PR — LLM advisor with restricted tools
+## PR 10 — LangGraph financial coach
 
-- Keep the model optional and disabled by default. Add only server-side, read-only tools for scoped spending summaries, category comparisons, recurring expenses, budget status, goal projections, and bounded transaction search.
-- Derive the user and workspace from the authenticated session; never accept them as model-controlled parameters. Do not provide raw-file, database, shell, arbitrary-network, write, membership, or money-movement tools.
-- Add consent controls, redacted audit logs, tool-result limits, and adversarial tests for prompt injection, cross-workspace access, unregistered tools, and write-action attempts.
-- **Done when:** the advisor can explain approved aggregate data while every disallowed capability is rejected by automated tests.
+- Add an optional conversational AI powered by LangGraph after accounts,
+  dashboard reporting, budgets, and savings goals are available.
+- Add server-side, workspace-scoped tools for spending questions, account
+  positions, cash and net worth, category comparisons, recurring expenses,
+  budget status, goal projections, and bounded transaction search.
+- Help a member define a goal, calculate the needed monthly savings, and identify
+  factual spending reductions that could close the gap.
+- Allow the coach to draft a goal create/update action, but require a separate
+  explicit human confirmation showing the exact fields before any write. Do not
+  allow money movement, membership changes, raw-file access, database access,
+  shell access, arbitrary network tools, or unregistered actions.
+- Derive the user and workspace from the authenticated session; never accept
+  either as model-controlled input. Add consent controls, redacted audit logs,
+  bounded tool results, and adversarial tests for prompt injection and
+  cross-workspace access.
+- **Done when:** the coach answers fixture-backed financial questions, produces a
+  correct goal plan, creates a goal only after confirmation, and rejects every
+  disallowed capability.
 
 ## Deferred future PR — Bank and credit-card API provider
 
