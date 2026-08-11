@@ -19,6 +19,7 @@ from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
 from app.core.middleware import CSRFMiddleware, PayslipUploadBodyLimitMiddleware
 from app.core.security import SlidingWindowRateLimiter
+from app.dashboard.routes import router as dashboard_router
 from app.db.models import User
 from app.imports.routes import router as import_router
 from app.imports.storage import LocalUploadStore
@@ -103,6 +104,7 @@ def create_app(
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
     application.include_router(workspace_router)
+    application.include_router(dashboard_router)
     application.include_router(account_router)
     application.include_router(category_router)
     application.include_router(import_router)

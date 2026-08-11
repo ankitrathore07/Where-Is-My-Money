@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard · {{ workspace.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Financial dashboard</h1>
+    {% if report and report.as_of_date %}
+      <p>As of {{ report.as_of_date.isoformat() }}.</p>
+    {% else %}
+      <p>Track the accounts and transactions in this workspace.</p>
+    {% endif %}
+  </section>
+
+  {% if error %}
+    <p class="alert" role="alert">{{ error }}</p>
+  {% elif report %}
+    {% if report.as_of_date is none %}
+      <section class="panel" aria-labelledby="dashboard-empty-heading">
+        <h2 id="dashboard-empty-heading">No financial data yet</h2>
+        <p>Add an account and a balance, or import transactions, to begin.</p>
+        <a class="button" href="/workspaces/{{ workspace.id }}/accounts/new">Add your first account</a>
+        <a href="/workspaces/{{ workspace.id }}/imports/new">Import transactions</a>
+      </section>
+    {% else %}
+      <section class="panel" aria-labelledby="net-worth-heading">
+        <p class="eyebrow">Net worth</p>
+        <h2 id="net-worth-heading">{{ format_money(report.position.net_worth_cents) }}</h2>
+        {% if report.highlights %}<p>{{ report.highlights[0].detail }}</p>{% endif %}
+      </section>
+
+      <section class="card-grid" aria-label="Current financial position">
+        <article class="card"><span class="eyebrow">Assets</span><strong>{{ format_money(report.position.assets_cents) }}</strong></article>
+        <article class="card"><span class="eyebrow">Liabilities</span><strong>{{ format_money(report.position.liabilities_cents) }} owed</strong></article>
+        <article class="card"><span class="eyebrow">Cash available</span><strong>{{ format_money(report.position.cash_cents) }}</strong></article>
+        <article class="card"><span class="eyebrow">Savings rate</span><strong>{% set latest_flow = report.cash_flow_series[-1] if report.cash_flow_series else none %}{% if latest_flow and latest_flow.savings_rate_basis_points is not none %}{{ format_basis_points(latest_flow.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</strong></article>
+      </section>
+
+      {% if report.position.missing_balance_count %}
+        <p class="notice" role="status">{{ report.position.missing_balance_count }} account{% if report.position.missing_balance_count == 1 %} needs{% else %}s need{% endif %} balances added before the current position is complete.</p>
+      {% endif %}
+
+      <section class="panel" aria-labelledby="net-worth-trend-heading">
+        <h2 id="net-worth-trend-heading">Net-worth trend</h2>
+        <canvas role="img" aria-label="Five-year net-worth trend. The following table contains the same values."></canvas>
+        <div class="table-wrap">
+          <table>
+            <caption>Net-worth trend fallback</caption>
+            <thead><tr><th>Year</th><th>Assets</th><th>Liabilities</th><th>Net worth</th></tr></thead>
+            <tbody>{% for point in report.net_worth_series %}<tr><td>{{ point.year }}</td><td>{% if point.assets_cents is not none %}{{ format_money(point.assets_cents) }}{% else %}No balance data{% endif %}</td><td>{% if point.liabilities_cents is not none %}{{ format_money(point.liabilities_cents) }}{% else %}No balance data{% endif %}</td><td>{% if point.net_worth_cents is not none %}{{ format_money(point.net_worth_cents) }}{% else %}No balance data{% endif %}</td></tr>{% endfor %}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="cash-flow-trend-heading">
+        <h2 id="cash-flow-trend-heading">Income and spending</h2>
+        <canvas role="img" aria-label="Five-year income and spending trend. The following table contains the same values."></canvas>
+        <div class="table-wrap">
+          <table>
+            <caption>Income and spending fallback</caption>
+            <thead><tr><th>Year</th><th>Income</th><th>Spending</th><th>Saved</th><th>Savings rate</th></tr></thead>
+            <tbody>{% for point in report.cash_flow_series %}<tr><td>{{ point.year }}</td><td>{% if point.income_cents is not none %}{{ format_money(point.income_cents) }}{% else %}No income data{% endif %}</td><td>{% if point.spending_cents is not none %}{{ format_money(point.spending_cents) }}{% else %}No spending data{% endif %}</td><td>{% if point.savings_cents is not none %}{{ format_money(point.savings_cents) }}{% else %}No savings data{% endif %}</td><td>{% if point.savings_rate_basis_points is not none %}{{ format_basis_points(point.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</td></tr>{% endfor %}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="account-positions-heading">
+        <h2 id="account-positions-heading">Account positions</h2>
+        <ul>
+          {% for account in report.position.accounts %}
+            <li><strong>{{ account.name }}</strong> — {{ account_type_labels.get(account.account_type, account.account_type) }}{% if account.institution %}, {{ account.institution }}{% endif %}: {% if account.balance_cents is none %}Balance not added{% else %}{{ format_money(account.balance_cents) }}{% if account.is_liability %} owed{% endif %} (as of {{ account.as_of_date.isoformat() }}){% endif %}</li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <section aria-labelledby="highlights-heading">
+        <h2 id="highlights-heading">Highlights</h2>
+        <div class="card-grid">
+          {% for highlight in report.highlights %}<article class="card"><h3>{{ highlight.title }}</h3><p>{{ highlight.detail }}</p></article>{% endfor %}
+        </div>
+      </section>
+      <script id="dashboard-chart-data" type="application/json">{{ chart_data | tojson }}</script>
+    {% endif %}
+  {% endif %}
+{% endblock %}
