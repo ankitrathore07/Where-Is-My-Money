@@ -53,6 +53,13 @@ def test_calendar_month_is_selectable_and_capped_by_current_as_of_day() -> None:
         resolve_spending_period("quarter", "2026-08", date(2026, 8, 12))
 
 
+def test_default_month_is_zero_padded_for_year_one_on_every_platform() -> None:
+    period = resolve_spending_period("month", "", date.min)
+
+    assert period.selected_month == "0001-01"
+    assert (period.start_date, period.end_date) == (date.min, date.min)
+
+
 def _transaction(
     session,
     workspace_id: int,

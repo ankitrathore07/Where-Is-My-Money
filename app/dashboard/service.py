@@ -73,7 +73,9 @@ def resolve_spending_period(
     if key not in _SPENDING_PERIOD_LABELS:
         raise SpendingPeriodValidationError("Choose an available spending period.")
 
-    month_value = selected_month.strip() or reference_date.strftime("%Y-%m")
+    # ``strftime("%Y")`` is platform-dependent for years before 1000 (glibc
+    # emits ``1`` for year one), while ``date.isoformat()`` is always padded.
+    month_value = selected_month.strip() or reference_date.isoformat()[:7]
     if not _MONTH_PATTERN.fullmatch(month_value):
         raise SpendingPeriodValidationError("Use a valid month in YYYY-MM format.")
     try:
