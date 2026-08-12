@@ -31,6 +31,9 @@
   const queueWrap = document.querySelector(".document-queue-wrap");
   const processButton = document.getElementById("process-documents");
   const liveStatus = document.getElementById("document-live-status");
+  const csrfToken = document.getElementById("document-csrf-token");
+  const pageAlert = document.getElementById("document-page-alert");
+  let processingQueue = false;
   let nextId = 1;
 
   const suffixOf = (name) => {
@@ -93,8 +96,151 @@
       (item) => item.state === "ready",
     ).length;
     processButton.textContent = `Process ${plural(readyCount)}`;
-    processButton.disabled = readyCount === 0;
+    processButton.disabled = processingQueue || readyCount === 0;
     queueWrap.hidden = queue.size === 0;
+  }
+
+  function setItemState(item, state, message) {
+    item.state = state;
+    item.message = message;
+    item.status.textContent = message;
+    item.status.dataset.state = state;
+    refreshBatch();
+  }
+
+  function setPendingControls(item, disabled) {
+    item.select.disabled = disabled;
+    item.remove.disabled = disabled;
+    item.row.setAttribute("aria-busy", disabled ? "true" : "false");
+  }
+
+  function restoreRemoveAction(item) {
+    item.actionCell.replaceChildren(item.remove);
+    item.remove.disabled = false;
+  }
+
+  function markRetryable(item, message) {
+    setPendingControls(item, false);
+    setItemState(item, "retryable", message);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.setAttribute("aria-label", `Retry ${item.file.name}`);
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      await processItem(item);
+      refreshBatch();
+    });
+    item.actionCell.replaceChildren(retry, item.remove);
+  }
+
+  function completeItem(item, href, label, message) {
+    setPendingControls(item, false);
+    setItemState(item, "complete", message || "Ready for review.");
+    item.select.disabled = true;
+    const link = document.createElement("a");
+    link.href = href;
+    link.textContent = label;
+    item.actionCell.replaceChildren(link);
+    item.file = null;
+  }
+
+  function showSessionAlert() {
+    pageAlert.textContent =
+      "Your session could not be verified. Reload or sign in, then process the remaining files.";
+    pageAlert.hidden = false;
+  }
+
+  async function processItem(item) {
+    setPendingControls(item, true);
+    setItemState(item, "processing", "Processing\u2026");
+    announce(`Processing ${item.file.name}`);
+
+    const body = new FormData();
+    body.append("document", item.file, item.file.name);
+    body.append("category_key", item.categoryKey);
+    body.append("retention_choice", form.elements.retention_choice.value);
+    body.append("csrf_token", csrfToken.value);
+
+    let response;
+    try {
+      response = await fetch(config.endpoint, {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrfToken.value },
+      });
+    } catch (_error) {
+      markRetryable(item, "The upload was interrupted. Retry this file.");
+      return "continue";
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (response.redirected || response.status === 401 || response.status === 403) {
+      setPendingControls(item, false);
+      restoreRemoveAction(item);
+      setItemState(item, "ready", "Waiting for a verified session.");
+      showSessionAlert();
+      return "stop";
+    }
+
+    if (!contentType.includes("application/json")) {
+      markRetryable(item, "The server could not process this file. Retry it.");
+      return "continue";
+    }
+
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      markRetryable(item, "The server returned an invalid result. Retry this file.");
+      return "continue";
+    }
+    if (!response.ok || !payload.ok) {
+      if (response.status >= 500) {
+        markRetryable(item, "The server could not process this file. Retry it.");
+      } else {
+        setPendingControls(item, false);
+        restoreRemoveAction(item);
+        setItemState(
+          item,
+          "failed",
+          payload.message || "This file could not be processed.",
+        );
+      }
+      return "continue";
+    }
+
+    const nextUrl = new URL(payload.next_url, window.location.origin);
+    if (nextUrl.origin !== window.location.origin) {
+      markRetryable(item, "The review link was invalid. Retry this file.");
+      return "continue";
+    }
+    completeItem(
+      item,
+      `${nextUrl.pathname}${nextUrl.search}`,
+      payload.next_label,
+      payload.message,
+    );
+    return "continue";
+  }
+
+  async function processQueue(event) {
+    event.preventDefault();
+    if (processingQueue) return;
+    processingQueue = true;
+    pageAlert.hidden = true;
+    processButton.disabled = true;
+    try {
+      for (const item of queue.values()) {
+        if (item.state !== "ready") continue;
+        const action = await processItem(item);
+        if (action === "stop") break;
+      }
+    } finally {
+      processingQueue = false;
+      refreshBatch();
+    }
   }
 
   function refreshItem(item) {
@@ -151,6 +297,7 @@
     }
     select.addEventListener("change", () => {
       item.categoryKey = select.value;
+      restoreRemoveAction(item);
       refreshItem(item);
     });
     categoryCell.append(select);
@@ -239,6 +386,5 @@
     dropZone.classList.remove("is-dragging");
     addFiles(event.dataTransfer.files);
   });
-  const preventSubmit = (event) => event.preventDefault();
-  form.addEventListener("submit", preventSubmit);
+  form.addEventListener("submit", processQueue);
 })();
