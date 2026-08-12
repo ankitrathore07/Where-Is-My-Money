@@ -548,12 +548,10 @@ select:focus-visible {
   }
 
   .site-nav {
+    flex-basis: 100%;
     gap: 0.65rem;
-  }
-
-  .site-nav a:not([href*="/dashboard"]),
-  .site-nav .link-button {
-    display: none;
+    justify-content: flex-start;
+    width: 100%;
   }
 
   .page-content {
