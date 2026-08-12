@@ -105,7 +105,7 @@ who creates it so they can share it privately.
 3. Choose a document category for every file. V1 does not guess or preselect
    categories.
 4. Remove unwanted files with **X**, choose one source-retention policy, and
-   select **Process**.
+   select **Process**. Queued documents process one at a time, in order.
 5. Follow **Map columns** for transaction CSVs or **Review payslip** for
    PDF/image payslips.
 
@@ -119,6 +119,9 @@ succeeds. Selecting **retain** keeps it below the configured private local data
 directory; retained files have no browser download page.
 
 ### Map columns for a transaction CSV
+
+The individual **Import CSV** page remains available in V1 as a fallback and
+detail route; it uses the same transaction-CSV workflow after upload.
 
 Transaction CSVs must be UTF-8 and no larger than 5 MiB. Map the date and
 description columns. Choose either one signed amount column or separate debit
@@ -139,6 +142,9 @@ else, but the visible reviewed decision is what commit saves. A rule change made
 after preview cannot silently replace the decision that the member approved.
 
 ### Review payslip and confirm income
+
+The individual **Import payslip** page remains available in V1 as a fallback
+and detail route; it uses the same payslip workflow after upload.
 
 Payslips must be PDF, PNG, or JPEG files no larger than 10 MiB. The app first
 reads embedded PDF text. For an image or scanned PDF, it runs the Tesseract

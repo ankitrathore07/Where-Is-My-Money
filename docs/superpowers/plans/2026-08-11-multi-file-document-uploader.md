@@ -475,7 +475,9 @@ class UploadBodyLimitMiddleware:
     @staticmethod
     async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
         payslip_route = scope.get("path", "").endswith("/payslips")
-        message = "Payslip upload is too large." if payslip_route else "Document upload is too large."
+        message = (
+            "Payslip upload is too large." if payslip_route else "Document upload is too large."
+        )
         response = PlainTextResponse(message, status_code=status.HTTP_413_CONTENT_TOO_LARGE)
         await response(scope, receive, send)
 ```
@@ -841,7 +843,9 @@ router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["documents"])
 
 
 def _error(code: str, message: str, status_code: int = status.HTTP_400_BAD_REQUEST) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"ok": False, "code": code, "message": message})
+    return JSONResponse(
+        status_code=status_code, content={"ok": False, "code": code, "message": message}
+    )
 
 
 def _process_csv(
@@ -1023,14 +1027,14 @@ async def test_unified_document_page_exposes_manual_queue_contract(tmp_path: Pat
 
     assert response.status_code == 200
     assert 'id="document-files"' in response.text
-    assert 'multiple' in response.text
+    assert "multiple" in response.text
     assert 'id="document-queue-body"' in response.text
     assert 'id="document-category-config"' in response.text
     assert '"retirement_401k_statement"' in response.text
     assert 'value="delete_after_import" checked' in response.text
-    assert f'/workspaces/{workspace_id}/imports/new' in response.text
-    assert f'/workspaces/{workspace_id}/payslips/new' in response.text
-    assert f'/workspaces/{workspace_id}/documents/new' in workspace_page.text
+    assert f"/workspaces/{workspace_id}/imports/new" in response.text
+    assert f"/workspaces/{workspace_id}/payslips/new" in response.text
+    assert f"/workspaces/{workspace_id}/documents/new" in workspace_page.text
     assert "Upload documents" in workspace_page.text
 ```
 
@@ -1273,7 +1277,9 @@ def live_document_app(tmp_path: Path) -> Generator[tuple[str, object], None, Non
     application.state.payslip_extractor = BrowserFakeExtractor()
     port = _free_port()
     server = uvicorn.Server(
-        uvicorn.Config(application, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        uvicorn.Config(
+            application, host="127.0.0.1", port=port, log_level="warning", lifespan="off"
+        )
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -1351,7 +1357,8 @@ def test_picker_adds_multiple_manual_category_rows_and_removes_one(
 
 
 def test_same_file_is_suppressed_and_queue_is_limited_to_ten(
-    signed_in_upload_page: tuple[Page, int], tmp_path: Path,
+    signed_in_upload_page: tuple[Page, int],
+    tmp_path: Path,
 ) -> None:
     page, _ = signed_in_upload_page
     same = tmp_path / "checking.csv"
@@ -1410,7 +1417,9 @@ def test_manual_categories_control_file_eligibility(
     expect(rows.nth(1).locator(".document-status")).to_contain_text("not available yet")
     expect(rows.nth(2).locator(".document-status")).to_contain_text("Remove this file")
     expect(rows.nth(3).locator(".document-status")).to_contain_text("5 MiB limit")
-    expect(rows.nth(4).locator(".document-status")).to_contain_text("Choose a CSV, PDF, PNG, or JPEG")
+    expect(rows.nth(4).locator(".document-status")).to_contain_text(
+        "Choose a CSV, PDF, PNG, or JPEG"
+    )
     expect(page.locator("#process-documents")).to_be_disabled()
 ```
 
@@ -1674,14 +1683,19 @@ Add styles that reuse the current green palette and include these behavior selec
 Add this exact responsive test:
 
 ```python
-@pytest.mark.parametrize("viewport", [{"width": 1280, "height": 800}, {"width": 390, "height": 844}])
+@pytest.mark.parametrize(
+    "viewport", [{"width": 1280, "height": 800}, {"width": 390, "height": 844}]
+)
 def test_queue_has_no_page_overflow_at_supported_widths(
     signed_in_upload_page: tuple[Page, int], viewport: dict[str, int]
 ) -> None:
     page, _ = signed_in_upload_page
     page.set_viewport_size(viewport)
     page.locator("#document-files").set_input_files(
-        [payload("checking.csv", "text/csv", CSV_BYTES), payload("pay.pdf", "application/pdf", b"%PDF")]
+        [
+            payload("checking.csv", "text/csv", CSV_BYTES),
+            payload("pay.pdf", "application/pdf", b"%PDF"),
+        ]
     )
     assert page.evaluate("document.documentElement.scrollWidth") == page.evaluate(
         "document.documentElement.clientWidth"
@@ -1731,9 +1745,11 @@ def test_ready_files_process_sequentially_and_keep_independent_results(
     requests: list[str] = []
     page.on(
         "request",
-        lambda request: requests.append(request.url)
-        if request.method == "POST" and request.url.endswith("/document-uploads")
-        else None,
+        lambda request: (
+            requests.append(request.url)
+            if request.method == "POST" and request.url.endswith("/document-uploads")
+            else None
+        ),
     )
     page.locator("#document-files").set_input_files(
         [
@@ -1809,9 +1825,7 @@ def test_network_failure_can_retry_only_the_failed_row(
             route.continue_()
 
     page.route("**/document-uploads", fail_once)
-    page.locator("#document-files").set_input_files(
-        payload("checking.csv", "text/csv", CSV_BYTES)
-    )
+    page.locator("#document-files").set_input_files(payload("checking.csv", "text/csv", CSV_BYTES))
     row = page.locator("#document-queue-body tr")
     row.locator("select").select_option("transaction_statement")
     page.locator("#process-documents").click()
@@ -1830,9 +1844,11 @@ def test_expired_csrf_stops_before_the_second_ready_file(
     requests: list[str] = []
     page.on(
         "request",
-        lambda request: requests.append(request.url)
-        if request.method == "POST" and request.url.endswith("/document-uploads")
-        else None,
+        lambda request: (
+            requests.append(request.url)
+            if request.method == "POST" and request.url.endswith("/document-uploads")
+            else None
+        ),
     )
     page.locator("#document-files").set_input_files(
         [
@@ -2031,13 +2047,13 @@ def test_repeated_process_click_starts_only_one_request(
     requests: list[str] = []
     page.on(
         "request",
-        lambda request: requests.append(request.url)
-        if request.method == "POST" and request.url.endswith("/document-uploads")
-        else None,
+        lambda request: (
+            requests.append(request.url)
+            if request.method == "POST" and request.url.endswith("/document-uploads")
+            else None
+        ),
     )
-    page.locator("#document-files").set_input_files(
-        payload("checking.csv", "text/csv", CSV_BYTES)
-    )
+    page.locator("#document-files").set_input_files(payload("checking.csv", "text/csv", CSV_BYTES))
     page.locator("#document-queue-body select").select_option("transaction_statement")
     page.locator("#process-documents").evaluate("button => { button.click(); button.click(); }")
     expect(page.get_by_role("link", name="Map columns")).to_be_visible()
