@@ -259,9 +259,7 @@ def test_update_and_get_never_cross_workspace(
 def test_manual_balance_rejects_invalid_amounts(
     session: Session, workspace: Workspace, amount: str, field: str
 ) -> None:
-    account = create_account(
-        session, workspace.id, AccountInput("Savings", "savings", "", False)
-    )
+    account = create_account(session, workspace.id, AccountInput("Savings", "savings", "", False))
     with pytest.raises(AccountValidationError) as error:
         add_manual_balance(
             session,
@@ -276,9 +274,7 @@ def test_manual_balance_rejects_invalid_amounts(
 def test_manual_balance_converts_exact_cents_and_rejects_future_date(
     session: Session, workspace: Workspace
 ) -> None:
-    account = create_account(
-        session, workspace.id, AccountInput("Mortgage", "mortgage", "", True)
-    )
+    account = create_account(session, workspace.id, AccountInput("Mortgage", "mortgage", "", True))
     snapshot = add_manual_balance(
         session,
         workspace.id,
