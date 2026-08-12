@@ -17,8 +17,15 @@ from app.dashboard.presentation import (
     dashboard_page_data,
     format_basis_points,
     format_money,
+    spending_chart_payload,
 )
-from app.dashboard.service import build_dashboard_report
+from app.dashboard.service import (
+    SPENDING_PERIOD_OPTIONS,
+    SpendingPeriodValidationError,
+    build_dashboard_report,
+    build_spending_report,
+    resolve_spending_period,
+)
 from app.db.models import AccountStatementImport, User, Workspace
 from app.db.session import get_db
 from app.workspaces.dependencies import require_workspace
@@ -67,6 +74,9 @@ def _date_error_response(
             report=None,
             page_data=None,
             chart_data=None,
+            spending_report=None,
+            spending_chart_data=None,
+            spending_period_options=SPENDING_PERIOD_OPTIONS,
             format_money=format_money,
             format_basis_points=format_basis_points,
             account_type_labels=_ACCOUNT_TYPE_LABELS,
@@ -82,6 +92,8 @@ async def dashboard(
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
     as_of: str = "",
+    spending_period: str = "month",
+    spending_month: str = "",
     statement_cleanup_failed: int | None = None,
 ) -> HTMLResponse:
     """Render the active member's aggregate financial dashboard."""
@@ -92,6 +104,32 @@ async def dashboard(
             request, user, workspace, "Use a valid date in YYYY-MM-DD format."
         )
     report = build_dashboard_report(session, workspace.id, as_of_date)
+    reference_date = report.as_of_date or as_of_date or date.today()
+    try:
+        period = resolve_spending_period(spending_period, spending_month, reference_date)
+    except SpendingPeriodValidationError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="dashboard/index.html",
+            context=_context(
+                request,
+                user,
+                workspace,
+                error=str(exc),
+                report=report,
+                page_data=dashboard_page_data(report),
+                chart_data=chart_payload(report),
+                spending_report=None,
+                spending_chart_data=None,
+                spending_period_options=SPENDING_PERIOD_OPTIONS,
+                spending_reference_month=reference_date.strftime("%Y-%m"),
+                format_money=format_money,
+                format_basis_points=format_basis_points,
+                account_type_labels=_ACCOUNT_TYPE_LABELS,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    spending_report = build_spending_report(session, workspace.id, period)
     cleanup_import = None
     if statement_cleanup_failed is not None:
         cleanup_import = session.scalar(
@@ -111,6 +149,10 @@ async def dashboard(
             report=report,
             page_data=dashboard_page_data(report),
             chart_data=chart_payload(report),
+            spending_report=spending_report,
+            spending_chart_data=spending_chart_payload(spending_report),
+            spending_period_options=SPENDING_PERIOD_OPTIONS,
+            spending_reference_month=reference_date.strftime("%Y-%m"),
             format_money=format_money,
             format_basis_points=format_basis_points,
             account_type_labels=_ACCOUNT_TYPE_LABELS,

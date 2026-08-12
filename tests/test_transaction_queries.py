@@ -45,6 +45,9 @@ def test_parse_filters_sets_bounded_defaults() -> None:
     assert filters.direction == "all"
     assert filters.subscription == "all"
     assert filters.query == ""
+    assert filters.merchant == ""
+    assert filters.spending_only is False
+    assert filters.review_needed is False
     assert filters.page == 1
     assert filters.page_size == 50
 
@@ -60,6 +63,10 @@ def test_parse_filters_sets_bounded_defaults() -> None:
         ({"page": "abc"}, "page"),
         ({"category_id": "abc"}, "category_id"),
         ({"q": "x" * 101}, "q"),
+        ({"merchant": "x" * 513}, "merchant"),
+        ({"spending": "all"}, "spending"),
+        ({"review": "all"}, "review"),
+        ({"spending": "only", "review": "needed"}, "review"),
     ],
 )
 def test_invalid_filter_is_rejected(params: dict[str, str], field: str) -> None:
@@ -180,6 +187,68 @@ def test_search_matches_description_or_merchant_and_escapes_wildcards(
     assert list_transactions(session, workspace.id, parse_filters({"q": "corner"})).total_items == 1
     result = list_transactions(session, workspace.id, parse_filters({"q": "%_"}))
     assert [item.id for item in result.items] == [literal.id]
+
+
+def test_dashboard_semantic_filters_reproduce_spending_and_review_sets(
+    session: Session, workspace: Workspace
+) -> None:
+    expense = Category(name="Groceries", kind="expense")
+    uncategorized = Category(name="Uncategorized", kind="expense")
+    income = Category(name="Income", kind="income")
+    transfer = Category(name="Transfers", kind="transfer")
+    session.add_all((expense, uncategorized, income, transfer))
+    session.flush()
+    included = _transaction(
+        session,
+        workspace,
+        day=1,
+        description="Market statement text",
+        amount=-100,
+        category=expense,
+        merchant="Exact Market",
+    )
+    _transaction(
+        session, workspace, day=2, description="Unknown", amount=-200, category=uncategorized
+    )
+    _transaction(session, workspace, day=3, description="Wrong", amount=-300, category=income)
+    _transaction(session, workspace, day=4, description="Move", amount=-400, category=transfer)
+    _transaction(session, workspace, day=5, description="Refund", amount=500, category=expense)
+    session.commit()
+
+    spending = list_transactions(
+        session,
+        workspace.id,
+        parse_filters({"spending": "only", "merchant": "Exact Market"}),
+    )
+    review = list_transactions(session, workspace.id, parse_filters({"review": "needed"}))
+
+    assert spending.items == (included,)
+    assert {item.description for item in review.items} == {"Unknown", "Wrong"}
+
+
+def test_exact_merchant_filter_uses_the_same_blank_fallback_as_dashboard(
+    session: Session, workspace: Workspace
+) -> None:
+    expense = Category(name="Groceries", kind="expense")
+    session.add(expense)
+    session.flush()
+    blank = _transaction(
+        session,
+        workspace,
+        day=1,
+        description="   ",
+        amount=-100,
+        category=expense,
+        merchant="   ",
+    )
+
+    result = list_transactions(
+        session,
+        workspace.id,
+        parse_filters({"spending": "only", "merchant": "Merchant not available"}),
+    )
+
+    assert result.items == (blank,)
 
 
 def test_pagination_uses_fifty_rows_and_reports_totals(

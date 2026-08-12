@@ -324,6 +324,143 @@ td {
   padding: 0.45rem 0.65rem;
 }
 
+.dashboard-spending {
+  background: #f4f8f5;
+  border: 1px solid var(--dashboard-grid);
+  border-radius: 1.25rem;
+  margin-top: 1.5rem;
+  padding: clamp(1rem, 4vw, 1.75rem);
+}
+
+.dashboard-spending-heading {
+  align-items: end;
+  display: flex;
+  gap: 1rem 2rem;
+  justify-content: space-between;
+}
+
+.dashboard-spending-heading h2 {
+  color: var(--dashboard-ink);
+  font-family: Georgia, serif;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  margin: 0.25rem 0;
+}
+
+.dashboard-spending-heading p:last-child {
+  color: var(--dashboard-muted);
+  margin: 0;
+}
+
+.dashboard-period-form {
+  align-items: end;
+  display: grid;
+  flex: 0 1 35rem;
+  gap: 0.35rem 0.65rem;
+  grid-template-columns: minmax(9rem, 1fr) minmax(9rem, 1fr) auto;
+}
+
+.dashboard-period-form label {
+  color: var(--dashboard-muted);
+  font-size: 0.75rem;
+}
+
+.dashboard-period-form label:nth-of-type(1) {
+  grid-column: 1;
+}
+
+.dashboard-period-form label:nth-of-type(2) {
+  grid-column: 2;
+}
+
+.dashboard-period-form select,
+.dashboard-period-form input,
+.dashboard-period-form button {
+  margin: 0;
+  min-height: 2.7rem;
+}
+
+.dashboard-period-form select {
+  grid-column: 1;
+}
+
+.dashboard-period-form input {
+  grid-column: 2;
+}
+
+.dashboard-period-form button {
+  grid-column: 3;
+}
+
+.dashboard-spending-total {
+  align-items: baseline;
+  background: #173f2b;
+  border-radius: 0.9375rem;
+  color: #f6fffa;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 1.25rem 0 0.75rem;
+  padding: 1rem 1.25rem;
+}
+
+.dashboard-spending-total span {
+  color: #c1d9d0;
+  font-size: 0.8rem;
+}
+
+.dashboard-spending-total strong {
+  font-family: Georgia, serif;
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+.dashboard-spending-total small {
+  color: #d6e8e1;
+}
+
+.dashboard-spending-total a {
+  color: var(--dashboard-line);
+  margin-left: auto;
+}
+
+.dashboard-breakdown-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-breakdown-panel .dashboard-panel-heading h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.dashboard-breakdown-chart {
+  height: 19rem;
+}
+
+.dashboard-breakdown-chart canvas {
+  display: block;
+  height: 100% !important;
+  max-width: 100%;
+  width: 100% !important;
+}
+
+.dashboard-breakdown-panel table {
+  font-size: 0.82rem;
+}
+
+.dashboard-breakdown-panel th,
+.dashboard-breakdown-panel td {
+  vertical-align: top;
+}
+
+.dashboard-spending-empty {
+  margin: 0;
+}
+
+.dashboard-spending-empty h3 {
+  margin-top: 0;
+}
+
 .dashboard-hero {
   align-items: center;
   background: linear-gradient(125deg, #17493c, #246b58);
@@ -520,7 +657,9 @@ td {
 
 .visually-hidden,
 .dashboard-charts-ready .dashboard-chart-fallback,
-.dashboard-charts-ready .dashboard-net-worth-fallback {
+.dashboard-charts-ready .dashboard-net-worth-fallback,
+.spending-category-chart-ready .dashboard-category-fallback,
+.spending-merchant-chart-ready .dashboard-merchant-fallback {
   border: 0;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
@@ -681,6 +820,7 @@ select:focus-visible {
   }
 
   .dashboard-heading,
+  .dashboard-spending-heading,
   .dashboard-hero,
   .dashboard-main-grid,
   .dashboard-highlight-grid {
@@ -696,12 +836,61 @@ select:focus-visible {
     align-items: stretch;
   }
 
+  .dashboard-spending-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dashboard-period-form {
+    flex-basis: auto;
+  }
+
+  .dashboard-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dashboard-panel-heading {
     align-items: start;
+  }
+
+  .dashboard-period-form {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-period-form label,
+  .dashboard-period-form select,
+  .dashboard-period-form input,
+  .dashboard-period-form button {
+    grid-column: 1;
+  }
+
+  .dashboard-period-form label:nth-of-type(1) {
+    grid-row: 1;
+  }
+
+  .dashboard-period-form select {
+    grid-row: 2;
+  }
+
+  .dashboard-period-form label:nth-of-type(2) {
+    grid-row: 3;
+  }
+
+  .dashboard-period-form input {
+    grid-row: 4;
+  }
+
+  .dashboard-period-form button {
+    grid-row: 5;
+  }
+
+  .dashboard-spending-total a {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
   .dashboard-chart {

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.dashboard.types import DashboardReport
+from app.dashboard.types import DashboardReport, SpendingReport
 
 
 @dataclass(frozen=True)
@@ -70,5 +70,21 @@ def chart_payload(report: DashboardReport) -> dict[str, dict[str, list[str | int
             "labels": [str(point.year) for point in report.cash_flow_series],
             "income": [point.income_cents for point in report.cash_flow_series],
             "spending": [point.spending_cents for point in report.cash_flow_series],
+        },
+    }
+
+
+def spending_chart_payload(
+    report: SpendingReport,
+) -> dict[str, dict[str, list[str | int]]]:
+    """Return exact server-calculated spending breakdowns for local charts."""
+    return {
+        "categories": {
+            "labels": [item.label for item in report.categories],
+            "values": [item.spending_cents for item in report.categories],
+        },
+        "merchants": {
+            "labels": [item.label for item in report.merchants],
+            "values": [item.spending_cents for item in report.merchants],
         },
     }

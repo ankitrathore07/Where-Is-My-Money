@@ -15,7 +15,11 @@ from app.dashboard.demo import (
     seed_dashboard_demo,
     seed_for_email,
 )
-from app.dashboard.service import build_dashboard_report
+from app.dashboard.service import (
+    build_dashboard_report,
+    build_spending_report,
+    resolve_spending_period,
+)
 from app.db.models import Category, Transaction, User, Workspace, WorkspaceMembership
 
 
@@ -38,6 +42,11 @@ def test_seed_dashboard_demo_creates_the_fixed_report_and_rejects_a_repeat(
 
     workspace = seed_dashboard_demo(session, user)
     report = build_dashboard_report(session, workspace.id, date(2026, 8, 10))
+    spending = build_spending_report(
+        session,
+        workspace.id,
+        resolve_spending_period("month", "2026-08", date(2026, 8, 10)),
+    )
 
     assert workspace.name == "Dashboard Demo"
     assert report.position.assets_cents == 36_775_000
@@ -46,6 +55,21 @@ def test_seed_dashboard_demo_creates_the_fixed_report_and_rejects_a_repeat(
     assert report.position.cash_cents == 2_484_000
     assert [point.year for point in report.net_worth_series] == [2022, 2023, 2024, 2025, 2026]
     assert [point.year for point in report.cash_flow_series] == [2022, 2023, 2024, 2025, 2026]
+    assert spending.total_cents == 232_800
+    assert spending.transaction_count == 5
+    assert spending.needs_review_count == 1
+    assert [(item.label, item.spending_cents) for item in spending.categories] == [
+        ("Housing", 180_000),
+        ("Groceries", 33_500),
+        ("Utilities", 12_500),
+        ("Dining & Drinks", 6_800),
+    ]
+    assert [(item.label, item.spending_cents) for item in spending.merchants] == [
+        ("Fictional Apartments", 180_000),
+        ("Neighborhood Market", 33_500),
+        ("City Electric", 12_500),
+        ("Corner Cafe", 6_800),
+    ]
 
     workspace_count = session.scalar(select(func.count()).select_from(Workspace))
     transaction_count = session.scalar(select(func.count()).select_from(Transaction))

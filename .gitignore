@@ -222,3 +222,6 @@ data/
 
 # Local isolated feature worktrees
 .worktrees/
+
+# Local reusable Codex instructions
+LOCAL_PR_DUE_DILIGENCE_INSTRUCTIONS.md
