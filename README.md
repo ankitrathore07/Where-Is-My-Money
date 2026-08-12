@@ -194,19 +194,38 @@ dashboard; choosing the right workspace keeps those views separate.
    as-of date. For an asset, the value is what you own. For a liability, it is
    the positive amount you still owe. You never need to enter a negative balance
    for a liability.
-3. Open **Dashboard**. It brings together assets, liabilities, net worth
+3. Open **Dashboard**. The primary **Where am I spending?** view totals spending
+   by category and merchant for the chosen period. Choose a calendar month, the
+   last 6 months, year to date, a rolling year, or the last 3 or 5 years. A
+   selected current month ends on the dashboard's as-of date; earlier selected
+   months use the complete calendar month. Rolling windows also end on the as-of
+   date and use inclusive dates (for example, August 13 through August 12 for a
+   rolling year ending August 12).
+4. Select any category or merchant in the fallback tables, or **View all
+   supporting transactions**, to open the transaction page with the same dates
+   and spending rules. These links stay workspace-scoped and use exact merchant
+   matching. The tables contain the same values as the locally rendered charts,
+   so totals, transaction counts, and percentages remain available without
+   JavaScript.
+5. The rest of the dashboard brings together assets, liabilities, net worth
    (assets minus liabilities), cash available from checking and savings, and the
    savings rate when the workspace has categorized income transactions. The
    account list shows where money is held. Accounts without a balance are marked
    **Balance not added** and are left out of the totals instead of being treated
    as zero.
-4. Use the five-year net-worth and income-versus-spending views to see the data
+6. Use the five-year net-worth and income-versus-spending views to see the data
    recorded in this workspace. The short highlights are factual, repeatable
    calculations from that data, not personalized advice.
 
 The income-versus-spending view and savings rate use categorized transactions.
 Confirmed payslip income records remain separate today, so they do not change
 those dashboard cash-flow or savings-rate calculations.
+
+The spending breakdown includes only negative transactions assigned to an
+accessible expense category. Positive income, transfers, and positive refunds
+are excluded. Uncategorized or otherwise inconsistent outgoing transactions are
+reported as needing review instead of being silently included; the review link
+opens exactly those outgoing rows for the selected dates.
 
 The dashboard uses deterministic Python calculations: it does not call AI or a
 network service to calculate totals, trends, or highlights. Its Chart.js copy is
@@ -314,6 +333,12 @@ existing workspaces. Running it again for the same user safely reports that the
 Dashboard Demo already exists and that nothing changed; it does not overwrite or
 duplicate the demo. Keep the demo until a future supported deletion flow is
 available—do not remove it by editing the database directly.
+
+The fixed August 2026 demo includes several expense categories and merchants,
+an excluded income deposit and internal transfer, and one outgoing transaction
+that needs category review. This makes the default **Where am I spending?** view,
+its exclusions, review state, charts, fallback tables, and drill-down links
+visible immediately at the printed URL.
 
 ## Categorization rules in plain language
 

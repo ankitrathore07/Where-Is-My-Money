@@ -1,12 +1,20 @@
 from datetime import date
 
-from app.dashboard.presentation import chart_payload, format_basis_points, format_money
+from app.dashboard.presentation import (
+    chart_payload,
+    format_basis_points,
+    format_money,
+    spending_chart_payload,
+)
 from app.dashboard.types import (
     AnnualCashFlow,
     AnnualPosition,
     DashboardHighlight,
     DashboardReport,
     PositionSummary,
+    SpendingBreakdown,
+    SpendingPeriod,
+    SpendingReport,
 )
 
 
@@ -48,3 +56,24 @@ def test_chart_payload_contains_only_chronological_aggregate_series() -> None:
     }
     assert "SECRET INSTITUTION" not in str(payload)
     assert "SECRET DESCRIPTION" not in str(payload)
+
+
+def test_spending_chart_payload_contains_only_breakdown_labels_and_cents() -> None:
+    category = SpendingBreakdown("1", "Groceries", 12_345, 10_000, 2, "/support")
+    merchant = SpendingBreakdown("Market", "Market", 12_345, 10_000, 2, "/merchant")
+    report = SpendingReport(
+        SpendingPeriod("month", "Calendar month", date(2026, 8, 1), date(2026, 8, 10), "2026-08"),
+        12_345,
+        2,
+        1,
+        (category,),
+        (merchant,),
+        "/all",
+        "/review",
+    )
+
+    assert spending_chart_payload(report) == {
+        "categories": {"labels": ["Groceries"], "values": [12_345]},
+        "merchants": {"labels": ["Market"], "values": [12_345]},
+    }
+    assert "/support" not in str(spending_chart_payload(report))

@@ -62,6 +62,12 @@ def _query_for_page(filters: TransactionFilters, page: int) -> str:
         values["subscription"] = filters.subscription
     if filters.query:
         values["q"] = filters.query
+    if filters.merchant:
+        values["merchant"] = filters.merchant
+    if filters.spending_only:
+        values["spending"] = "only"
+    if filters.review_needed:
+        values["review"] = "needed"
     values["page"] = page
     return urlencode(values)
 
@@ -80,6 +86,9 @@ def _filter_values(request: Request) -> dict[str, str]:
             "direction",
             "subscription",
             "q",
+            "merchant",
+            "spending",
+            "review",
         )
     }
 
@@ -125,6 +134,13 @@ async def transaction_list(
             "next_query": next_query,
             "format_money": _format_money,
             "already_imported": request.query_params.get("already_imported") == "1",
+            "semantic_filter_label": (
+                "categorized spending"
+                if filters is not None and filters.spending_only
+                else "transactions needing spending review"
+                if filters is not None and filters.review_needed
+                else None
+            ),
         },
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT if errors else status.HTTP_200_OK,
     )

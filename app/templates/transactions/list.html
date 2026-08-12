@@ -10,9 +10,13 @@
   </section>
 
   {% if already_imported %}<p class="notice" role="status">That CSV was already imported, so no duplicate transactions were added.</p>{% endif %}
+  {% if semantic_filter_label %}<p class="notice" role="status">Showing {{ semantic_filter_label }} supporting the dashboard report.</p>{% endif %}
   {% if errors %}<div class="alert" role="alert"><strong>Correct the filters below.</strong><ul>{% for message in errors.values() %}<li>{{ message }}</li>{% endfor %}</ul></div>{% endif %}
 
   <form action="/workspaces/{{ workspace.id }}/transactions" method="get" class="panel stacked-form">
+    {% if filter_values.merchant %}<input type="hidden" name="merchant" value="{{ filter_values.merchant }}">{% endif %}
+    {% if filter_values.spending %}<input type="hidden" name="spending" value="{{ filter_values.spending }}">{% endif %}
+    {% if filter_values.review %}<input type="hidden" name="review" value="{{ filter_values.review }}">{% endif %}
     <label for="start_date">Start date</label>
     <input id="start_date" name="start_date" type="date" value="{{ filter_values.start_date }}">
     <label for="end_date">End date</label>
@@ -35,7 +39,7 @@
       <option value="no" {% if filter_values.subscription == "no" %}selected{% endif %}>Not subscriptions</option>
     </select>
     <label for="q">Description or merchant</label>
-    <input id="q" name="q" type="search" maxlength="100" value="{{ filter_values.q }}">
+    <input id="q" name="q" type="search" maxlength="100" value="{{ filter_values.q }}" {% if filter_values.merchant %}placeholder="Exact merchant: {{ filter_values.merchant }}"{% endif %}>
     <div><button class="button" type="submit">Apply filters</button> <a href="/workspaces/{{ workspace.id }}/transactions">Clear</a></div>
   </form>
 

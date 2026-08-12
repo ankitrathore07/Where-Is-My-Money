@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal, cast
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import Category, Transaction
@@ -30,6 +30,9 @@ class TransactionFilters:
     direction: Direction = "all"
     subscription: Subscription = "all"
     query: str = ""
+    merchant: str = ""
+    spending_only: bool = False
+    review_needed: bool = False
     page: int = 1
     page_size: int = 50
 
@@ -95,6 +98,17 @@ def parse_filters(params: Mapping[str, str]) -> TransactionFilters:
     query = params.get("q", "").strip()
     if len(query) > 100:
         errors["q"] = "Search must be 100 characters or fewer."
+    merchant = params.get("merchant", "").strip()
+    if len(merchant) > 512:
+        errors["merchant"] = "Merchant must be 512 characters or fewer."
+    spending_value = params.get("spending", "").strip()
+    if spending_value not in {"", "only"}:
+        errors["spending"] = "Choose categorized spending only."
+    review_value = params.get("review", "").strip()
+    if review_value not in {"", "needed"}:
+        errors["review"] = "Choose transactions needing review."
+    if spending_value and review_value:
+        errors["review"] = "Choose spending or review-needed transactions, not both."
 
     if errors:
         raise FilterValidationError(errors)
@@ -106,6 +120,9 @@ def parse_filters(params: Mapping[str, str]) -> TransactionFilters:
         direction=cast(Direction, direction_value),
         subscription=cast(Subscription, subscription_value),
         query=query,
+        merchant=merchant,
+        spending_only=spending_value == "only",
+        review_needed=review_value == "needed",
         page=page,
     )
 
@@ -132,6 +149,19 @@ def list_transactions(
         raise FilterValidationError({"category_id": "Choose an available category."})
 
     predicates = [Transaction.workspace_id == workspace_id]
+    accessible_category = or_(
+        Category.workspace_id.is_(None), Category.workspace_id == workspace_id
+    )
+    categorized_spending = Transaction.category.has(
+        and_(
+            Category.kind == "expense",
+            func.lower(func.trim(Category.name)) != "uncategorized",
+            accessible_category,
+        )
+    )
+    accessible_transfer = Transaction.category.has(
+        and_(Category.kind == "transfer", accessible_category)
+    )
     if filters.start_date is not None:
         predicates.append(
             Transaction.date >= datetime.combine(filters.start_date, time.min, tzinfo=UTC)
@@ -157,6 +187,25 @@ def list_transactions(
             or_(
                 func.lower(Transaction.description).contains(lowered, autoescape=True),
                 func.lower(Transaction.normalized_merchant).contains(lowered, autoescape=True),
+            )
+        )
+    if filters.merchant:
+        merchant_identity = func.trim(
+            func.coalesce(
+                func.nullif(func.trim(Transaction.normalized_merchant), ""),
+                func.nullif(func.trim(Transaction.description), ""),
+                literal("Merchant not available"),
+            )
+        )
+        predicates.append(merchant_identity == filters.merchant)
+    if filters.spending_only:
+        predicates.extend((Transaction.amount_cents < 0, categorized_spending))
+    elif filters.review_needed:
+        predicates.extend(
+            (
+                Transaction.amount_cents < 0,
+                ~categorized_spending,
+                ~accessible_transfer,
             )
         )
 

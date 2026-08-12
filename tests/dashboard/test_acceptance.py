@@ -8,7 +8,11 @@ from sqlalchemy import select
 from app.categorization.builtins import BUILTIN_CATEGORY_DEFINITIONS
 from app.dashboard.demo import seed_dashboard_demo
 from app.dashboard.presentation import chart_payload
-from app.dashboard.service import build_dashboard_report
+from app.dashboard.service import (
+    build_dashboard_report,
+    build_spending_report,
+    resolve_spending_period,
+)
 from app.db.models import Account, AccountBalanceSnapshot, Category, User, Workspace
 from tests.route_helpers import build_route_test_app, complete_sign_in
 
@@ -82,6 +86,16 @@ async def test_signed_in_user_can_view_the_fixed_demo_without_cross_workspace_da
             with factory() as session:
                 first = build_dashboard_report(session, demo_workspace_id, date(2026, 8, 10))
                 second = build_dashboard_report(session, demo_workspace_id, date(2026, 8, 10))
+                first_spending = build_spending_report(
+                    session,
+                    demo_workspace_id,
+                    resolve_spending_period("month", "2026-08", date(2026, 8, 10)),
+                )
+                second_spending = build_spending_report(
+                    session,
+                    demo_workspace_id,
+                    resolve_spending_period("month", "2026-08", date(2026, 8, 10)),
+                )
     finally:
         engine.dispose()
 
@@ -91,6 +105,12 @@ async def test_signed_in_user_can_view_the_fixed_demo_without_cross_workspace_da
     assert "$83,130.00 owed" in response.text
     assert "$284,620.00" in response.text
     assert "$24,840.00" in response.text
+    assert "Where am I spending?" in response.text
+    assert "$2,328.00" in response.text
+    assert "Fictional Apartments" in response.text
+    assert "Neighborhood Market" in response.text
+    assert "1 outgoing transaction needs category review" in response.text
+    assert "Internal savings transfer" not in response.text
     assert response.text.count("<td>2022</td>") == 2
     assert response.text.count("<td>2023</td>") == 2
     assert response.text.count("<td>2024</td>") == 2
@@ -113,3 +133,4 @@ async def test_signed_in_user_can_view_the_fixed_demo_without_cross_workspace_da
     assert foreign_dashboard.status_code == 404
     assert first == second
     assert chart_payload(first) == chart_payload(second)
+    assert first_spending == second_spending

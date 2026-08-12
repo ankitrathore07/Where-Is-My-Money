@@ -27,6 +27,77 @@
     {% if error %}
       <p class="alert" role="alert">{{ error }}</p>
     {% elif report %}
+      <section class="dashboard-spending" aria-labelledby="spending-heading">
+        <div class="dashboard-spending-heading">
+          <div>
+            <p class="eyebrow">Spending overview</p>
+            <h2 id="spending-heading">Where am I spending?</h2>
+            <p>{{ spending_report.period.start_date.isoformat() }} through {{ spending_report.period.end_date.isoformat() }} · Categorized expenses only; income and transfers are excluded.</p>
+          </div>
+          <form action="/workspaces/{{ workspace.id }}/dashboard" method="get" class="dashboard-period-form">
+            {% if request.query_params.get('as_of') %}<input type="hidden" name="as_of" value="{{ request.query_params.get('as_of') }}">{% endif %}
+            <label for="spending_period">Period</label>
+            <select id="spending_period" name="spending_period">
+              {% for value, label in spending_period_options %}<option value="{{ value }}" {% if spending_report.period.key == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+            <label for="spending_month">Calendar month</label>
+            <input id="spending_month" name="spending_month" type="month" max="{{ spending_reference_month }}" value="{{ spending_report.period.selected_month }}">
+            <button class="button" type="submit">Update spending</button>
+          </form>
+        </div>
+
+        <div class="dashboard-spending-total">
+          <span>Total spent · {{ spending_report.period.label }}</span>
+          <strong>{{ format_money(spending_report.total_cents) }}</strong>
+          <small>{{ spending_report.transaction_count }} included transaction{% if spending_report.transaction_count != 1 %}s{% endif %}</small>
+          <a href="{{ spending_report.all_transactions_url }}">View all supporting transactions</a>
+        </div>
+
+        {% if spending_report.needs_review_count %}
+          <p class="notice" role="status">{{ spending_report.needs_review_count }} outgoing transaction{% if spending_report.needs_review_count != 1 %}s need{% else %} needs{% endif %} category review and {% if spending_report.needs_review_count == 1 %}is{% else %}are{% endif %} not included. <a href="{{ spending_report.review_transactions_url }}">Review excluded transactions</a>.</p>
+        {% endif %}
+
+        {% if spending_report.total_cents %}
+          <div class="dashboard-breakdown-grid">
+            <section class="dashboard-panel dashboard-breakdown-panel" aria-labelledby="category-breakdown-heading">
+              <div class="dashboard-panel-heading"><h3 id="category-breakdown-heading">By category</h3><span>{{ spending_report.categories | length }} categor{% if spending_report.categories | length == 1 %}y{% else %}ies{% endif %}</span></div>
+              <div class="dashboard-breakdown-chart"><canvas id="spending-category-chart" role="img" aria-label="Spending by category. The following table contains the same values."></canvas></div>
+              <div class="table-wrap dashboard-category-fallback">
+                <table>
+                  <caption>Spending by category</caption>
+                  <thead><tr><th scope="col">Category</th><th scope="col">Transactions</th><th scope="col">Amount</th><th scope="col">Share</th></tr></thead>
+                  <tbody>{% for item in spending_report.categories %}<tr><th scope="row"><a href="{{ item.transactions_url }}">{{ item.label }}</a></th><td>{{ item.transaction_count }}</td><td>{{ format_money(item.spending_cents) }}</td><td>{{ format_basis_points(item.percentage_basis_points) }}</td></tr>{% endfor %}</tbody>
+                  <tfoot><tr><th scope="row">Total</th><td>{{ spending_report.transaction_count }}</td><td>{{ format_money(spending_report.total_cents) }}</td><td>100.0%</td></tr></tfoot>
+                </table>
+              </div>
+            </section>
+
+            <section class="dashboard-panel dashboard-breakdown-panel" aria-labelledby="merchant-breakdown-heading">
+              <div class="dashboard-panel-heading"><h3 id="merchant-breakdown-heading">By merchant</h3><span>{{ spending_report.merchants | length }} merchant{% if spending_report.merchants | length != 1 %}s{% endif %}</span></div>
+              <div class="dashboard-breakdown-chart"><canvas id="spending-merchant-chart" role="img" aria-label="Spending by merchant. The following table contains the same values."></canvas></div>
+              <div class="table-wrap dashboard-merchant-fallback">
+                <table>
+                  <caption>Spending by merchant</caption>
+                  <thead><tr><th scope="col">Merchant</th><th scope="col">Transactions</th><th scope="col">Amount</th><th scope="col">Share</th></tr></thead>
+                  <tbody>{% for item in spending_report.merchants %}<tr><th scope="row"><a href="{{ item.transactions_url }}">{{ item.label }}</a></th><td>{{ item.transaction_count }}</td><td>{{ format_money(item.spending_cents) }}</td><td>{{ format_basis_points(item.percentage_basis_points) }}</td></tr>{% endfor %}</tbody>
+                  <tfoot><tr><th scope="row">Total</th><td>{{ spending_report.transaction_count }}</td><td>{{ format_money(spending_report.total_cents) }}</td><td>100.0%</td></tr></tfoot>
+                </table>
+              </div>
+            </section>
+          </div>
+        {% elif spending_report.needs_review_count %}
+          <section class="panel dashboard-spending-empty" aria-labelledby="spending-review-empty-heading">
+            <h3 id="spending-review-empty-heading">No reviewed spending in this period</h3>
+            <p>Review the outgoing transactions above to include eligible expenses in the breakdown.</p>
+          </section>
+        {% else %}
+          <section class="panel dashboard-spending-empty" aria-labelledby="spending-empty-heading">
+            <h3 id="spending-empty-heading">No spending in this period</h3>
+            <p>Try another period or import transactions when spending data is available.</p>
+          </section>
+        {% endif %}
+      </section>
+
       {% if page_data.is_empty %}
         <section class="panel" aria-labelledby="dashboard-empty-heading">
           <h2 id="dashboard-empty-heading">No financial data yet</h2>
@@ -111,6 +182,7 @@
         </section>
         <script id="dashboard-chart-data" type="application/json">{{ chart_data | tojson }}</script>
       {% endif %}
+      <script id="spending-chart-data" type="application/json">{{ spending_chart_data | tojson }}</script>
     {% endif %}
   </section>
 {% endblock %}

@@ -1,7 +1,11 @@
 """Workspace-scoped, deterministic financial dashboard calculations."""
 
+import calendar
+import re
+from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from urllib.parse import urlencode
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -13,10 +17,234 @@ from app.dashboard.types import (
     DashboardHighlight,
     DashboardReport,
     PositionSummary,
+    SpendingBreakdown,
+    SpendingPeriod,
+    SpendingReport,
 )
 from app.db.models import Account, AccountBalanceSnapshot, Category, Transaction
 
 _CASH_ACCOUNT_TYPES = {"checking", "savings"}
+_SPENDING_PERIOD_LABELS = {
+    "month": "Calendar month",
+    "last_6_months": "Last 6 months",
+    "year_to_date": "Year to date",
+    "last_1_year": "Rolling last 1 year",
+    "last_3_years": "Last 3 years",
+    "last_5_years": "Last 5 years",
+}
+SPENDING_PERIOD_OPTIONS = tuple(_SPENDING_PERIOD_LABELS.items())
+_MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+
+
+class SpendingPeriodValidationError(ValueError):
+    """Raised when dashboard spending controls do not identify a valid period."""
+
+
+def _month_start(value: date) -> date:
+    return value.replace(day=1)
+
+
+def _month_end(value: date) -> date:
+    return value.replace(day=calendar.monthrange(value.year, value.month)[1])
+
+
+def _shift_months_clamped(value: date, months: int) -> date:
+    month_index = (value.year - 1) * 12 + value.month - 1 + months
+    if month_index <= 0:
+        year, month = 1, 1
+    else:
+        year, zero_based_month = divmod(month_index, 12)
+        year += 1
+        month = zero_based_month + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _rolling_start(reference_date: date, months: int) -> date:
+    shifted = _shift_months_clamped(reference_date, -months)
+    return shifted + timedelta(days=1) if shifted > date.min else date.min
+
+
+def resolve_spending_period(
+    period_key: str, selected_month: str, reference_date: date
+) -> SpendingPeriod:
+    """Resolve one validated inclusive reporting window from dashboard controls."""
+    key = period_key.strip() or "month"
+    if key not in _SPENDING_PERIOD_LABELS:
+        raise SpendingPeriodValidationError("Choose an available spending period.")
+
+    # ``strftime("%Y")`` is platform-dependent for years before 1000 (glibc
+    # emits ``1`` for year one), while ``date.isoformat()`` is always padded.
+    month_value = selected_month.strip() or reference_date.isoformat()[:7]
+    if not _MONTH_PATTERN.fullmatch(month_value):
+        raise SpendingPeriodValidationError("Use a valid month in YYYY-MM format.")
+    try:
+        month_date = date.fromisoformat(f"{month_value}-01")
+    except ValueError as exc:
+        raise SpendingPeriodValidationError("Use a valid month in YYYY-MM format.") from exc
+    if month_date > _month_start(reference_date):
+        raise SpendingPeriodValidationError("Spending month cannot be after the as-of month.")
+
+    if key == "month":
+        start_date = month_date
+        end_date = min(_month_end(month_date), reference_date)
+    elif key == "last_6_months":
+        start_date = _rolling_start(reference_date, 6)
+        end_date = reference_date
+    elif key == "year_to_date":
+        start_date = date(reference_date.year, 1, 1)
+        end_date = reference_date
+    else:
+        years = {"last_1_year": 1, "last_3_years": 3, "last_5_years": 5}[key]
+        start_date = _rolling_start(reference_date, years * 12)
+        end_date = reference_date
+    return SpendingPeriod(key, _SPENDING_PERIOD_LABELS[key], start_date, end_date, month_value)
+
+
+def _period_datetime_predicates(period: SpendingPeriod):
+    predicates = [Transaction.date >= datetime.combine(period.start_date, time.min, tzinfo=UTC)]
+    if period.end_date == date.max:
+        predicates.append(
+            Transaction.date <= datetime.combine(period.end_date, time.max, tzinfo=UTC)
+        )
+    else:
+        predicates.append(
+            Transaction.date
+            < datetime.combine(period.end_date + timedelta(days=1), time.min, tzinfo=UTC)
+        )
+    return predicates
+
+
+def _spending_transactions_url(
+    workspace_id: int,
+    period: SpendingPeriod,
+    *,
+    category_id: int | None = None,
+    merchant: str = "",
+    review_needed: bool = False,
+) -> str:
+    values: dict[str, str | int] = {
+        "start_date": period.start_date.isoformat(),
+        "end_date": period.end_date.isoformat(),
+    }
+    if review_needed:
+        values["review"] = "needed"
+    else:
+        values["direction"] = "expense"
+        values["spending"] = "only"
+    if category_id is not None:
+        values["category_id"] = category_id
+    if merchant:
+        values["merchant"] = merchant
+    return f"/workspaces/{workspace_id}/transactions?{urlencode(values)}"
+
+
+def _percentage_basis_points(amount_cents: int, total_cents: int) -> int:
+    if total_cents <= 0:
+        return 0
+    return int(
+        (Decimal(amount_cents) / Decimal(total_cents) * Decimal(10_000)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+
+
+def build_spending_report(
+    session: Session,
+    workspace_id: int,
+    period: SpendingPeriod,
+) -> SpendingReport:
+    """Aggregate categorized outflows for one workspace and inclusive period."""
+    rows = session.execute(
+        select(Transaction, Category)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.amount_cents < 0,
+            *_period_datetime_predicates(period),
+        )
+        .order_by(Transaction.date, Transaction.id)
+    )
+    category_totals: dict[tuple[int, str], list[int]] = defaultdict(lambda: [0, 0])
+    merchant_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    total_cents = 0
+    transaction_count = 0
+    needs_review_count = 0
+
+    for transaction, category in rows:
+        category_is_accessible = category is not None and (
+            category.workspace_id is None or category.workspace_id == workspace_id
+        )
+        if category_is_accessible and category.kind == "transfer":
+            continue
+        if (
+            not category_is_accessible
+            or category.kind != "expense"
+            or category.name.strip().casefold() == "uncategorized"
+        ):
+            needs_review_count += 1
+            continue
+
+        amount = -transaction.amount_cents
+        total_cents += amount
+        transaction_count += 1
+        category_key = (category.id, category.name.strip())
+        category_totals[category_key][0] += amount
+        category_totals[category_key][1] += 1
+        merchant_label = (
+            (transaction.normalized_merchant or "").strip()
+            or transaction.description.strip()
+            or "Merchant not available"
+        )
+        merchant_key = merchant_label
+        merchant_totals[merchant_key][0] += amount
+        merchant_totals[merchant_key][1] += 1
+
+    categories = tuple(
+        SpendingBreakdown(
+            key=str(category_id),
+            label=category_name,
+            spending_cents=amount_and_count[0],
+            percentage_basis_points=_percentage_basis_points(amount_and_count[0], total_cents),
+            transaction_count=amount_and_count[1],
+            transactions_url=_spending_transactions_url(
+                workspace_id, period, category_id=category_id
+            ),
+        )
+        for (category_id, category_name), amount_and_count in sorted(
+            category_totals.items(),
+            key=lambda item: (-item[1][0], item[0][1].casefold(), item[0][0]),
+        )
+    )
+    merchants = tuple(
+        SpendingBreakdown(
+            key=merchant_key,
+            label=merchant_label,
+            spending_cents=amount_and_count[0],
+            percentage_basis_points=_percentage_basis_points(amount_and_count[0], total_cents),
+            transaction_count=amount_and_count[1],
+            transactions_url=_spending_transactions_url(
+                workspace_id, period, merchant=merchant_label
+            ),
+        )
+        for merchant_key, amount_and_count in sorted(
+            merchant_totals.items(),
+            key=lambda item: (-item[1][0], item[0].casefold(), item[0]),
+        )
+        for merchant_label in (merchant_key,)
+    )
+    return SpendingReport(
+        period=period,
+        total_cents=total_cents,
+        transaction_count=transaction_count,
+        needs_review_count=needs_review_count,
+        categories=categories,
+        merchants=merchants,
+        all_transactions_url=_spending_transactions_url(workspace_id, period),
+        review_transactions_url=_spending_transactions_url(
+            workspace_id, period, review_needed=True
+        ),
+    )
 
 
 def _workspace_accounts(session: Session, workspace_id: int) -> tuple[Account, ...]:

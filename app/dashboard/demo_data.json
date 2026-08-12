@@ -43,6 +43,14 @@
     {"date": "2025-06-15", "description": "Demo payroll 2025", "amount_cents": 9000000, "category": "Income"},
     {"date": "2025-06-16", "description": "Demo household expenses 2025", "amount_cents": -5400000, "category": "Housing"},
     {"date": "2026-06-15", "description": "Demo payroll 2026", "amount_cents": 9000000, "category": "Income"},
-    {"date": "2026-06-16", "description": "Demo household expenses 2026", "amount_cents": -5300000, "category": "Groceries"}
+    {"date": "2026-06-16", "description": "Demo household expenses 2026", "amount_cents": -5300000, "category": "Groceries"},
+    {"date": "2026-08-01", "description": "Demo payroll August 2026", "amount_cents": 350000, "category": "Income"},
+    {"date": "2026-08-02", "description": "Fictional Apartments", "amount_cents": -180000, "category": "Housing"},
+    {"date": "2026-08-03", "description": "Neighborhood Market", "amount_cents": -24500, "category": "Groceries"},
+    {"date": "2026-08-04", "description": "City Electric", "amount_cents": -12500, "category": "Utilities"},
+    {"date": "2026-08-05", "description": "Corner Cafe", "amount_cents": -6800, "category": "Dining & Drinks"},
+    {"date": "2026-08-06", "description": "Neighborhood Market", "amount_cents": -9000, "category": "Groceries"},
+    {"date": "2026-08-07", "description": "Internal savings transfer", "amount_cents": -50000, "category": "Transfers"},
+    {"date": "2026-08-08", "description": "Demo item to review", "amount_cents": -4500, "category": "Uncategorized"}
   ]
 }

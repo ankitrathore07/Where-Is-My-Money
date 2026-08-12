@@ -50,6 +50,37 @@ class DashboardHighlight:
 
 
 @dataclass(frozen=True)
+class SpendingPeriod:
+    key: str
+    label: str
+    start_date: date
+    end_date: date
+    selected_month: str
+
+
+@dataclass(frozen=True)
+class SpendingBreakdown:
+    key: str
+    label: str
+    spending_cents: int
+    percentage_basis_points: int
+    transaction_count: int
+    transactions_url: str
+
+
+@dataclass(frozen=True)
+class SpendingReport:
+    period: SpendingPeriod
+    total_cents: int
+    transaction_count: int
+    needs_review_count: int
+    categories: tuple[SpendingBreakdown, ...]
+    merchants: tuple[SpendingBreakdown, ...]
+    all_transactions_url: str
+    review_transactions_url: str
+
+
+@dataclass(frozen=True)
 class DashboardReport:
     as_of_date: date | None
     has_transactions: bool
