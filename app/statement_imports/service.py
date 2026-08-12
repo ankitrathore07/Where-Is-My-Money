@@ -1,12 +1,22 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import AccountStatementImport, UploadedFile, Workspace
+from app.db.models import (
+    Account,
+    AccountBalanceSnapshot,
+    AccountStatementImport,
+    UploadedFile,
+    Workspace,
+)
 from app.payslips.extraction import ExtractedText
-from app.statement_imports.parsing import parse_wimm_csv
+from app.statement_imports.parsing import parse_wimm_csv, validate_statement_review
 from app.statement_imports.processors import process_statement_text
 from app.statement_imports.storage import StatementStorageError, StatementUploadStore
 from app.statement_imports.types import StatementFormatError, compatible_account_types
@@ -129,3 +139,101 @@ def ingest_one_statement(
                     "cleanup_failed", "The invalid private statement could not be removed."
                 ) from exc
         raise
+
+
+def list_compatible_accounts(
+    session: Session, workspace_id: int, category: str
+) -> tuple[Account, ...]:
+    account_types = compatible_account_types(category)
+    return tuple(
+        session.scalars(
+            select(Account)
+            .where(
+                Account.workspace_id == workspace_id,
+                Account.account_type.in_(account_types),
+            )
+            .order_by(func.lower(Account.name), Account.id)
+        )
+    )
+
+
+@dataclass(frozen=True)
+class StatementConfirmationResult:
+    snapshot: AccountBalanceSnapshot
+    cleanup_failed: bool
+    already_confirmed: bool
+
+
+def _existing_statement_snapshot(
+    session: Session, pending: AccountStatementImport
+) -> AccountBalanceSnapshot | None:
+    return session.scalar(
+        select(AccountBalanceSnapshot).where(
+            AccountBalanceSnapshot.statement_import_id == pending.id,
+            AccountBalanceSnapshot.workspace_id == pending.workspace_id,
+        )
+    )
+
+
+def confirm_statement_import(
+    session: Session,
+    store: StatementUploadStore,
+    pending: AccountStatementImport,
+    form: Mapping[str, str],
+    *,
+    today: date,
+) -> StatementConfirmationResult:
+    existing = _existing_statement_snapshot(session, pending)
+    if existing is not None:
+        return StatementConfirmationResult(
+            existing,
+            pending.review_status == "confirmed_cleanup_failed",
+            True,
+        )
+    if pending.review_status != "pending":
+        raise StatementImportError("not_pending", "This statement is not waiting for confirmation.")
+    values = validate_statement_review(form, today=today)
+    account = session.scalar(
+        select(Account).where(
+            Account.id == values.account_id,
+            Account.workspace_id == pending.workspace_id,
+            Account.account_type.in_(compatible_account_types(pending.statement_category)),
+        )
+    )
+    if account is None:
+        raise StatementImportError("account_not_found", "Account not found.")
+
+    snapshot = AccountBalanceSnapshot(
+        workspace_id=pending.workspace_id,
+        account_id=account.id,
+        balance_cents=values.balance_cents,
+        as_of_date=values.as_of_date,
+        source="statement_import",
+        uploaded_file_id=pending.uploaded_file_id,
+        statement_import_id=pending.id,
+    )
+    pending.account_id = account.id
+    pending.confirmed_fields = values.to_json()
+    pending.review_status = "confirmed"
+    session.add(snapshot)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = _existing_statement_snapshot(session, pending)
+        if existing is None:
+            raise
+        return StatementConfirmationResult(existing, False, True)
+
+    cleanup_failed = False
+    uploaded = pending.uploaded_file
+    if uploaded.retention_choice == "delete_after_import" and not uploaded.deleted:
+        try:
+            store.delete(uploaded.storage_path)
+        except (OSError, StatementStorageError):
+            cleanup_failed = True
+            pending.review_status = "confirmed_cleanup_failed"
+        else:
+            uploaded.deleted = True
+        session.commit()
+    return StatementConfirmationResult(snapshot, cleanup_failed, False)

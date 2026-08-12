@@ -1,11 +1,17 @@
 import csv
 import re
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 
 from app.accounts.service import MAX_BALANCE_CENTS
-from app.statement_imports.types import StatementCandidate, StatementFormatError
+from app.statement_imports.types import (
+    StatementCandidate,
+    StatementFormatError,
+    StatementReviewValidationError,
+    StatementReviewValues,
+)
 
 CSV_HEADER = (
     "account_name",
@@ -76,4 +82,52 @@ def parse_wimm_csv(data: bytes) -> StatementCandidate:
         balance_cents=parse_money(values["total_balance"]),
         as_of_date=as_of_date,
         extraction_method="wimm_csv",
+    )
+
+
+def validate_statement_review(form: Mapping[str, str], *, today: date) -> StatementReviewValues:
+    errors: dict[str, str] = {}
+    try:
+        account_id = int(str(form.get("account_id", "")))
+        if account_id <= 0:
+            raise ValueError
+    except ValueError:
+        errors["account_id"] = "Choose an account."
+        account_id = 0
+
+    account_name = normalize_text(str(form.get("account_name", "")))
+    if not account_name or len(account_name) > 255:
+        errors["account_name"] = "Enter an account identity using 255 characters or fewer."
+    institution_text = normalize_text(str(form.get("institution", "")))
+    institution = institution_text or None
+    if institution is not None and len(institution) > 255:
+        errors["institution"] = "Use 255 characters or fewer."
+    account_last_four_text = str(form.get("account_last_four", "")).strip()
+    account_last_four = account_last_four_text or None
+    if account_last_four is not None and not re.fullmatch(r"[0-9]{4}", account_last_four, re.ASCII):
+        errors["account_last_four"] = "Use exactly four digits or leave this blank."
+
+    try:
+        balance_cents = parse_money(str(form.get("total_balance", "")))
+    except StatementFormatError:
+        errors["total_balance"] = "Enter a non-negative amount with at most two decimals."
+        balance_cents = 0
+    raw_date = str(form.get("as_of_date", "")).strip()
+    try:
+        as_of_date = date.fromisoformat(raw_date)
+        if as_of_date > today:
+            raise ValueError
+    except ValueError:
+        errors["as_of_date"] = "Enter a valid date that is not in the future."
+        as_of_date = today
+
+    if errors:
+        raise StatementReviewValidationError(errors)
+    return StatementReviewValues(
+        account_id=account_id,
+        account_name=account_name,
+        institution=institution,
+        account_last_four=account_last_four,
+        balance_cents=balance_cents,
+        as_of_date=as_of_date,
     )
