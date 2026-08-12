@@ -31,7 +31,7 @@
         <legend>Choose exactly one planning input</legend>
         <div>
           <label for="target-date">Target date</label>
-          <input id="target-date" name="target_date" type="date" min="{{ today.isoformat() }}" value="{{ values.target_date }}">
+          <input id="target-date" name="target_date" type="date" {% if not goal %}min="{{ today.isoformat() }}"{% endif %} value="{{ values.target_date }}">
           {% if field_errors.target_date %}<p class="field-error">{{ field_errors.target_date }}</p>{% endif %}
         </div>
         <p class="planning-or">or</p>

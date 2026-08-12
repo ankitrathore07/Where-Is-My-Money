@@ -132,12 +132,12 @@ async def planning(
 @router.post("/budgets", dependencies=[Depends(require_csrf)])
 async def budget_save(
     request: Request,
-    category_id: Annotated[str, Form()],
-    period_month: Annotated[str, Form()],
-    amount: Annotated[str, Form()],
     user: Annotated[User, Depends(require_current_user)],
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
+    category_id: Annotated[str, Form()] = "",
+    period_month: Annotated[str, Form()] = "",
+    amount: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Persist a category limit only after an explicit member submission."""
     try:

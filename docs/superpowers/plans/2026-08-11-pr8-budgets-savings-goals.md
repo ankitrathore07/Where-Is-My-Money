@@ -70,6 +70,7 @@ class BudgetSuggestion:
     median_cents: int
     suggested_cents: int
 
+
 @dataclass(frozen=True)
 class BudgetLine:
     category_id: int
@@ -79,6 +80,7 @@ class BudgetLine:
     spent_cents: int
     remaining_cents: int | None
     suggestion: BudgetSuggestion | None
+
 
 @dataclass(frozen=True)
 class BudgetMonthReport:
@@ -204,6 +206,7 @@ class GoalInput:
     current_amount_cents: int
     target_date: date | None
     monthly_contribution_cents: int | None
+
 
 @dataclass(frozen=True)
 class GoalProjection:

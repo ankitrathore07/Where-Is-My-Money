@@ -210,3 +210,36 @@ async def test_budget_post_rejects_invalid_and_foreign_values_without_leak(
     assert foreign.status_code == 404
     assert "SECRET FOREIGN BUDGET" not in foreign.text
     assert budget_count == 0
+
+
+@pytest.mark.anyio
+async def test_blank_budget_amount_returns_the_editable_planning_page(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                category = Category(workspace_id=workspace_id, name="Travel", kind="expense")
+                session.add(category)
+                session.commit()
+                category_id = category.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/planning/budgets",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "category_id": str(category_id),
+                    "period_month": "2026-08",
+                    "amount": "",
+                },
+            )
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Enter a dollar amount with at most two decimals." in response.text
+    assert "Monthly budget · August 2026" in response.text

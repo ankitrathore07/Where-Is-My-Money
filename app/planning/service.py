@@ -2,7 +2,7 @@
 
 import calendar
 import re
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import or_, select
@@ -65,6 +65,8 @@ def _month_end(value: date) -> date:
 
 
 def _transaction_date(value: datetime) -> date:
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        return value.astimezone(UTC).date()
     return value.date()
 
 
@@ -97,8 +99,8 @@ def _spending_by_category_and_month(
             Transaction.workspace_id == workspace_id,
             Transaction.category_id.in_(accessible),
             Transaction.amount_cents < 0,
-            Transaction.date >= datetime.combine(start, time.min),
-            Transaction.date < datetime.combine(end_exclusive, time.min),
+            Transaction.date >= datetime.combine(start, time.min, tzinfo=UTC),
+            Transaction.date < datetime.combine(end_exclusive, time.min, tzinfo=UTC),
         )
     )
     for transaction in transactions:

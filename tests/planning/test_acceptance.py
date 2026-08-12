@@ -234,3 +234,36 @@ async def test_goal_edit_updates_projection_and_hides_foreign_goal(
     assert "$640.00 per month" in page.text
     assert foreign_get.status_code == foreign_post.status_code == 404
     assert "SECRET FOREIGN GOAL" not in foreign_get.text + foreign_post.text
+
+
+@pytest.mark.anyio
+async def test_overdue_goal_edit_allows_the_existing_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(planning_routes, "_utc_today", lambda: AS_OF)
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                goal = SavingsGoal(
+                    workspace_id=workspace_id,
+                    name="Overdue travel",
+                    target_amount_cents=500_000,
+                    current_amount_cents=100_000,
+                    target_date=date(2026, 7, 31),
+                )
+                session.add(goal)
+                session.commit()
+                goal_id = goal.id
+            response = await client.get(f"/workspaces/{workspace_id}/planning/goals/{goal_id}/edit")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert 'value="2026-07-31"' in response.text
+    assert 'min="2026-08-11"' not in response.text

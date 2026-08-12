@@ -106,6 +106,12 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - Add editable budget suggestions and monthly remaining-spend views.
 - Add savings goals with target amount, current savings, deadline/monthly contribution calculations, and on-track status.
 - **Done when:** the UI and tests correctly calculate a travel-goal contribution or target date.
+- **Status:** Implemented with explainable prior-three-month median suggestions
+  plus a 10% integer-cent buffer, explicit accept/edit budget writes,
+  selected-month spending and remaining views, and workspace-scoped savings
+  goals that calculate the missing contribution or deadline with completed,
+  on-track, and overdue states. Fixed travel fixtures verify both calculation
+  directions without AI, bank connections, uploads, or money movement.
 
 ## PR 8b — Account statement balance imports
 

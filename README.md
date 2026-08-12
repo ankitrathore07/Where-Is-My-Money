@@ -6,11 +6,12 @@ sign-in, private personal workspaces, shared household workspaces, pending email
 invitations, route-level workspace authorization, reviewed CSV imports,
 deterministic transaction categorization, reviewed local payslip imports with
 gross/net income summaries, and a centralized financial dashboard with accounts
-and manual balances.
+and manual balances. It also includes explicit monthly budgets and deterministic
+savings-goal projections.
 
-The application does not yet connect to banks, calculate budgets, or call an
-LLM. Those are separate later pull requests so each privacy boundary can be
-reviewed and tested before financial workflows rely on it.
+The application does not connect to banks, move money, or call an LLM. Those are
+separate later pull requests so each privacy boundary can be reviewed and tested
+before financial workflows rely on it.
 
 ## What you need
 
@@ -155,6 +156,37 @@ The dashboard uses deterministic Python calculations: it does not call AI or a
 network service to calculate totals, trends, or highlights. Its Chart.js copy is
 bundled and served locally, so the dashboard does not need a chart CDN. If
 JavaScript is unavailable, the page still shows the chart values in tables.
+
+## Plan monthly budgets and savings goals
+
+Open **Planning** inside a personal or household workspace. The selected budget
+month stays inside that workspace and uses only its categorized expense
+transactions.
+
+For every eligible expense category, the page totals the three complete calendar
+months before the selected month, takes the middle (median) monthly total, and
+adds a 10% buffer. For example, an August plan uses May, June, and July. All
+three totals and the exact source dates remain visible so the suggestion is
+explainable. A month with no spending counts as zero. This can produce a valid
+$0.00 suggestion when spending occurred in only one of the three months.
+
+A suggestion is never a budget by itself. Select **Accept suggestion**, or edit
+the dollar amount and save it, to create that category's monthly limit. The
+accepted row then shows the limit, selected-month spending, and remaining amount.
+A negative remaining amount means the category is over its limit. Every amount
+is calculated and stored in integer cents.
+
+To plan savings, select **New savings goal** and enter a name, target amount, and
+current savings. Then choose exactly one planning input:
+
+- enter a target date to calculate the monthly contribution; or
+- enter a monthly contribution to calculate the target date.
+
+The current calendar month counts as a contribution month. Contributions round
+up to the next cent so the projection does not fall short. Goal cards show the
+supplied input, calculated value, remaining amount, and whether the plan is on
+track, completed, or past an unmet deadline. These are deterministic scenarios,
+not automatic transfers or guarantees; the app never moves money.
 
 ### Try the synthetic dashboard demo
 
@@ -311,6 +343,7 @@ database volume.
     app/transactions/           Scoped queries, manual edits, and future merchant rules
     app/accounts/               Workspace account setup and manual balance snapshots
     app/dashboard/              Deterministic financial dashboard and synthetic demo
+    app/planning/               Explicit budgets and savings-goal projections
     app/core/config.py          Environment settings and production validation
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
     app/core/middleware.py      Browser CSRF cookie and form enforcement
@@ -328,8 +361,8 @@ database volume.
 
 ## What's next
 
-PR 8 adds editable budgets and savings goals. LangGraph is reserved for PR 10's
-optional financial coach, after accounts, budgets, and savings goals exist. That
-later assistant can answer scoped money questions and draft a goal plan, but a
-person must explicitly confirm the exact goal fields before any goal is created
-or changed. It will never move money.
+PR 8b adds reviewed account-statement balance extraction without changing the
+manual account flow. LangGraph is reserved for PR 10's optional financial coach.
+That later assistant can answer scoped money questions and draft a goal plan,
+but a person must explicitly confirm the exact goal fields before any goal is
+created or changed. It will never move money.
