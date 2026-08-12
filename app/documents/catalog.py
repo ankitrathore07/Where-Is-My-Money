@@ -26,6 +26,9 @@ STATEMENT_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType(
         **PAYSLIP_CONTENT_TYPES,
     }
 )
+TRANSACTION_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {".csv": CSV_CONTENT_TYPES, ".pdf": PAYSLIP_CONTENT_TYPES[".pdf"]}
+)
 NO_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType({})
 
 
@@ -40,10 +43,22 @@ DOCUMENT_CATEGORIES = (
     DocumentCategory(
         "transaction_statement",
         "Bank or credit-card transaction statement",
-        "csv_import",
-        CSV_CONTENT_TYPES_BY_SUFFIX,
+        "transaction_import",
+        TRANSACTION_CONTENT_TYPES,
     ),
     DocumentCategory("payslip", "Payslip", "payslip", PAYSLIP_CONTENT_TYPES),
+    DocumentCategory(
+        "bank_balance_statement",
+        "Checking or savings balance statement",
+        "statement_balance",
+        STATEMENT_CONTENT_TYPES,
+    ),
+    DocumentCategory(
+        "credit_card_balance_statement",
+        "Credit-card balance statement",
+        "statement_balance",
+        STATEMENT_CONTENT_TYPES,
+    ),
     DocumentCategory(
         "retirement_401k_statement",
         "401(k) retirement statement",
@@ -94,8 +109,8 @@ def validate_processable_upload(
     allowed_types = category.content_types_by_suffix.get(suffix)
     normalized_type = (content_type or "").casefold()
     if allowed_types is None or normalized_type not in allowed_types:
-        if category.processor == "csv_import":
-            expected = "CSV"
+        if category.processor == "transaction_import":
+            expected = "CSV or PDF"
         elif category.processor == "payslip":
             expected = "PDF, PNG, or JPEG"
         else:
@@ -110,7 +125,7 @@ def client_catalog(
     *, max_csv_bytes: int, max_payslip_bytes: int, max_statement_bytes: int
 ) -> list[dict[str, object]]:
     limits = {
-        "csv_import": max_csv_bytes,
+        "transaction_import": max(max_csv_bytes, max_statement_bytes),
         "payslip": max_payslip_bytes,
         "statement_balance": max_statement_bytes,
     }

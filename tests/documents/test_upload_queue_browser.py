@@ -157,10 +157,10 @@ def test_manual_categories_control_file_eligibility(
     page, _ = signed_in_upload_page
     page.locator("#document-files").set_input_files(
         [
-            payload("wrong.pdf", "application/pdf", b"%PDF-wrong"),
+            payload("wrong.png", "image/png", b"not-an-image"),
             payload("statement.pdf", "application/pdf", b"%PDF-statement"),
             payload("unlisted.pdf", "application/pdf", b"%PDF-unlisted"),
-            payload("large.csv", "text/csv", b"x" * (5 * 1024 * 1024 + 1)),
+            payload("large.csv", "text/csv", b"x" * (10 * 1024 * 1024 + 1)),
             payload("notes.txt", "text/plain", b"not supported"),
         ]
     )
@@ -173,7 +173,7 @@ def test_manual_categories_control_file_eligibility(
     expect(rows.nth(0).locator(".document-status")).to_contain_text("does not support")
     expect(rows.nth(1).locator(".document-status")).to_contain_text("Ready to process")
     expect(rows.nth(2).locator(".document-status")).to_contain_text("Remove this file")
-    expect(rows.nth(3).locator(".document-status")).to_contain_text("5 MiB limit")
+    expect(rows.nth(3).locator(".document-status")).to_contain_text("10 MiB limit")
     expect(rows.nth(4).locator(".document-status")).to_contain_text(
         "Choose a CSV, PDF, PNG, or JPEG"
     )

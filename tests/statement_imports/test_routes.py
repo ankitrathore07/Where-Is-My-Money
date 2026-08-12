@@ -37,7 +37,7 @@ async def test_statement_routes_require_authentication(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_accounts_show_import_only_for_supported_types(tmp_path: Path) -> None:
+async def test_accounts_show_import_for_every_supported_account_type(tmp_path: Path) -> None:
     application, factory, engine = build_route_test_app(tmp_path)
     try:
         async with AsyncClient(
@@ -67,15 +67,16 @@ async def test_accounts_show_import_only_for_supported_types(tmp_path: Path) -> 
                     account.name: account.id for account in session.scalars(select(Account))
                 }
             response = await client.get(f"/workspaces/{workspace_id}/accounts")
-            unsupported = await client.get(
+            checking_upload = await client.get(
                 f"/workspaces/{workspace_id}/accounts/{accounts['Checking']}/statements/new"
             )
     finally:
         engine.dispose()
     assert response.status_code == 200
     assert f"/accounts/{accounts['Brokerage']}/statements/new" in response.text
-    assert f"/accounts/{accounts['Checking']}/statements/new" not in response.text
-    assert unsupported.status_code == 404
+    assert f"/accounts/{accounts['Checking']}/statements/new" in response.text
+    assert checking_upload.status_code == 200
+    assert 'value="bank_account"' in checking_upload.text
 
 
 @pytest.mark.anyio

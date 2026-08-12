@@ -110,26 +110,34 @@ who creates it so they can share it privately.
    categories.
 4. Remove unwanted files with **X**, choose one source-retention policy, and
    select **Process**. Queued documents process one at a time, in order.
-5. Follow **Map columns** for transaction CSVs, **Review payslip** for
-   PDF/image payslips, or **Review balance** for a supported account statement.
+5. Follow **Map columns** for transaction CSVs, **Review transactions** for
+   transaction PDFs, **Review payslip** for PDF/image payslips, or **Review
+   balance** for an account statement.
 
-V1 processes transaction CSVs, payslips, and documented total-balance formats
-for 401(k), brokerage/stocks, mortgage, loan, and other account statements.
-Checking, savings, credit-card, and unlisted document categories remain
-unavailable and are not uploaded.
+The app processes transaction CSV/PDF files, payslips, and documented
+total-balance formats for checking, savings, credit-card, 401(k),
+brokerage/stocks, mortgage, loan, and other account statements. The unlisted
+category remains unavailable because it has no safe parser or review workflow.
 
 The default policy deletes each raw source only after its import or confirmation
 succeeds. Selecting **retain** keeps it below the configured private local data
 directory; retained files have no browser download page.
 
-### Map columns for a transaction CSV
+### Import transaction CSV or PDF statements
 
-The individual **Import CSV** page remains available in V1 as a fallback and
-detail route; it uses the same transaction-CSV workflow after upload.
+The individual **Import transactions** page remains available as a fallback and
+detail route; it uses the same review and commit workflow after upload.
 
 Transaction CSVs must be UTF-8 and no larger than 5 MiB. Map the date and
 description columns. Choose either one signed amount column or separate debit
 and credit columns, then select the CSV's explicit date format.
+
+Transaction PDFs may be up to 10 MiB. Embedded text is read locally; scanned
+PDFs use local Tesseract OCR. Each transaction row must start with a date and
+identify direction with a sign, accounting parentheses, or a debit/credit
+marker. The importer removes statement balances from the candidate description
+and rejects ambiguous dated rows rather than guessing whether money moved in or
+out. Extracted PDF rows go directly to the same editable review used by CSV.
 
 Review every normalized row. You can correct its date, description, merchant,
 category, Subscription label, or amount and exclude any row before committing.
@@ -265,9 +273,9 @@ not automatic transfers or guarantees; the app never moves money.
 
 ## Import an account statement balance
 
-PR 8b supports reviewed total-balance imports for 401(k), brokerage, mortgage,
-auto-loan, student-loan, and other accounts. Checking, savings, and credit-card
-statement imports remain unavailable; use **Add balance** for those accounts.
+Reviewed total-balance imports support checking, savings, credit-card, 401(k),
+brokerage, mortgage, auto-loan, student-loan, and other accounts. Manual **Add
+balance** remains available for layouts the local processor cannot recognize.
 
 1. Use **Upload documents**, or open **Accounts** and select **Import statement**
    beside a supported account.
@@ -283,6 +291,10 @@ Financial institutions do not share one statement layout. A PDF or image is
 accepted only when one category-specific processor finds an unambiguous account
 identity, total, and date. Recognized total labels are:
 
+- checking/savings: `Ending balance`, `Closing balance`, `Current balance`, or
+  `Available balance`;
+- credit card: `New balance`, `Statement balance`, `Current balance`, or `Total
+  balance`;
 - 401(k): `Total account balance`, `Total plan balance`, `Ending account value`,
   or `Account value`;
 - brokerage: `Total account value`, `Ending account value`, `Net account value`,

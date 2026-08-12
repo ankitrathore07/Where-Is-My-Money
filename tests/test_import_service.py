@@ -24,6 +24,7 @@ from app.imports.service import (
     cancel_import,
     commit_import,
     create_csv_import,
+    create_transaction_import,
     get_workspace_import,
     retry_cleanup,
     save_mapping,
@@ -32,11 +33,82 @@ from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import RowEdit
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example,-1.00\n"
+PDF_BYTES = b"%PDF-synthetic-transaction-statement"
+
+
+class FakeTransactionExtractor:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def extract(self, data: bytes, suffix: str):
+        assert data == PDF_BYTES
+        assert suffix == ".pdf"
+        return type("Extracted", (), {"text": self.text})()
 
 
 class FailingDeleteStore(LocalUploadStore):
     def delete(self, storage_key: str) -> None:
         raise UploadStorageError("delete_failed", "Synthetic delete failure")
+
+
+def test_pdf_transaction_statement_enters_existing_review_flow(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    session.add_all(
+        (
+            Category(workspace_id=None, name="Uncategorized", kind="expense"),
+            Category(workspace_id=None, name="Income", kind="income"),
+        )
+    )
+    session.commit()
+    extractor = FakeTransactionExtractor(
+        "08/01/2026 Example Market -$12.34\n2026-08-02 Payroll $2,500.00 CR"
+    )
+    store = LocalUploadStore(tmp_path)
+
+    result = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+    review = build_review(session, store, result.job, extractor)
+
+    assert result.kind == "created"
+    assert result.job.status == "reviewing"
+    assert result.job.uploaded_file is not None
+    assert result.job.uploaded_file.file_type == "transaction_pdf"
+    assert result.job.uploaded_file.storage_path.endswith(".pdf")
+    assert [(row.date_value, row.description_value, row.amount_value) for row in review.rows] == [
+        ("2026-08-01", "Example Market", "-12.34"),
+        ("2026-08-02", "Payroll", "2500.00"),
+    ]
+
+
+def test_ambiguous_pdf_transaction_statement_is_removed_without_database_rows(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    extractor = FakeTransactionExtractor("08/01/2026 Example Market $12.34")
+
+    with pytest.raises(ValueError, match="do not identify exactly one"):
+        create_transaction_import(
+            session,
+            store,
+            extractor,
+            workspace,
+            "checking.pdf",
+            "application/pdf",
+            BytesIO(PDF_BYTES),
+            "retain",
+        )
+
+    assert session.scalar(select(func.count()).select_from(ImportJob)) == 0
+    assert list(tmp_path.rglob("*.pdf")) == []
 
 
 def test_create_job_links_private_file_and_checksum(

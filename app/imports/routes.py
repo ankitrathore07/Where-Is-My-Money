@@ -13,6 +13,7 @@ from app.categories.service import list_accessible_categories
 from app.core.middleware import require_csrf
 from app.db.models import ImportJob, User, Workspace
 from app.db.session import get_db
+from app.imports.document_parser import TransactionStatementFormatError
 from app.imports.mapping import MappingValidationError
 from app.imports.parser import CsvValidationError
 from app.imports.review_tokens import (
@@ -26,7 +27,7 @@ from app.imports.service import (
     build_review,
     cancel_import,
     commit_import,
-    create_csv_import,
+    create_transaction_import,
     get_workspace_import,
     load_source_document,
     retry_cleanup,
@@ -34,15 +35,19 @@ from app.imports.service import (
 )
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import RowEdit
+from app.payslips.extraction import DocumentExtractionError
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["imports"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
 ALLOWED_CONTENT_TYPES = {
-    "text/csv",
-    "application/csv",
-    "application/vnd.ms-excel",
-    "application/octet-stream",
+    ".csv": {
+        "text/csv",
+        "application/csv",
+        "application/vnd.ms-excel",
+        "application/octet-stream",
+    },
+    ".pdf": {"application/pdf"},
 }
 
 
@@ -63,8 +68,16 @@ def _store(request: Request) -> LocalUploadStore:
     return getattr(
         request.app.state,
         "upload_store",
-        LocalUploadStore(configured.upload_directory, configured.max_csv_upload_bytes),
+        LocalUploadStore(
+            configured.upload_directory,
+            configured.max_csv_upload_bytes,
+            configured.max_statement_upload_bytes,
+        ),
     )
+
+
+def _extractor(request: Request):
+    return request.app.state.statement_extractor
 
 
 def _job_or_404(session: Session, workspace: Workspace, import_id: int) -> ImportJob:
@@ -96,7 +109,7 @@ def _mapping_page(
     values: dict[str, object] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
-    document = load_source_document(store, job)
+    document = load_source_document(store, job, _extractor(request))
     return templates.TemplateResponse(
         request=request,
         name="imports/mapping.html",
@@ -126,7 +139,7 @@ def _review_page(
     submitted_edits: tuple[RowEdit, ...] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
-    review = build_review(session, _store(request), job)
+    review = build_review(session, _store(request), job, _extractor(request))
     secret_key = request.app.state.settings.secret_key or ""
     return templates.TemplateResponse(
         request=request,
@@ -156,7 +169,7 @@ async def new_import(
     user: Annotated[User, Depends(require_current_user)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> HTMLResponse:
-    """Show the private CSV upload form."""
+    """Show the private transaction-statement upload form."""
     return templates.TemplateResponse(
         request=request,
         name="imports/upload.html",
@@ -173,23 +186,40 @@ async def upload_import(
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> HTMLResponse:
-    """Validate and privately store one CSV, then start or resume mapping."""
+    """Validate and privately store one CSV/PDF, then start or resume review."""
     filename = statement.filename or ""
-    if Path(filename).suffix.casefold() != ".csv" or (
-        statement.content_type and statement.content_type.casefold() not in ALLOWED_CONTENT_TYPES
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in ALLOWED_CONTENT_TYPES or (
+        statement.content_type
+        and statement.content_type.casefold() not in ALLOWED_CONTENT_TYPES[suffix]
     ):
         return templates.TemplateResponse(
             request=request,
             name="imports/upload.html",
-            context=_context(request, user, workspace, error="Choose a CSV file to import."),
+            context=_context(
+                request, user, workspace, error="Choose a CSV or PDF transaction statement."
+            ),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
-        result = create_csv_import(
-            session, _store(request), workspace, statement.file, retention_choice
+        result = create_transaction_import(
+            session,
+            _store(request),
+            _extractor(request),
+            workspace,
+            filename,
+            statement.content_type or "",
+            statement.file,
+            retention_choice,
         )
-    except (CsvValidationError, UploadStorageError, ImportStateError) as exc:
+    except (
+        CsvValidationError,
+        UploadStorageError,
+        ImportStateError,
+        DocumentExtractionError,
+        TransactionStatementFormatError,
+    ) as exc:
         return templates.TemplateResponse(
             request=request,
             name="imports/upload.html",
@@ -237,7 +267,7 @@ async def update_mapping(
     form = await request.form()
     values = {key: str(value) for key, value in form.items() if key != "csrf_token"}
     try:
-        save_mapping(session, _store(request), job, values)
+        save_mapping(session, _store(request), job, values, _extractor(request))
     except MappingValidationError as exc:
         return _mapping_page(
             request,
@@ -336,7 +366,7 @@ async def commit_review(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     edits = tuple(edits_list)
     try:
-        commit_import(session, _store(request), job, edits)
+        commit_import(session, _store(request), job, edits, _extractor(request))
     except ReviewValidationError as exc:
         return _review_page(
             request,

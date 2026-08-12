@@ -37,6 +37,16 @@ class RouteFakeExtractor:
         return ExtractedText(PAY_TEXT, "embedded_text")
 
 
+class TransactionRouteFakeExtractor:
+    def extract(self, data: bytes, suffix: str) -> ExtractedText:
+        assert data == PDF_BYTES
+        assert suffix == ".pdf"
+        return ExtractedText(
+            "08/01/2026 Example Market -$12.34\n2026-08-02 Payroll $2,500.00 CR",
+            "embedded_text",
+        )
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -252,7 +262,7 @@ async def test_category_format_mismatch_does_not_store_the_file(tmp_path: Path) 
                     "retention_choice": "retain",
                     "csrf_token": token,
                 },
-                files={"document": ("checking.pdf", b"%PDF-private", "application/pdf")},
+                files={"document": ("checking.png", b"private", "image/png")},
             )
     finally:
         engine.dispose()
@@ -271,6 +281,15 @@ async def test_category_format_mismatch_does_not_store_the_file(tmp_path: Path) 
             "text/csv",
             CSV_BYTES,
             "Map columns",
+            "/imports/",
+            ImportJob,
+        ),
+        (
+            "transaction_statement",
+            "checking.pdf",
+            "application/pdf",
+            PDF_BYTES,
+            "Review transactions",
             "/imports/",
             ImportJob,
         ),
@@ -297,6 +316,7 @@ async def test_supported_document_returns_its_existing_review_destination(
 ) -> None:
     application, factory, engine = build_route_test_app(tmp_path)
     application.state.payslip_extractor = RouteFakeExtractor()
+    application.state.statement_extractor = TransactionRouteFakeExtractor()
     try:
         async with AsyncClient(
             transport=ASGITransport(app=application), base_url="http://testserver"
@@ -334,6 +354,8 @@ async def test_supported_document_returns_its_existing_review_destination(
 @pytest.mark.parametrize(
     "category_key,statement_category",
     [
+        ("bank_balance_statement", "bank_account"),
+        ("credit_card_balance_statement", "credit_card"),
         ("retirement_401k_statement", "investment_401k"),
         ("brokerage_statement", "brokerage"),
         ("mortgage_statement", "mortgage"),

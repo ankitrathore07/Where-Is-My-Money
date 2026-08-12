@@ -87,7 +87,9 @@ def create_app(
         window_seconds=60,
     )
     application.state.upload_store = LocalUploadStore(
-        configured.upload_directory, configured.max_csv_upload_bytes
+        configured.upload_directory,
+        configured.max_csv_upload_bytes,
+        configured.max_statement_upload_bytes,
     )
     application.state.payslip_store = PayslipUploadStore(
         configured.upload_directory, configured.max_payslip_upload_bytes

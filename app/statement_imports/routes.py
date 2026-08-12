@@ -27,6 +27,9 @@ from app.workspaces.dependencies import require_workspace
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["statement imports"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
 ACCOUNT_TYPE_TO_CATEGORY = {
+    "checking": "bank_account",
+    "savings": "bank_account",
+    "credit_card": "credit_card",
     "investment_401k": "investment_401k",
     "investment_brokerage": "brokerage",
     "mortgage": "mortgage",
@@ -35,6 +38,8 @@ ACCOUNT_TYPE_TO_CATEGORY = {
     "other": "other",
 }
 CATEGORY_LABELS = {
+    "bank_account": "Checking or savings",
+    "credit_card": "Credit card",
     "investment_401k": "401(k)",
     "brokerage": "Brokerage",
     "mortgage": "Mortgage",
