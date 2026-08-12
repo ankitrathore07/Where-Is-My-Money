@@ -60,9 +60,7 @@ async def test_unified_document_page_hides_a_nonmember_workspace(tmp_path: Path)
                         WorkspaceMembership.user_id == nonmember.id,
                     )
                 )
-            response = await nonmember_client.get(
-                f"/workspaces/{workspace_id}/documents/new"
-            )
+            response = await nonmember_client.get(f"/workspaces/{workspace_id}/documents/new")
     finally:
         engine.dispose()
 

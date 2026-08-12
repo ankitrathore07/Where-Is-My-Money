@@ -98,31 +98,77 @@ matching verified email, and are stored only as SHA-256 digests. Until an email
 delivery service exists, the app shows the one-time link to the household member
 who creates it so they can share it privately.
 
-## Import a CSV statement
+## Upload documents
 
-1. Sign in, open a personal or household workspace, and select **Import CSV**.
-2. Choose a synthetic or personal UTF-8 CSV no larger than 5 MiB. Select whether
-   the app should delete the raw file after a successful import or retain it
-   privately.
-3. Map the date and description columns. Choose either one signed amount column
-   or separate debit and credit columns, then select the CSV's explicit date
-   format.
-4. Review every normalized row. You can correct its date, description, merchant,
-   category, Subscription label, or amount and exclude any row before committing.
-   Nothing is added to the transaction table before this step.
-5. Commit the selected rows. Negative values mean money out and positive values
-   mean money in. The transaction page can filter by dates, category, direction,
-   Subscription, description, or normalized merchant.
+1. Sign in, open a workspace, and select **Upload documents**.
+2. Browse or drag and drop up to 10 CSV, PDF, PNG, or JPEG files.
+3. Choose a document category for every file. V1 does not guess or preselect
+   categories.
+4. Remove unwanted files with **X**, choose one source-retention policy, and
+   select **Process**.
+5. Follow **Map columns** for transaction CSVs or **Review payslip** for
+   PDF/image payslips.
 
-The default retention choice deletes the raw CSV only after the database commit
+Only transaction CSV and payslip processors are available in V1. 401(k),
+brokerage/stocks, mortgage, loan, and other account statements remain in the
+browser and are not uploaded. Their processors are tracked in
+[PR 8b](docs/where-is-my-money-pr-breakdown.md#pr-8b--account-statement-imports-and-net-worth-view).
+
+The default policy deletes each raw source only after its import or confirmation
 succeeds. Selecting **retain** keeps it below the configured private local data
-directory; retained files have no browser download page. Uploading the same
-statement again resumes an unfinished import or safely reports an already
-committed import without adding duplicate transactions.
+directory; retained files have no browser download page.
+
+### Map columns for a transaction CSV
+
+Transaction CSVs must be UTF-8 and no larger than 5 MiB. Map the date and
+description columns. Choose either one signed amount column or separate debit
+and credit columns, then select the CSV's explicit date format.
+
+Review every normalized row. You can correct its date, description, merchant,
+category, Subscription label, or amount and exclude any row before committing.
+Nothing is added to the transaction table before this step.
+
+Commit the selected rows. Negative values mean money out and positive values
+mean money in. The transaction page can filter by dates, category, direction,
+Subscription, description, or normalized merchant. Uploading the same statement
+again resumes an unfinished import or safely reports an already committed import
+without adding duplicate transactions.
 
 The review page applies the same workspace and built-in rules used everywhere
 else, but the visible reviewed decision is what commit saves. A rule change made
 after preview cannot silently replace the decision that the member approved.
+
+### Review payslip and confirm income
+
+Payslips must be PDF, PNG, or JPEG files no larger than 10 MiB. The app first
+reads embedded PDF text. For an image or scanned PDF, it runs the Tesseract
+executable on this computer. It never sends the document to an OCR website or
+API.
+
+Review and edit the employer, pay period, pay date, gross pay, net pay,
+taxes, and deductions. Extraction is only a suggestion: no income record exists
+yet.
+
+Select **Confirm income record**. The app saves exactly the reviewed values
+and shows workspace totals for gross and net pay.
+
+Income records are intentionally separate from bank transactions. If a CSV
+statement also contains the paycheck deposit, confirming the payslip does not
+create a second transaction or attempt to link the two rows.
+
+### Install local OCR for scanned payslips
+
+Run this first to see whether Tesseract is already available:
+
+    tesseract --version
+
+If the command is missing, install Tesseract 5 with English language data using
+the instructions for your operating system in the
+[official Tesseract installation guide](https://tesseract-ocr.github.io/tessdoc/Installation.html),
+then make sure `tesseract` is on your `PATH`. Restart the terminal and run the
+version command again. You can still import text-based PDFs while Tesseract is
+not installed; scanned files display a local setup message instead of being
+sent elsewhere.
 
 ## Use the financial dashboard
 
@@ -202,38 +248,6 @@ Dashboard Demo already exists and that nothing changed; it does not overwrite or
 duplicate the demo. Keep the demo until a future supported deletion flow is
 available—do not remove it by editing the database directly.
 
-## Import a payslip and confirm income
-
-1. Sign in, open a workspace, and select **Import payslip**.
-2. Choose a PDF, PNG, or JPEG no larger than 10 MiB. Choose whether the raw
-   source should be deleted after confirmation or retained privately.
-3. The app first reads embedded PDF text. For an image or scanned PDF, it runs
-   the Tesseract executable on this computer. It never sends the document to an
-   OCR website or API.
-4. Review and edit the employer, pay period, pay date, gross pay, net pay,
-   taxes, and deductions. Extraction is only a suggestion: no income record
-   exists yet.
-5. Select **Confirm income record**. The app saves exactly the reviewed values
-   and shows workspace totals for gross and net pay.
-
-Income records are intentionally separate from bank transactions. If a CSV
-statement also contains the paycheck deposit, confirming the payslip does not
-create a second transaction or attempt to link the two rows.
-
-### Install local OCR for scanned payslips
-
-Run this first to see whether Tesseract is already available:
-
-    tesseract --version
-
-If the command is missing, install Tesseract 5 with English language data using
-the instructions for your operating system in the
-[official Tesseract installation guide](https://tesseract-ocr.github.io/tessdoc/Installation.html),
-then make sure `tesseract` is on your `PATH`. Restart the terminal and run the
-version command again. You can still import text-based PDFs while Tesseract is
-not installed; scanned files display a local setup message instead of being
-sent elsewhere.
-
 ## Categorization rules in plain language
 
 Every transaction has one primary category and a separate **Subscription**
@@ -281,10 +295,10 @@ future rules; use the transaction edit page when you want that behavior.
 
 - Ruff lint catches common Python errors and risky patterns.
 - Ruff format checks that contributors produce the same layout.
-- Pytest runs synthetic unit and integration fixtures. No real financial or
-  identity data belongs in tests. CSV coverage uses only the included fictional
-  `synthetic_checking.csv` fixture, and payslip coverage uses only the fictional
-  Northstar Bicycle Works fixture.
+- Pytest runs synthetic unit, integration, and Chromium browser-flow fixtures.
+  No real financial or identity data belongs in tests. CSV coverage uses only the
+  included fictional `synthetic_checking.csv` fixture, and payslip coverage uses
+  only the fictional Northstar Bicycle Works fixture.
 - Alembic migrations describe database changes in source control. PR 4 adds a
   reversible data migration for the built-in categories, PR 6 adds the unique
   one-income-record-per-payslip rule, and CI upgrades a fresh SQLite database
@@ -336,6 +350,7 @@ database volume.
     app/main.py                 FastAPI factory, public routes, middleware assembly
     app/auth/                   Google OAuth, identity service, session dependencies
     app/workspaces/             Membership, invitation, and authorized routes
+    app/documents/              Unified document catalog, upload queue, and dispatch
     app/imports/                CSV mapping, review, categorization, duplicates, storage
     app/payslips/               PDF/image storage, local extraction/OCR, review, income
     app/categorization/         Merchant normalization, built-in catalog, precedence

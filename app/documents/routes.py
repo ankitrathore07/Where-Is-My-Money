@@ -62,9 +62,7 @@ async def new_document_upload(
 
 async def _multipart_file_count(request: Request) -> int:
     form = await request.form()
-    return sum(
-        isinstance(value, StarletteUploadFile) for _, value in form.multi_items()
-    )
+    return sum(isinstance(value, StarletteUploadFile) for _, value in form.multi_items())
 
 
 def _error(

@@ -82,9 +82,7 @@ class UploadBodyLimitMiddleware:
     async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
         payslip_route = scope.get("path", "").endswith("/payslips")
         message = (
-            "Payslip upload is too large."
-            if payslip_route
-            else "Document upload is too large."
+            "Payslip upload is too large." if payslip_route else "Document upload is too large."
         )
         response = PlainTextResponse(message, status_code=status.HTTP_413_CONTENT_TOO_LARGE)
         await response(scope, receive, send)
