@@ -39,6 +39,26 @@ def test_picker_adds_multiple_manual_category_rows_and_removes_one(
     expect(page.locator("#document-live-status")).to_contain_text("0 files remain in the queue")
 
 
+def test_drop_zone_is_the_only_accessible_picker_control(
+    signed_in_upload_page: tuple[Page, int],
+) -> None:
+    page, _ = signed_in_upload_page
+    drop_zone = page.locator("#document-drop-zone")
+    drop_zone.focus()
+    page.keyboard.press("Tab")
+    focus_moved_to_retention = page.locator('input[name="retention_choice"]').first.evaluate(
+        "element => element === document.activeElement"
+    )
+    accessible_file_inputs = page.get_by_role("button", name="Choose File").count()
+
+    with page.expect_file_chooser() as chooser_info:
+        drop_zone.press("Enter")
+    chooser_info.value.set_files(payload("keyboard.csv", "text/csv", CSV_BYTES))
+
+    expect(page.get_by_text("keyboard.csv", exact=True)).to_be_visible()
+    assert (focus_moved_to_retention, accessible_file_inputs) == (True, 0)
+
+
 def test_same_file_is_suppressed_and_queue_is_limited_to_ten(
     signed_in_upload_page: tuple[Page, int],
     tmp_path: Path,
@@ -58,25 +78,36 @@ def test_same_file_is_suppressed_and_queue_is_limited_to_ten(
     expect(page.locator("#document-live-status")).to_contain_text("10-file limit")
 
 
-def test_drag_and_drop_adds_a_file(
+def test_drag_and_drop_adds_multiple_files_in_one_drop(
     signed_in_upload_page: tuple[Page, int],
 ) -> None:
     page, _ = signed_in_upload_page
     page.evaluate(
-        """({name, type, body}) => {
+        """(files) => {
           const transfer = new DataTransfer();
-          transfer.items.add(new File([body], name, {type, lastModified: 1722470400000}));
+          for (const {name, type, body} of files) {
+            transfer.items.add(new File([body], name, {type, lastModified: 1722470400000}));
+          }
           document.querySelector('#document-drop-zone').dispatchEvent(
             new DragEvent('drop', {dataTransfer: transfer, bubbles: true, cancelable: true})
           );
         }""",
-        {
-            "name": "dropped.csv",
-            "type": "text/csv",
-            "body": "Date,Description,Amount\n",
-        },
+        [
+            {
+                "name": "dropped.csv",
+                "type": "text/csv",
+                "body": "Date,Description,Amount\n",
+            },
+            {
+                "name": "dropped-pay.pdf",
+                "type": "application/pdf",
+                "body": "%PDF-synthetic",
+            },
+        ],
     )
+    expect(page.locator("#document-queue-body tr")).to_have_count(2)
     expect(page.get_by_text("dropped.csv", exact=True)).to_be_visible()
+    expect(page.get_by_text("dropped-pay.pdf", exact=True)).to_be_visible()
 
 
 def test_manual_categories_control_file_eligibility(
