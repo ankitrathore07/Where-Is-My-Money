@@ -34,21 +34,17 @@ def test_statement_import_migration_round_trips_and_enforces_unique_links(
         }
         assert "uix_statement_import_workspace_category_checksum" in import_constraints
         snapshot_indexes = {
-            index["name"]: index
-            for index in inspector.get_indexes("account_balance_snapshots")
+            index["name"]: index for index in inspector.get_indexes("account_balance_snapshots")
         }
         assert snapshot_indexes["uix_balance_snapshot_statement_import_id"]["unique"] == 1
 
         with engine.begin() as connection:
             connection.execute(
-                text(
-                    "insert into users (google_sub, email) values ('owner', 'owner@example.com')"
-                )
+                text("insert into users (google_sub, email) values ('owner', 'owner@example.com')")
             )
             connection.execute(
                 text(
-                    "insert into workspaces (name, is_personal, owner_id) "
-                    "values ('Personal', 1, 1)"
+                    "insert into workspaces (name, is_personal, owner_id) values ('Personal', 1, 1)"
                 )
             )
             connection.execute(
