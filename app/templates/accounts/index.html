@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Accounts · {{ workspace.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Accounts</h1>
+    <p>Manage the accounts included in this workspace.</p>
+    <a class="button" href="/workspaces/{{ workspace.id }}/accounts/new">Add account</a>
+  </section>
+
+  {% if accounts %}
+    <section class="panel">
+      <ul>
+        {% for account in accounts %}
+          <li>
+            <strong>{{ account.name }}</strong>
+            <span>{{ account.account_type.replace('_', ' ') }}</span>
+            <span>{{ account.institution or "No institution" }}</span>
+            <span>{{ "Liability" if account.is_liability else "Asset" }}</span>
+            <a href="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/edit">Edit</a>
+            <a href="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/balances/new">Add balance</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <section class="panel">
+      <p>No accounts have been added yet.</p>
+      <a href="/workspaces/{{ workspace.id }}/accounts/new">Add your first account</a>
+    </section>
+  {% endif %}
+{% endblock %}
