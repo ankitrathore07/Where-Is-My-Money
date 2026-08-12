@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import AccountBalanceSnapshot, AccountStatementImport, UploadedFile, Workspace
-from app.payslips.extraction import ExtractedText
+from app.payslips.extraction import DocumentExtractionError, ExtractedText
 from app.statement_imports.service import StatementImportError, ingest_one_statement
 from app.statement_imports.storage import StatementUploadStore
 
@@ -22,6 +23,13 @@ class StaticExtractor:
             "Provider: Northstar Financial\nAccount ending in: 4821\n"
             "Statement date: 2026-07-31\nTotal account value: $125,430.18",
             "embedded_text",
+        )
+
+
+class FailingExtractor:
+    def extract(self, data: bytes, suffix: str) -> ExtractedText:
+        raise DocumentExtractionError(
+            "encrypted_pdf", "Encrypted PDF statements are not supported."
         )
 
 
@@ -123,6 +131,79 @@ def test_same_source_can_retry_under_corrected_category(
         "retain",
     )
     assert first.id != second.id
+
+
+def test_document_extraction_error_is_safe_and_removes_source(
+    tmp_path: Path, session: Session, workspace: Workspace
+) -> None:
+    with pytest.raises(StatementImportError) as error:
+        ingest_one_statement(
+            session,
+            StatementUploadStore(tmp_path),
+            FailingExtractor(),
+            workspace,
+            "brokerage",
+            "statement.pdf",
+            "application/pdf",
+            BytesIO(b"%PDF-encrypted"),
+            "retain",
+        )
+    assert error.value.code == "encrypted_pdf"
+    assert list(tmp_path.rglob("*.pdf")) == []
+    assert session.query(AccountStatementImport).count() == 0
+
+
+def test_concurrent_duplicate_commit_returns_winning_import(
+    tmp_path: Path,
+    session: Session,
+    workspace: Workspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = StatementUploadStore(tmp_path)
+    checksum = "bc2ba672be070fe5372273280a827f54c7b1348b73075e4a38e7b578c7d07577"
+    original_commit = session.commit
+    intercepted = False
+
+    def concurrent_commit() -> None:
+        nonlocal intercepted
+        if intercepted:
+            original_commit()
+            return
+        intercepted = True
+        session.rollback()
+        winner_file = UploadedFile(
+            workspace_id=workspace.id,
+            file_type="account_statement",
+            storage_path=f"{workspace.id}/{'f' * 32}.csv",
+            checksum=checksum,
+            size_bytes=len(CSV_BYTES),
+        )
+        winner = AccountStatementImport(
+            workspace_id=workspace.id,
+            uploaded_file=winner_file,
+            statement_category="brokerage",
+            source_checksum=checksum,
+            candidate_fields={"balance_cents": 12_543_018},
+            review_status="pending",
+        )
+        session.add(winner)
+        original_commit()
+        raise IntegrityError("insert", {}, Exception("unique conflict"))
+
+    monkeypatch.setattr(session, "commit", concurrent_commit)
+    result = ingest_one_statement(
+        session,
+        store,
+        StaticExtractor(),
+        workspace,
+        "brokerage",
+        "statement.csv",
+        "text/csv",
+        BytesIO(CSV_BYTES),
+        "retain",
+    )
+    assert result.source_checksum == checksum
+    assert session.query(AccountStatementImport).count() == 1
 
 
 @pytest.mark.parametrize(

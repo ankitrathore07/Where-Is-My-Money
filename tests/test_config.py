@@ -45,3 +45,14 @@ def test_production_enables_secure_cookies() -> None:
 
     assert configured.is_production is True
     assert configured.session_https_only is True
+
+
+def test_statement_upload_limit_is_independent_from_payslip_limit() -> None:
+    configured = Settings(
+        _env_file=None,
+        app_env="development",
+        secret_key="test-secret",
+        max_payslip_upload_bytes=123,
+    )
+
+    assert configured.max_statement_upload_bytes == 10 * 1024 * 1024

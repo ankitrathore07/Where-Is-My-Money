@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     upload_directory: Path = Path("data/uploads")
     max_csv_upload_bytes: int = 5 * 1024 * 1024
     max_payslip_upload_bytes: int = 10 * 1024 * 1024
+    max_statement_upload_bytes: int = 10 * 1024 * 1024
 
     @property
     def is_production(self) -> bool:

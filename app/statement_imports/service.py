@@ -15,7 +15,7 @@ from app.db.models import (
     UploadedFile,
     Workspace,
 )
-from app.payslips.extraction import ExtractedText
+from app.payslips.extraction import DocumentExtractionError, ExtractedText
 from app.statement_imports.parsing import parse_wimm_csv, validate_statement_review
 from app.statement_imports.processors import process_statement_text
 from app.statement_imports.storage import StatementStorageError, StatementUploadStore
@@ -127,8 +127,32 @@ def ingest_one_statement(
             review_status="pending",
         )
         session.add(pending)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            winner = session.scalar(
+                select(AccountStatementImport).where(
+                    AccountStatementImport.workspace_id == workspace.id,
+                    AccountStatementImport.statement_category == declared_category,
+                    AccountStatementImport.source_checksum == stored.checksum,
+                )
+            )
+            if winner is None:
+                raise
+            store.delete(stored.storage_key)
+            return winner
         return pending
+    except DocumentExtractionError as exc:
+        session.rollback()
+        if stored is not None:
+            try:
+                store.delete(stored.storage_key)
+            except (OSError, StatementStorageError) as cleanup_exc:
+                raise StatementImportError(
+                    "cleanup_failed", "The invalid private statement could not be removed."
+                ) from cleanup_exc
+        raise StatementImportError(exc.code, exc.message) from exc
     except Exception:
         session.rollback()
         if stored is not None:
@@ -237,3 +261,29 @@ def confirm_statement_import(
             uploaded.deleted = True
         session.commit()
     return StatementConfirmationResult(snapshot, cleanup_failed, False)
+
+
+def retry_statement_source_cleanup(
+    session: Session,
+    store: StatementUploadStore,
+    pending: AccountStatementImport,
+) -> None:
+    uploaded = pending.uploaded_file
+    if uploaded.deleted:
+        if pending.review_status == "confirmed_cleanup_failed":
+            pending.review_status = "confirmed"
+            session.commit()
+        return
+    if pending.review_status != "confirmed_cleanup_failed":
+        raise StatementImportError(
+            "cleanup_not_available", "This statement does not need source cleanup."
+        )
+    try:
+        store.delete(uploaded.storage_path)
+    except (OSError, StatementStorageError) as exc:
+        raise StatementImportError(
+            "cleanup_failed", "The private statement source still could not be deleted."
+        ) from exc
+    uploaded.deleted = True
+    pending.review_status = "confirmed"
+    session.commit()

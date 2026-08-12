@@ -5,6 +5,7 @@
   <p class="eyebrow">{{ workspace.name }}</p>
   <h1>Review statement balance</h1>
   <p>These extracted values are editable candidates. Dashboard totals have not changed.</p>
+  <p>{{ category_label }} statement · {{ extraction_label }}</p>
 </section>
 <section class="panel">
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
@@ -22,6 +23,7 @@
     {% if field_errors.account_name %}<p class="alert" role="alert">{{ field_errors.account_name }}</p>{% endif %}
     <label for="institution">Institution or servicer</label>
     <input id="institution" name="institution" value="{{ values.institution }}">
+    {% if field_errors.institution %}<p class="alert" role="alert">{{ field_errors.institution }}</p>{% endif %}
     <label for="last-four">Account last four</label>
     <input id="last-four" name="account_last_four" inputmode="numeric" maxlength="4" value="{{ values.account_last_four }}">
     {% if field_errors.account_last_four %}<p class="alert" role="alert">{{ field_errors.account_last_four }}</p>{% endif %}

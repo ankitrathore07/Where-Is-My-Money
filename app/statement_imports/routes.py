@@ -18,6 +18,7 @@ from app.statement_imports.service import (
     get_workspace_statement_import,
     ingest_one_statement,
     list_compatible_accounts,
+    retry_statement_source_cleanup,
 )
 from app.statement_imports.storage import StatementStorageError, StatementUploadStore
 from app.statement_imports.types import StatementFormatError, StatementReviewValidationError
@@ -32,6 +33,18 @@ ACCOUNT_TYPE_TO_CATEGORY = {
     "auto_loan": "loan",
     "student_loan": "loan",
     "other": "other",
+}
+CATEGORY_LABELS = {
+    "investment_401k": "401(k)",
+    "brokerage": "Brokerage",
+    "mortgage": "Mortgage",
+    "loan": "Loan",
+    "other": "Other",
+}
+EXTRACTION_LABELS = {
+    "wimm_csv": "WIMM balance CSV",
+    "embedded_text": "Embedded PDF text",
+    "ocr": "Local OCR",
 }
 
 
@@ -105,6 +118,12 @@ def _review_page(
             field_errors=field_errors or {},
             error=error,
             today=_utc_today(),
+            category_label=CATEGORY_LABELS.get(
+                pending.statement_category, pending.statement_category
+            ),
+            extraction_label=EXTRACTION_LABELS.get(
+                str(pending.candidate_fields.get("extraction_method")), "Local extraction"
+            ),
         ),
         status_code=status_code,
     )
@@ -219,6 +238,8 @@ async def confirm_statement(
             status_code=400,
         )
     except StatementImportError as exc:
+        if exc.code == "account_not_found":
+            raise HTTPException(status_code=404) from None
         return _review_page(
             request,
             user,
@@ -231,5 +252,30 @@ async def confirm_statement(
         )
     destination = f"/workspaces/{workspace.id}/dashboard"
     if result.cleanup_failed:
-        destination += "?statement_cleanup_failed=1"
+        destination += f"?statement_cleanup_failed={pending.id}"
     return RedirectResponse(destination, status_code=303)
+
+
+@router.post(
+    "/statement-imports/{statement_import_id}/cleanup",
+    dependencies=[Depends(require_csrf)],
+)
+async def retry_statement_cleanup(
+    request: Request,
+    statement_import_id: int,
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    del user
+    pending = _pending_or_404(session, workspace, statement_import_id)
+    try:
+        retry_statement_source_cleanup(session, _store(request), pending)
+    except StatementImportError as exc:
+        if exc.code != "cleanup_failed":
+            raise HTTPException(status_code=404) from None
+        return RedirectResponse(
+            f"/workspaces/{workspace.id}/dashboard?statement_cleanup_failed={pending.id}",
+            status_code=303,
+        )
+    return RedirectResponse(f"/workspaces/{workspace.id}/dashboard", status_code=303)

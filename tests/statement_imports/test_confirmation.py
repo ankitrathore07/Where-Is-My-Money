@@ -12,6 +12,7 @@ from app.statement_imports.service import (
     confirm_statement_import,
     ingest_one_statement,
     list_compatible_accounts,
+    retry_statement_source_cleanup,
 )
 from app.statement_imports.storage import StatementStorageError, StatementUploadStore
 from app.statement_imports.types import StatementReviewValidationError
@@ -214,3 +215,37 @@ def test_delete_after_confirmation_removes_source(
     assert pending.uploaded_file.deleted is True
     with pytest.raises(StatementStorageError):
         StatementUploadStore(tmp_path).read(source_path)
+
+
+def test_cleanup_failure_can_be_retried_without_rolling_back_snapshot(
+    tmp_path: Path, session: Session, workspace: Workspace
+) -> None:
+    class FailingDeleteStore(StatementUploadStore):
+        def delete(self, storage_key: str) -> None:
+            raise OSError("synthetic cleanup failure")
+
+    account = Account(
+        workspace_id=workspace.id,
+        name="Mortgage",
+        account_type="mortgage",
+        is_liability=True,
+    )
+    session.add(account)
+    session.commit()
+    pending = _pending(tmp_path, session, workspace, "delete_after_import")
+    result = confirm_statement_import(
+        session,
+        FailingDeleteStore(tmp_path),
+        pending,
+        _form(account),
+        today=date(2026, 8, 11),
+    )
+    assert result.cleanup_failed is True
+    assert result.snapshot.id is not None
+    assert pending.review_status == "confirmed_cleanup_failed"
+
+    retry_statement_source_cleanup(session, StatementUploadStore(tmp_path), pending)
+
+    assert pending.review_status == "confirmed"
+    assert pending.uploaded_file.deleted is True
+    assert session.query(AccountBalanceSnapshot).count() == 1

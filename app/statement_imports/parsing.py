@@ -63,6 +63,10 @@ def parse_wimm_csv(data: bytes) -> StatementCandidate:
         raise StatementFormatError("invalid_csv_header", "Use the documented balance CSV header.")
     if len(rows) != 2 or len(rows[1]) != len(CSV_HEADER):
         raise StatementFormatError("invalid_csv_rows", "Include exactly one balance data row.")
+    if any(value.lstrip().startswith("=") for value in rows[1]):
+        raise StatementFormatError(
+            "invalid_csv_formula", "Balance CSV values must not contain formulas."
+        )
     values = dict(zip(CSV_HEADER, rows[1], strict=True))
     account_name = normalize_text(values["account_name"])
     institution = normalize_text(values["institution"]) or None
@@ -71,8 +75,11 @@ def parse_wimm_csv(data: bytes) -> StatementCandidate:
         raise StatementFormatError("missing_account_identity", "Enter a valid account name.")
     if last_four is not None and not re.fullmatch(r"[0-9]{4}", last_four, re.ASCII):
         raise StatementFormatError("invalid_account_last_four", "Use exactly four digits.")
+    raw_date = values["as_of_date"].strip()
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", raw_date, re.ASCII):
+        raise StatementFormatError("invalid_date", "Use an ISO YYYY-MM-DD date.")
     try:
-        as_of_date = date.fromisoformat(values["as_of_date"].strip())
+        as_of_date = date.fromisoformat(raw_date)
     except ValueError:
         raise StatementFormatError("invalid_date", "Use an ISO YYYY-MM-DD date.") from None
     return StatementCandidate(

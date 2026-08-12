@@ -94,7 +94,7 @@ def create_app(
     )
     application.state.payslip_extractor = DocumentExtractor(TesseractOcrEngine())
     application.state.statement_store = StatementUploadStore(
-        configured.upload_directory, configured.max_payslip_upload_bytes
+        configured.upload_directory, configured.max_statement_upload_bytes
     )
     application.state.statement_extractor = StatementDocumentExtractor(
         DocumentExtractor(TesseractOcrEngine())
@@ -115,7 +115,7 @@ def create_app(
     )
     application.add_middleware(
         StatementUploadBodyLimitMiddleware,
-        max_file_bytes=configured.max_payslip_upload_bytes,
+        max_file_bytes=configured.max_statement_upload_bytes,
     )
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)

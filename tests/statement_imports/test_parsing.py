@@ -58,11 +58,31 @@ def test_wimm_csv_parses_exact_one_row_contract() -> None:
         (
             b"account_name,institution,account_last_four,total_balance,as_of_date\n"
             b"A,,,=SUM(1),2026-07-31\n",
-            "invalid_balance",
+            "invalid_csv_formula",
         ),
         (
             b"account_name,institution,account_last_four,total_balance,as_of_date\n"
             b"A,,,1.00,07/31/2026\n",
+            "invalid_date",
+        ),
+        (
+            b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+            b"=CMD(),,,1.00,2026-07-31\n",
+            "invalid_csv_formula",
+        ),
+        (
+            b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+            b"A,=CMD(),,1.00,2026-07-31\n",
+            "invalid_csv_formula",
+        ),
+        (
+            b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+            b"A,,,1.00,20260731\n",
+            "invalid_date",
+        ),
+        (
+            b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+            b"A,,,1.00,2026-W31-5\n",
             "invalid_date",
         ),
     ],

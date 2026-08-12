@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.types import ACCOUNT_TYPE_OPTIONS
@@ -18,7 +19,7 @@ from app.dashboard.presentation import (
     format_money,
 )
 from app.dashboard.service import build_dashboard_report
-from app.db.models import User, Workspace
+from app.db.models import AccountStatementImport, User, Workspace
 from app.db.session import get_db
 from app.workspaces.dependencies import require_workspace
 
@@ -81,6 +82,7 @@ async def dashboard(
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
     as_of: str = "",
+    statement_cleanup_failed: int | None = None,
 ) -> HTMLResponse:
     """Render the active member's aggregate financial dashboard."""
     try:
@@ -90,6 +92,15 @@ async def dashboard(
             request, user, workspace, "Use a valid date in YYYY-MM-DD format."
         )
     report = build_dashboard_report(session, workspace.id, as_of_date)
+    cleanup_import = None
+    if statement_cleanup_failed is not None:
+        cleanup_import = session.scalar(
+            select(AccountStatementImport).where(
+                AccountStatementImport.id == statement_cleanup_failed,
+                AccountStatementImport.workspace_id == workspace.id,
+                AccountStatementImport.review_status == "confirmed_cleanup_failed",
+            )
+        )
     return templates.TemplateResponse(
         request=request,
         name="dashboard/index.html",
@@ -103,5 +114,6 @@ async def dashboard(
             format_money=format_money,
             format_basis_points=format_basis_points,
             account_type_labels=_ACCOUNT_TYPE_LABELS,
+            statement_cleanup_import=cleanup_import,
         ),
     )
