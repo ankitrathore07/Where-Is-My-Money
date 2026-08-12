@@ -43,6 +43,8 @@
   const signatureOf = (file) =>
     [file.name, file.size, file.lastModified, file.type].join("|");
   const plural = (count) => `${count} ${count === 1 ? "file" : "files"}`;
+  const readyCount = () =>
+    [...queue.values()].filter((item) => item.state === "ready").length;
 
   function compatibility(item) {
     const suffix = suffixOf(item.file.name);
@@ -92,12 +94,40 @@
       : `${(bytes / 1048576).toFixed(1)} MB`;
 
   function refreshBatch() {
-    const readyCount = [...queue.values()].filter(
-      (item) => item.state === "ready",
-    ).length;
-    processButton.textContent = `Process ${plural(readyCount)}`;
-    processButton.disabled = processingQueue || readyCount === 0;
+    const count = readyCount();
+    processButton.textContent = `Process ${plural(count)}`;
+    processButton.disabled = processingQueue || count === 0;
+    for (const retry of queueBody.querySelectorAll(".document-retry")) {
+      retry.disabled = processingQueue;
+    }
     queueWrap.hidden = queue.size === 0;
+  }
+
+  function setRetentionControls(disabled) {
+    for (const control of form.querySelectorAll(
+      'input[name="retention_choice"]',
+    )) {
+      control.disabled = disabled;
+    }
+  }
+
+  async function runSerialized(operation) {
+    if (processingQueue) return;
+    processingQueue = true;
+    pageAlert.hidden = true;
+    const retentionChoice = form.elements.retention_choice.value;
+    setRetentionControls(true);
+    refreshBatch();
+    let outcome = "continue";
+    try {
+      outcome = await operation(retentionChoice);
+    } finally {
+      processingQueue = false;
+      setRetentionControls(false);
+      refreshBatch();
+      const summary = outcome === "stop" ? "Processing stopped" : "Processing complete";
+      announce(`${summary}. ${plural(readyCount())} ready to process.`);
+    }
   }
 
   function setItemState(item, state, message) {
@@ -124,17 +154,19 @@
     setItemState(item, "retryable", message);
     const retry = document.createElement("button");
     retry.type = "button";
+    retry.className = "document-retry";
     retry.textContent = "Retry";
     retry.setAttribute("aria-label", `Retry ${item.file.name}`);
-    retry.addEventListener("click", async () => {
-      retry.disabled = true;
-      await processItem(item);
-      refreshBatch();
-    });
+    retry.disabled = processingQueue;
+    retry.addEventListener("click", () =>
+      runSerialized((retentionChoice) => processItem(item, retentionChoice)),
+    );
     item.actionCell.replaceChildren(retry, item.remove);
+    announce(`${item.file.name}: ${message}`);
   }
 
   function completeItem(item, href, label, message) {
+    const filename = item.file.name;
     setPendingControls(item, false);
     setItemState(item, "complete", message || "Ready for review.");
     item.select.disabled = true;
@@ -143,6 +175,7 @@
     link.textContent = label;
     item.actionCell.replaceChildren(link);
     item.file = null;
+    announce(`${filename}: ${item.message}`);
   }
 
   function showSessionAlert() {
@@ -151,7 +184,7 @@
     pageAlert.hidden = false;
   }
 
-  async function processItem(item) {
+  async function processItem(item, retentionChoice) {
     setPendingControls(item, true);
     setItemState(item, "processing", "Processing\u2026");
     announce(`Processing ${item.file.name}`);
@@ -159,7 +192,7 @@
     const body = new FormData();
     body.append("document", item.file, item.file.name);
     body.append("category_key", item.categoryKey);
-    body.append("retention_choice", form.elements.retention_choice.value);
+    body.append("retention_choice", retentionChoice);
     body.append("csrf_token", csrfToken.value);
 
     let response;
@@ -196,22 +229,46 @@
       markRetryable(item, "The server returned an invalid result. Retry this file.");
       return "continue";
     }
-    if (!response.ok || !payload.ok) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      markRetryable(item, "The server returned an invalid result. Retry this file.");
+      return "continue";
+    }
+    if (!response.ok) {
       if (response.status >= 500) {
         markRetryable(item, "The server could not process this file. Retry it.");
       } else {
+        const message =
+          typeof payload.message === "string" && payload.message
+            ? payload.message
+            : "This file could not be processed.";
         setPendingControls(item, false);
         restoreRemoveAction(item);
-        setItemState(
-          item,
-          "failed",
-          payload.message || "This file could not be processed.",
-        );
+        setItemState(item, "failed", message);
+        announce(`${item.file.name}: ${message}`);
       }
       return "continue";
     }
 
-    const nextUrl = new URL(payload.next_url, window.location.origin);
+    if (
+      payload.ok !== true ||
+      typeof payload.message !== "string" ||
+      !payload.message ||
+      typeof payload.next_url !== "string" ||
+      !payload.next_url ||
+      typeof payload.next_label !== "string" ||
+      !payload.next_label
+    ) {
+      markRetryable(item, "The server returned an invalid result. Retry this file.");
+      return "continue";
+    }
+
+    let nextUrl;
+    try {
+      nextUrl = new URL(payload.next_url, window.location.origin);
+    } catch (_error) {
+      markRetryable(item, "The review link was invalid. Retry this file.");
+      return "continue";
+    }
     if (nextUrl.origin !== window.location.origin) {
       markRetryable(item, "The review link was invalid. Retry this file.");
       return "continue";
@@ -227,20 +284,14 @@
 
   async function processQueue(event) {
     event.preventDefault();
-    if (processingQueue) return;
-    processingQueue = true;
-    pageAlert.hidden = true;
-    processButton.disabled = true;
-    try {
+    await runSerialized(async (retentionChoice) => {
       for (const item of queue.values()) {
         if (item.state !== "ready") continue;
-        const action = await processItem(item);
-        if (action === "stop") break;
+        const action = await processItem(item, retentionChoice);
+        if (action === "stop") return "stop";
       }
-    } finally {
-      processingQueue = false;
-      refreshBatch();
-    }
+      return "continue";
+    });
   }
 
   function refreshItem(item) {

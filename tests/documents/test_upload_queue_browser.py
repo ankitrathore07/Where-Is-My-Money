@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,37 @@ PDF_BYTES = b"%PDF-synthetic-browser"
 
 def payload(name: str, mime_type: str, body: bytes) -> dict[str, object]:
     return {"name": name, "mimeType": mime_type, "buffer": body}
+
+
+def fulfill_success(route, next_label: str = "Map columns") -> None:
+    route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps(
+            {
+                "ok": True,
+                "message": "Ready for review.",
+                "next_url": "/workspaces/1/imports/1/mapping",
+                "next_label": next_label,
+            }
+        ),
+    )
+
+
+def capture_live_announcements(page: Page) -> None:
+    page.evaluate(
+        """() => {
+          window.documentAnnouncements = [];
+          const status = document.querySelector('#document-live-status');
+          new MutationObserver(() => {
+            window.documentAnnouncements.push(status.textContent);
+          }).observe(status, {childList: true, characterData: true, subtree: true});
+        }"""
+    )
+
+
+def live_announcements(page: Page) -> list[str]:
+    return page.evaluate("window.documentAnnouncements")
 
 
 def test_picker_adds_multiple_manual_category_rows_and_removes_one(
@@ -167,6 +200,7 @@ def test_ready_files_process_sequentially_and_keep_independent_results(
     rows.nth(0).locator("select").select_option("transaction_statement")
     rows.nth(1).locator("select").select_option("payslip")
     rows.nth(2).locator("select").select_option("brokerage_statement")
+    capture_live_announcements(page)
 
     page.locator("#process-documents").click()
 
@@ -178,6 +212,13 @@ def test_ready_files_process_sequentially_and_keep_independent_results(
     expect(page.locator("#process-documents")).to_have_text("Process 0 files")
     expect(page.locator("#process-documents")).to_be_disabled()
     assert len(requests) == 2
+    announcements = live_announcements(page)
+    assert any(
+        announcement.startswith("broken.csv:") and "fewer fields than the header" in announcement
+        for announcement in announcements
+    )
+    assert "pay.pdf: Ready for review." in announcements
+    assert announcements[-1] == "Processing complete. 0 files ready to process."
 
 
 def test_valid_csv_and_payslip_produce_locked_review_links_and_keep_retention(
@@ -228,10 +269,168 @@ def test_network_failure_can_retry_only_the_failed_row(
     page.locator("#document-files").set_input_files(payload("checking.csv", "text/csv", CSV_BYTES))
     row = page.locator("#document-queue-body tr")
     row.locator("select").select_option("transaction_statement")
+    capture_live_announcements(page)
     page.locator("#process-documents").click()
     expect(row.get_by_role("button", name="Retry checking.csv")).to_be_visible()
+    assert any(
+        announcement == "checking.csv: The upload was interrupted. Retry this file."
+        for announcement in live_announcements(page)
+    )
     row.get_by_role("button", name="Retry checking.csv").click()
     expect(row.get_by_role("link", name="Map columns")).to_be_visible()
+
+
+def test_retry_requests_share_the_global_one_at_a_time_gate(
+    signed_in_upload_page: tuple[Page, int],
+) -> None:
+    page, _ = signed_in_upload_page
+    initial_failures = 0
+    in_flight = 0
+    max_in_flight = 0
+    pending_routes = []
+
+    def control_requests(route) -> None:
+        nonlocal initial_failures, in_flight, max_in_flight
+        if initial_failures < 2:
+            initial_failures += 1
+            route.abort()
+            return
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        pending_routes.append(route)
+
+    def release_one() -> None:
+        nonlocal in_flight
+        route = pending_routes.pop(0)
+        in_flight -= 1
+        fulfill_success(route)
+
+    page.route("**/document-uploads", control_requests)
+    page.locator("#document-files").set_input_files(
+        [
+            payload("first.csv", "text/csv", CSV_BYTES),
+            payload("second.csv", "text/csv", CSV_BYTES.replace(b"Market", b"Store")),
+        ]
+    )
+    rows = page.locator("#document-queue-body tr")
+    rows.nth(0).locator("select").select_option("transaction_statement")
+    rows.nth(1).locator("select").select_option("transaction_statement")
+    page.locator("#process-documents").click()
+    first_retry = rows.nth(0).get_by_role("button", name="Retry first.csv")
+    second_retry = rows.nth(1).get_by_role("button", name="Retry second.csv")
+    expect(first_retry).to_be_visible()
+    expect(second_retry).to_be_visible()
+
+    with page.expect_request("**/document-uploads"):
+        first_retry.click()
+    try:
+        expect(second_retry).to_be_disabled()
+    finally:
+        release_one()
+    expect(rows.nth(0).get_by_role("link", name="Map columns")).to_be_visible()
+
+    expect(second_retry).to_be_enabled()
+    with page.expect_request("**/document-uploads"):
+        second_retry.click()
+    release_one()
+    expect(rows.nth(1).get_by_role("link", name="Map columns")).to_be_visible()
+    assert max_in_flight == 1
+
+
+def test_batch_retention_is_snapshotted_while_requests_are_serialized(
+    signed_in_upload_page: tuple[Page, int],
+) -> None:
+    page, _ = signed_in_upload_page
+    observed_retention: list[str] = []
+    pending_routes = []
+
+    def control_requests(route) -> None:
+        body = route.request.post_data_buffer or b""
+        match = re.search(rb'name="retention_choice"\r\n\r\n([^\r\n]+)', body)
+        assert match is not None
+        observed_retention.append(match.group(1).decode("ascii"))
+        if len(observed_retention) == 1:
+            pending_routes.append(route)
+        else:
+            fulfill_success(route)
+
+    page.route("**/document-uploads", control_requests)
+    page.locator("#document-files").set_input_files(
+        [
+            payload("first.csv", "text/csv", CSV_BYTES),
+            payload("second.csv", "text/csv", CSV_BYTES.replace(b"Market", b"Store")),
+        ]
+    )
+    rows = page.locator("#document-queue-body tr")
+    rows.nth(0).locator("select").select_option("transaction_statement")
+    rows.nth(1).locator("select").select_option("transaction_statement")
+    retain = page.get_by_label("Retain each raw document privately")
+    delete = page.get_by_label("Delete each raw document")
+    retain.check()
+    page.locator("#process-documents").click()
+    expect(retain).to_be_disabled()
+    expect(delete).to_be_disabled()
+
+    page.locator('input[name="retention_choice"]').evaluate_all(
+        """radios => {
+          radios.find(radio => radio.value === 'retain').checked = false;
+          radios.find(radio => radio.value === 'delete_after_import').checked = true;
+        }"""
+    )
+    fulfill_success(pending_routes.pop())
+
+    expect(rows.nth(0).get_by_role("link", name="Map columns")).to_be_visible()
+    expect(rows.nth(1).get_by_role("link", name="Map columns")).to_be_visible()
+    expect(retain).to_be_enabled()
+    expect(delete).to_be_enabled()
+    assert observed_retention == ["retain", "retain"]
+
+
+@pytest.mark.parametrize(
+    "malformed_body",
+    [
+        "null",
+        json.dumps({"ok": True, "message": "Ready for review."}),
+        json.dumps(
+            {
+                "ok": True,
+                "message": "Ready for review.",
+                "next_url": "http://[invalid",
+                "next_label": "Map columns",
+            }
+        ),
+    ],
+    ids=["non-object", "missing-fields", "invalid-url"],
+)
+def test_malformed_success_is_retryable_and_does_not_stop_later_rows(
+    signed_in_upload_page: tuple[Page, int], malformed_body: str
+) -> None:
+    page, _ = signed_in_upload_page
+    request_count = 0
+
+    def respond(route) -> None:
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            route.fulfill(status=200, content_type="application/json", body=malformed_body)
+        else:
+            fulfill_success(route)
+
+    page.route("**/document-uploads", respond)
+    page.locator("#document-files").set_input_files(
+        [
+            payload("first.csv", "text/csv", CSV_BYTES),
+            payload("second.csv", "text/csv", CSV_BYTES.replace(b"Market", b"Store")),
+        ]
+    )
+    rows = page.locator("#document-queue-body tr")
+    rows.nth(0).locator("select").select_option("transaction_statement")
+    rows.nth(1).locator("select").select_option("transaction_statement")
+    page.locator("#process-documents").click()
+
+    expect(rows.nth(0).get_by_role("button", name="Retry first.csv")).to_be_visible()
+    expect(rows.nth(1).get_by_role("link", name="Map columns")).to_be_visible()
+    assert request_count == 2
 
 
 def test_expired_csrf_stops_before_the_second_ready_file(
