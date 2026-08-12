@@ -123,7 +123,8 @@ assert updated.id == budget.id
 assert updated.amount_cents == 21_500
 ```
 
-Reject zero, negative, more than two decimals, nonnumeric input, a non-first
+Accept zero because the specified median can truthfully produce a zero limit.
+Reject negative, more than two decimals, nonnumeric input, a non-first
 period date, income/transfer categories, and another workspace's custom
 category. Assert building a report alone leaves the budget table empty.
 

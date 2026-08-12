@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Edit" if goal else "New" }} savings goal · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }} · Planning</p>
+    <h1>{{ "Edit savings goal" if goal else "New savings goal" }}</h1>
+    <p>Enter a deadline or a monthly contribution. The missing value will be calculated as a projection.</p>
+  </section>
+
+  {% if field_errors %}<div class="alert" role="alert"><strong>Review the highlighted fields.</strong></div>{% endif %}
+
+  <section class="panel planning-goal-form-panel">
+    <form action="{% if goal %}/workspaces/{{ workspace.id }}/planning/goals/{{ goal.id }}{% else %}/workspaces/{{ workspace.id }}/planning/goals{% endif %}" method="post" class="stacked-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="goal-name">Goal name</label>
+      <input id="goal-name" name="name" maxlength="255" required value="{{ values.name }}" aria-describedby="{% if field_errors.name %}goal-name-error{% endif %}">
+      {% if field_errors.name %}<p id="goal-name-error" class="field-error">{{ field_errors.name }}</p>{% endif %}
+
+      <label for="target-amount">Target amount</label>
+      <input id="target-amount" name="target_amount" inputmode="decimal" required value="{{ values.target_amount }}" placeholder="5000.00">
+      {% if field_errors.target_amount %}<p class="field-error">{{ field_errors.target_amount }}</p>{% endif %}
+
+      <label for="current-amount">Current savings</label>
+      <input id="current-amount" name="current_amount" inputmode="decimal" required value="{{ values.current_amount }}" placeholder="0.00">
+      {% if field_errors.current_amount %}<p class="field-error">{{ field_errors.current_amount }}</p>{% endif %}
+
+      <fieldset class="planning-goal-options">
+        <legend>Choose exactly one planning input</legend>
+        <div>
+          <label for="target-date">Target date</label>
+          <input id="target-date" name="target_date" type="date" min="{{ today.isoformat() }}" value="{{ values.target_date }}">
+          {% if field_errors.target_date %}<p class="field-error">{{ field_errors.target_date }}</p>{% endif %}
+        </div>
+        <p class="planning-or">or</p>
+        <div>
+          <label for="monthly-contribution">Monthly contribution</label>
+          <input id="monthly-contribution" name="monthly_contribution" inputmode="decimal" value="{{ values.monthly_contribution }}" placeholder="800.00">
+          {% if field_errors.monthly_contribution %}<p class="field-error">{{ field_errors.monthly_contribution }}</p>{% endif %}
+        </div>
+      </fieldset>
+
+      <div class="form-actions"><button class="button" type="submit">{{ "Save goal" if goal else "Create goal" }}</button><a href="/workspaces/{{ workspace.id }}/planning">Cancel</a></div>
+    </form>
+  </section>
+{% endblock %}

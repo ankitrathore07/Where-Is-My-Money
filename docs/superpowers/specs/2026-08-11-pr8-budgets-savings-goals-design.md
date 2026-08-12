@@ -80,7 +80,9 @@ a suggestion. Income, transfer, unassigned, inaccessible, and the built-in
 the three monthly totals and exact source dates so the result is explainable.
 
 The GET never writes. A member must submit an explicit CSRF-protected form to
-accept the displayed amount or replace it with another positive dollar amount.
+accept the displayed amount or replace it with another nonnegative dollar amount.
+Zero is valid because three-month history such as `$0, $0, $50` produces the
+formula's truthful `$0` median suggestion.
 The service validates that the category is a built-in or active-workspace
 expense category and upserts the unique `(workspace, category, month)` budget.
 
@@ -138,7 +140,8 @@ owning workspace.
 
 All mutations require the existing CSRF dependency. Dollar parsing uses
 `Decimal`, accepts at most two fractional digits, and converts once to integer
-cents. Limits reject zero/negative values. Goal names are at most 255
+cents. Limits reject negative values and values outside the database's signed
+integer range. Goal names are at most 255
 characters. Current savings may exceed the target so completed goals can retain
 truthful balances.
 

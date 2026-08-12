@@ -26,6 +26,7 @@ from app.imports.storage import LocalUploadStore
 from app.payslips.extraction import DocumentExtractor, TesseractOcrEngine
 from app.payslips.routes import router as payslip_router
 from app.payslips.storage import PayslipUploadStore
+from app.planning.routes import router as planning_router
 from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
@@ -107,6 +108,7 @@ def create_app(
     application.include_router(dashboard_router)
     application.include_router(account_router)
     application.include_router(category_router)
+    application.include_router(planning_router)
     application.include_router(import_router)
     application.include_router(payslip_router)
     application.include_router(transaction_router)
