@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Review statement · {{ workspace.name }} · Where Is My Money?{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">{{ workspace.name }}</p>
+  <h1>Review statement balance</h1>
+  <p>These extracted values are editable candidates. Dashboard totals have not changed.</p>
+</section>
+<section class="panel">
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  {% if accounts %}
+  <form action="/workspaces/{{ workspace.id }}/statement-imports/{{ pending.id }}/confirm" method="post" class="stacked-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="account-id">Destination account</label>
+    <select id="account-id" name="account_id" required>
+      <option value="">Choose account</option>
+      {% for account in accounts %}<option value="{{ account.id }}" {% if values.account_id == account.id|string %}selected{% endif %}>{{ account.name }}</option>{% endfor %}
+    </select>
+    {% if field_errors.account_id %}<p class="alert" role="alert">{{ field_errors.account_id }}</p>{% endif %}
+    <label for="account-name">Statement account identity</label>
+    <input id="account-name" name="account_name" value="{{ values.account_name }}" required>
+    {% if field_errors.account_name %}<p class="alert" role="alert">{{ field_errors.account_name }}</p>{% endif %}
+    <label for="institution">Institution or servicer</label>
+    <input id="institution" name="institution" value="{{ values.institution }}">
+    <label for="last-four">Account last four</label>
+    <input id="last-four" name="account_last_four" inputmode="numeric" maxlength="4" value="{{ values.account_last_four }}">
+    {% if field_errors.account_last_four %}<p class="alert" role="alert">{{ field_errors.account_last_four }}</p>{% endif %}
+    <label for="total-balance">Total balance</label>
+    <input id="total-balance" name="total_balance" type="number" min="0" step="0.01" value="{{ values.total_balance }}" required>
+    {% if field_errors.total_balance %}<p class="alert" role="alert">{{ field_errors.total_balance }}</p>{% endif %}
+    <label for="as-of-date">As of date</label>
+    <input id="as-of-date" name="as_of_date" type="date" max="{{ today.isoformat() }}" value="{{ values.as_of_date }}" required>
+    {% if field_errors.as_of_date %}<p class="alert" role="alert">{{ field_errors.as_of_date }}</p>{% endif %}
+    <button class="button" type="submit">Confirm balance snapshot</button>
+  </form>
+  {% else %}
+    <p>No compatible account exists in this workspace.</p>
+    <a href="/workspaces/{{ workspace.id }}/accounts/new">Add a compatible account</a>
+  {% endif %}
+</section>
+{% endblock %}
+
