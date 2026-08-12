@@ -89,4 +89,3 @@ def test_confirmed_snapshot_links_back_to_exactly_one_statement_import(
     assert statement_import.balance_snapshot is snapshot
     assert snapshot.statement_import is statement_import
     assert snapshot.statement_import_id == statement_import.id
-
