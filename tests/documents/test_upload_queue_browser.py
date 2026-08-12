@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.db.models import UploadedFile
+from app.db.models import Payslip, UploadedFile
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example Market,-12.34\n"
 PDF_BYTES = b"%PDF-synthetic-browser"
@@ -384,6 +384,90 @@ def test_batch_retention_is_snapshotted_while_requests_are_serialized(
     expect(retain).to_be_enabled()
     expect(delete).to_be_enabled()
     assert observed_retention == ["retain", "retain"]
+
+
+def test_files_added_during_processing_wait_for_the_next_explicit_batch(
+    signed_in_upload_page: tuple[Page, int],
+) -> None:
+    page, _ = signed_in_upload_page
+    request_count = 0
+    delayed_routes = []
+
+    def delay_first_request(route) -> None:
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            delayed_routes.append(route)
+        else:
+            fulfill_success(route)
+
+    page.route("**/document-uploads", delay_first_request)
+    page.locator("#document-files").set_input_files(payload("first.csv", "text/csv", CSV_BYTES))
+    rows = page.locator("#document-queue-body tr")
+    rows.nth(0).locator("select").select_option("transaction_statement")
+
+    with page.expect_request("**/document-uploads"):
+        page.locator("#process-documents").click()
+    page.locator("#document-files").set_input_files(
+        payload("added-later.csv", "text/csv", CSV_BYTES.replace(b"Market", b"Store"))
+    )
+    expect(rows).to_have_count(2)
+    rows.nth(1).locator("select").select_option("transaction_statement")
+
+    fulfill_success(delayed_routes.pop())
+
+    expect(rows.nth(0).get_by_role("link", name="Map columns")).to_be_visible()
+    expect(rows.nth(1).locator(".document-status")).to_have_text("Ready to process.")
+    expect(page.locator("#process-documents")).to_have_text("Process 1 file")
+    assert request_count == 1
+
+    page.locator("#process-documents").click()
+    expect(rows.nth(1).get_by_role("link", name="Map columns")).to_be_visible()
+    assert request_count == 2
+
+
+def test_malformed_post_commit_payslip_response_retries_to_the_existing_review_link(
+    signed_in_upload_page: tuple[Page, int],
+    live_document_app: tuple[str, object],
+) -> None:
+    page, _ = signed_in_upload_page
+    _, factory = live_document_app
+    first_next_url = ""
+    request_count = 0
+
+    def corrupt_first_committed_response(route) -> None:
+        nonlocal first_next_url, request_count
+        request_count += 1
+        if request_count == 1:
+            response = route.fetch()
+            first_next_url = response.json()["next_url"]
+            route.fulfill(status=200, content_type="application/json", body="{")
+        else:
+            route.continue_()
+
+    page.route("**/document-uploads", corrupt_first_committed_response)
+    page.locator("#document-files").set_input_files(
+        payload("pay.pdf", "application/pdf", PDF_BYTES)
+    )
+    row = page.locator("#document-queue-body tr")
+    row.locator("select").select_option("payslip")
+    page.locator("#process-documents").click()
+    retry = row.get_by_role("button", name="Retry pay.pdf")
+    expect(retry).to_be_visible()
+
+    retry.click()
+
+    review_link = row.get_by_role("link", name="Review payslip")
+    expect(review_link).to_be_visible()
+    expect(review_link).to_have_attribute("href", first_next_url)
+    with factory() as session:
+        payslip_count = session.scalar(select(func.count(Payslip.id)))
+        upload_count = session.scalar(select(func.count(UploadedFile.id)))
+        uploaded_file = session.scalar(select(UploadedFile))
+    assert request_count == 2
+    assert (payslip_count, upload_count) == (1, 1)
+    assert uploaded_file is not None
+    assert uploaded_file.retention_choice == "delete_after_import"
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 COPY --from=uv /uv /uvx /bin/
 
@@ -16,12 +16,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy
 
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --locked --all-groups
+
+FROM base AS runtime
+
+RUN uv sync --locked --no-dev
 
 COPY app ./app
-COPY tests ./tests
 RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-CMD ["uv", "run", "fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--no-dev", "fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS browser-tests
+
+RUN uv sync --locked --all-groups \
+    && uv run playwright install --with-deps chromium
+
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY app ./app
+COPY tests ./tests
+RUN mkdir -p /app/data
+
+CMD ["uv", "run", "pytest", "--basetemp=data/.pytest-container"]

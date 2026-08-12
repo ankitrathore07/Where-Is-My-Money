@@ -14,7 +14,7 @@ CSRF_COOKIE_NAME = "wimm_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_MAX_AGE = 3600
-BOUNDED_UPLOAD_PATH = re.compile(r"/workspaces/\d+/(?:payslips|document-uploads)")
+BOUNDED_UPLOAD_PATH = re.compile(r"/workspaces/[^/]+/(?:payslips|document-uploads)")
 
 
 class _UploadBodyTooLarge(Exception):

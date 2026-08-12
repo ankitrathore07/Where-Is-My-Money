@@ -1,5 +1,6 @@
 import pytest
 
+import app.documents.catalog as catalog
 from app.documents.catalog import (
     ALLOWED_QUEUE_SUFFIXES,
     DOCUMENT_CATEGORIES,
@@ -80,3 +81,15 @@ def test_client_catalog_contains_no_classifier_or_server_only_objects() -> None:
     assert payload[2]["accepted_suffixes"] == []
     assert "suggestion" not in payload[0]
     assert "confidence" not in payload[0]
+
+
+def test_category_content_type_mappings_are_immutable() -> None:
+    transaction_statement = DOCUMENT_CATEGORIES[0]
+
+    with pytest.raises(TypeError):
+        transaction_statement.content_types_by_suffix[".pdf"] = frozenset({"application/pdf"})
+
+
+def test_category_lookup_mapping_is_immutable() -> None:
+    with pytest.raises(TypeError):
+        catalog._CATEGORY_BY_KEY["unlisted"] = DOCUMENT_CATEGORIES[0]

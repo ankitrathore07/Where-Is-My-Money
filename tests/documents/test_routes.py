@@ -320,6 +320,51 @@ async def test_supported_document_returns_its_existing_review_destination(
 
 
 @pytest.mark.anyio
+async def test_retried_payslip_upload_returns_the_existing_review_destination(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    application.state.payslip_extractor = RouteFakeExtractor()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+            request = {
+                "category_key": "payslip",
+                "retention_choice": "retain",
+                "csrf_token": token,
+            }
+            first = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data=request,
+                files={"document": ("pay.pdf", PDF_BYTES, "application/pdf")},
+            )
+            retried = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={**request, "retention_choice": "delete_after_import"},
+                files={"document": ("pay.pdf", PDF_BYTES, "application/pdf")},
+            )
+        with factory() as session:
+            payslip_count = session.scalar(select(func.count(Payslip.id)))
+            upload_count = session.scalar(select(func.count(UploadedFile.id)))
+            uploaded_file = session.scalar(select(UploadedFile))
+    finally:
+        engine.dispose()
+
+    assert first.status_code == 200
+    assert retried.status_code == 200
+    assert retried.json()["next_url"] == first.json()["next_url"]
+    assert (payslip_count, upload_count) == (1, 1)
+    assert uploaded_file is not None
+    assert uploaded_file.retention_choice == "retain"
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+@pytest.mark.anyio
 async def test_malformed_csv_returns_safe_error_without_storage_or_record(tmp_path: Path) -> None:
     application, factory, engine = build_route_test_app(tmp_path)
     try:

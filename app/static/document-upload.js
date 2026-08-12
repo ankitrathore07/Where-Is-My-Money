@@ -285,8 +285,12 @@
   async function processQueue(event) {
     event.preventDefault();
     await runSerialized(async (retentionChoice) => {
-      for (const item of queue.values()) {
-        if (item.state !== "ready") continue;
+      const batchItemIds = [...queue.values()]
+        .filter((item) => item.state === "ready")
+        .map((item) => item.id);
+      for (const itemId of batchItemIds) {
+        const item = queue.get(itemId);
+        if (!item || item.state !== "ready") continue;
         const action = await processItem(item, retentionChoice);
         if (action === "stop") return "stop";
       }

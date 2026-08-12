@@ -47,6 +47,17 @@ class FailingExtractor:
         raise DocumentExtractionError("invalid_pdf", "Choose a valid PDF payslip.")
 
 
+class SynchronizedExtractor(FakeExtractor):
+    def __init__(self, barrier: Barrier) -> None:
+        super().__init__()
+        self.barrier = barrier
+
+    def extract(self, data: bytes, suffix: str) -> ExtractedText:
+        extracted = super().extract(data, suffix)
+        self.barrier.wait(timeout=5)
+        return extracted
+
+
 def test_pending_import_stores_candidates_without_creating_income(
     session: Session, workspace, tmp_path: Path
 ) -> None:
@@ -144,6 +155,240 @@ def test_storage_failure_creates_no_database_records(
 
     assert session.scalar(select(func.count(Payslip.id))) == 0
     assert session.scalar(select(func.count(UploadedFile.id))) == 0
+
+
+def test_retry_reuses_pending_payslip_and_preserves_original_retention(
+    session: Session,
+    workspace,
+    tmp_path: Path,
+) -> None:
+    store = PayslipUploadStore(tmp_path)
+    first = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+    assert first.uploaded_file is not None
+    original_storage_key = first.uploaded_file.storage_path
+
+    retried = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "delete_after_import",
+    )
+
+    assert retried.id == first.id
+    assert retried.review_status == "pending"
+    assert retried.uploaded_file is not None
+    assert retried.uploaded_file.retention_choice == "retain"
+    assert retried.uploaded_file.storage_path == original_storage_key
+    assert store.read(original_storage_key) == b"synthetic-private-source"
+    assert session.scalar(select(func.count(Payslip.id))) == 1
+    assert session.scalar(select(func.count(UploadedFile.id))) == 1
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+def test_retry_reuses_existing_payslip_before_repeating_extraction(
+    session: Session,
+    workspace,
+    tmp_path: Path,
+) -> None:
+    store = PayslipUploadStore(tmp_path)
+    first = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+
+    retried = create_payslip_import(
+        session,
+        store,
+        FailingExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+
+    assert retried.id == first.id
+    assert session.scalar(select(func.count(Payslip.id))) == 1
+    assert session.scalar(select(func.count(UploadedFile.id))) == 1
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+def test_retry_reuses_confirmed_delete_after_import_payslip_without_recreating_source(
+    session: Session,
+    workspace,
+    tmp_path: Path,
+) -> None:
+    store = PayslipUploadStore(tmp_path)
+    first = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "delete_after_import",
+    )
+    confirmation = confirm_payslip(session, store, first, _valid_review())
+    assert first.uploaded_file is not None
+    assert first.uploaded_file.deleted is True
+
+    retried = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+
+    assert retried.id == first.id
+    assert retried.review_status == "confirmed"
+    assert retried.uploaded_file is not None
+    assert retried.uploaded_file.retention_choice == "delete_after_import"
+    assert retried.uploaded_file.deleted is True
+    assert session.scalar(select(func.count(Payslip.id))) == 1
+    assert session.scalar(select(func.count(UploadedFile.id))) == 1
+    assert session.scalar(select(func.count(IncomeRecord.id))) == 1
+    assert confirmation.record.payslip_id == retried.id
+    assert list(tmp_path.rglob("*.pdf")) == []
+
+
+def test_retry_reuses_confirmed_retained_payslip_and_keeps_original_source(
+    session: Session,
+    workspace,
+    tmp_path: Path,
+) -> None:
+    store = PayslipUploadStore(tmp_path)
+    first = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+    confirm_payslip(session, store, first, _valid_review())
+    assert first.uploaded_file is not None
+    original_storage_key = first.uploaded_file.storage_path
+
+    retried = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "delete_after_import",
+    )
+
+    assert retried.id == first.id
+    assert retried.review_status == "confirmed"
+    assert retried.uploaded_file is not None
+    assert retried.uploaded_file.retention_choice == "retain"
+    assert retried.uploaded_file.deleted is False
+    assert retried.uploaded_file.storage_path == original_storage_key
+    assert store.read(original_storage_key) == b"synthetic-private-source"
+    assert session.scalar(select(func.count(Payslip.id))) == 1
+    assert session.scalar(select(func.count(UploadedFile.id))) == 1
+    assert session.scalar(select(func.count(IncomeRecord.id))) == 1
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+def test_matching_payslip_checksum_is_scoped_to_workspace(
+    session: Session,
+    workspace,
+    other_workspace,
+    tmp_path: Path,
+) -> None:
+    store = PayslipUploadStore(tmp_path)
+
+    first = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "retain",
+    )
+    foreign = create_payslip_import(
+        session,
+        store,
+        FakeExtractor(),
+        other_workspace,
+        BytesIO(b"synthetic-private-source"),
+        ".pdf",
+        "delete_after_import",
+    )
+
+    assert foreign.id != first.id
+    assert foreign.workspace_id == other_workspace.id
+    assert session.scalar(select(func.count(Payslip.id))) == 2
+    assert session.scalar(select(func.count(UploadedFile.id))) == 2
+
+
+def test_concurrent_matching_uploads_create_one_pending_payslip(tmp_path: Path) -> None:
+    database_path = tmp_path / "concurrent-payslip-upload.db"
+    engine = create_engine(
+        f"sqlite:///{database_path.as_posix()}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as setup_session:
+        owner = User(google_sub="upload-owner", email="upload@example.test")
+        workspace = Workspace(name="Concurrent uploads", is_personal=True, owner=owner)
+        setup_session.add(workspace)
+        setup_session.commit()
+        workspace_id = workspace.id
+
+    barrier = Barrier(2)
+    store = PayslipUploadStore(tmp_path / "uploads")
+
+    def upload_in_new_session() -> int:
+        with factory() as worker_session:
+            worker_workspace = worker_session.get(Workspace, workspace_id)
+            assert worker_workspace is not None
+            payslip = create_payslip_import(
+                worker_session,
+                store,
+                SynchronizedExtractor(barrier),
+                worker_workspace,
+                BytesIO(b"synthetic-private-source"),
+                ".pdf",
+                "retain",
+            )
+            return payslip.id
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            payslip_ids = list(workers.map(lambda _: upload_in_new_session(), range(2)))
+        with factory() as check_session:
+            payslip_count = check_session.scalar(select(func.count(Payslip.id)))
+            upload_count = check_session.scalar(select(func.count(UploadedFile.id)))
+    finally:
+        engine.dispose()
+
+    assert len(set(payslip_ids)) == 1
+    assert (payslip_count, upload_count) == (1, 1)
+    assert len(list((tmp_path / "uploads").rglob("*.pdf"))) == 1
 
 
 def _pending_payslip(

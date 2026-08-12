@@ -48,6 +48,7 @@ account, or Git commit.
 From the project directory, run:
 
     uv sync --all-groups --locked
+    uv run playwright install chromium
     uv run fastapi dev app/main.py
 
 Open http://127.0.0.1:8000. The API documentation is at
@@ -59,6 +60,8 @@ What those commands mean:
   installs exactly the dependency versions recorded in `uv.lock`.
 - `--all-groups` includes developer tools such as Pytest and Ruff.
 - `--locked` refuses to silently change the lock file.
+- `playwright install chromium` installs the pinned local browser used by the
+  real-browser test suite. Run it after a clean checkout or Playwright upgrade.
 - `uv run` runs a command inside `.venv`, so you do not activate it manually.
 - `fastapi dev` starts a local server and reloads after Python file changes.
 
@@ -295,6 +298,13 @@ future rules; use the transaction edit page when you want that behavior.
 
 ## Run the checks
 
+On a clean machine, install the locked dependencies and Chromium once:
+
+    uv sync --all-groups --locked
+    uv run playwright install chromium
+
+Then run:
+
     uv run ruff check .
     uv run ruff format --check .
     uv run pytest
@@ -342,14 +352,19 @@ with Control+C, then remove the stopped container with:
 
     docker compose down
 
-To run CI-equivalent checks inside one-off containers:
+The production `web` image intentionally omits developer dependencies, test
+sources, Chromium, and its system libraries. Build the separate browser-capable
+test stage for CI-equivalent checks; it is larger, but none of that test-only
+weight ships in the runtime image:
 
-    docker compose run --rm web uv run ruff check .
-    docker compose run --rm web uv run ruff format --check .
-    docker compose run --rm web uv run pytest
+    docker compose build browser-tests
+    docker compose run --rm browser-tests uv run ruff check .
+    docker compose run --rm browser-tests uv run ruff format --check .
+    docker compose run --rm browser-tests uv run pytest --basetemp=data/.pytest-container
 
 `--rm` removes only the one-off test container. It does not delete the named
-database volume.
+database volume. The test service uses its own ephemeral container filesystem
+and does not mount `app_data`.
 
 ## Project map
 

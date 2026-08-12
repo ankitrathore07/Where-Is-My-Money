@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 from app.documents.types import DocumentCategory
 
@@ -7,12 +9,18 @@ ALLOWED_QUEUE_SUFFIXES = frozenset({".csv", ".pdf", ".png", ".jpg", ".jpeg"})
 CSV_CONTENT_TYPES = frozenset(
     {"text/csv", "application/csv", "application/vnd.ms-excel", "application/octet-stream"}
 )
-PAYSLIP_CONTENT_TYPES = {
-    ".pdf": frozenset({"application/pdf"}),
-    ".png": frozenset({"image/png"}),
-    ".jpg": frozenset({"image/jpeg", "image/jpg"}),
-    ".jpeg": frozenset({"image/jpeg", "image/jpg"}),
-}
+CSV_CONTENT_TYPES_BY_SUFFIX: Mapping[str, frozenset[str]] = MappingProxyType(
+    {".csv": CSV_CONTENT_TYPES}
+)
+PAYSLIP_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        ".pdf": frozenset({"application/pdf"}),
+        ".png": frozenset({"image/png"}),
+        ".jpg": frozenset({"image/jpeg", "image/jpg"}),
+        ".jpeg": frozenset({"image/jpeg", "image/jpg"}),
+    }
+)
+NO_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType({})
 
 
 class DocumentUploadValidationError(ValueError):
@@ -27,17 +35,23 @@ DOCUMENT_CATEGORIES = (
         "transaction_statement",
         "Bank or credit-card transaction statement",
         "csv_import",
-        {".csv": CSV_CONTENT_TYPES},
+        CSV_CONTENT_TYPES_BY_SUFFIX,
     ),
     DocumentCategory("payslip", "Payslip", "payslip", PAYSLIP_CONTENT_TYPES),
-    DocumentCategory("retirement_401k_statement", "401(k) retirement statement", None, {}),
-    DocumentCategory("brokerage_statement", "Brokerage or stocks statement", None, {}),
-    DocumentCategory("mortgage_statement", "Mortgage statement", None, {}),
-    DocumentCategory("loan_statement", "Loan statement", None, {}),
-    DocumentCategory("other_account_statement", "Other account statement", None, {}),
-    DocumentCategory("unlisted", "Category not listed", None, {}),
+    DocumentCategory(
+        "retirement_401k_statement", "401(k) retirement statement", None, NO_CONTENT_TYPES
+    ),
+    DocumentCategory(
+        "brokerage_statement", "Brokerage or stocks statement", None, NO_CONTENT_TYPES
+    ),
+    DocumentCategory("mortgage_statement", "Mortgage statement", None, NO_CONTENT_TYPES),
+    DocumentCategory("loan_statement", "Loan statement", None, NO_CONTENT_TYPES),
+    DocumentCategory("other_account_statement", "Other account statement", None, NO_CONTENT_TYPES),
+    DocumentCategory("unlisted", "Category not listed", None, NO_CONTENT_TYPES),
 )
-_CATEGORY_BY_KEY = {category.key: category for category in DOCUMENT_CATEGORIES}
+_CATEGORY_BY_KEY: Mapping[str, DocumentCategory] = MappingProxyType(
+    {category.key: category for category in DOCUMENT_CATEGORIES}
+)
 
 
 def get_document_category(key: str) -> DocumentCategory | None:
