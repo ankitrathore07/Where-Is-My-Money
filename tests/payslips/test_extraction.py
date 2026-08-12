@@ -63,6 +63,21 @@ def test_encrypted_pdf_is_rejected_without_reading_private_content() -> None:
     assert error.value.code == "encrypted_pdf"
 
 
+def test_zero_password_pdf_is_accepted_when_no_password_is_needed() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("")
+    output = BytesIO()
+    writer.write(output)
+
+    extracted = DocumentExtractor(RecordingOcr("Zero password PDF text is readable with OCR.")).extract(
+        output.getvalue(), ".pdf"
+    )
+
+    assert extracted.method == "ocr"
+    assert "Zero password PDF text is readable with OCR." in extracted.text
+
+
 def test_pdf_page_limit_is_enforced_before_rendering_or_ocr() -> None:
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)

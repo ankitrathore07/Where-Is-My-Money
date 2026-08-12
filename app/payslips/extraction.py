@@ -104,9 +104,10 @@ class DocumentExtractor:
         try:
             reader = PdfReader(BytesIO(data), strict=False)
             if reader.is_encrypted:
-                raise DocumentExtractionError(
-                    "encrypted_pdf", "Encrypted PDF payslips are not supported."
-                )
+                if reader.decrypt("") == 0:
+                    raise DocumentExtractionError(
+                        "encrypted_pdf", "Encrypted PDF payslips are not supported."
+                    )
             page_count = len(reader.pages)
             if page_count > self.max_pdf_pages:
                 noun = "page" if self.max_pdf_pages == 1 else "pages"
