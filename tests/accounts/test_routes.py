@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from app.accounts import routes as account_routes
 from app.db.models import Account, AccountBalanceSnapshot, User, Workspace
 from tests.route_helpers import build_route_test_app, complete_sign_in
 
@@ -92,6 +93,82 @@ async def test_member_can_create_edit_and_add_manual_balance(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
+async def test_manual_balance_uses_utc_calendar_date_for_form_max_and_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class LocalDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return date(2026, 8, 10)
+
+    class UtcDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object | None = None) -> datetime:
+            assert tz is UTC
+            return datetime(2026, 8, 11, 0, 30, tzinfo=UTC)
+
+    monkeypatch.setattr(account_routes, "date", LocalDate)
+    monkeypatch.setattr(account_routes, "datetime", UtcDatetime, raising=False)
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = Account(
+                    workspace_id=workspace_id,
+                    name="Everyday Checking",
+                    account_type="checking",
+                    institution="Example CU",
+                    is_liability=False,
+                )
+                session.add(account)
+                session.commit()
+                account_id = account.id
+            form = await client.get(
+                f"/workspaces/{workspace_id}/accounts/{account_id}/balances/new"
+            )
+            accepted = await client.post(
+                f"/workspaces/{workspace_id}/accounts/{account_id}/balances",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "amount": "100.00",
+                    "as_of_date": "2026-08-11",
+                },
+                follow_redirects=False,
+            )
+            rejected = await client.post(
+                f"/workspaces/{workspace_id}/accounts/{account_id}/balances",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "amount": "101.00",
+                    "as_of_date": "2026-08-12",
+                },
+            )
+            with factory() as session:
+                snapshots = tuple(
+                    session.scalars(
+                        select(AccountBalanceSnapshot).where(
+                            AccountBalanceSnapshot.account_id == account_id
+                        )
+                    )
+                )
+    finally:
+        engine.dispose()
+
+    assert 'max="2026-08-11"' in form.text
+    assert accepted.status_code == 303
+    assert rejected.status_code == 422
+    assert "Balance dates cannot be in the future." in rejected.text
+    assert [(snapshot.balance_cents, snapshot.as_of_date) for snapshot in snapshots] == [
+        (10_000, date(2026, 8, 11))
+    ]
+
+
+@pytest.mark.anyio
 async def test_account_create_requires_csrf_and_redisplays_name_validation(tmp_path: Path) -> None:
     application, factory, engine = build_route_test_app(tmp_path)
     try:
@@ -122,6 +199,91 @@ async def test_account_create_requires_csrf_and_redisplays_name_validation(tmp_p
     assert invalid.status_code == 422
     assert "Account name is required." in invalid.text
     assert account_count == 0
+
+
+@pytest.mark.anyio
+async def test_account_update_rejects_missing_csrf_without_mutating_account(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = Account(
+                    workspace_id=workspace_id,
+                    name="Original Name",
+                    account_type="checking",
+                    institution="Example CU",
+                    is_liability=False,
+                )
+                session.add(account)
+                session.commit()
+                account_id = account.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/accounts/{account_id}",
+                data={
+                    "name": "Changed Name",
+                    "account_type": "savings",
+                    "institution": "Changed Bank",
+                    "classification": "liability",
+                },
+            )
+            with factory() as session:
+                unchanged = session.get(Account, account_id)
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 403
+    assert unchanged is not None
+    assert (
+        unchanged.name,
+        unchanged.account_type,
+        unchanged.institution,
+        unchanged.is_liability,
+    ) == ("Original Name", "checking", "Example CU", False)
+
+
+@pytest.mark.anyio
+async def test_manual_balance_rejects_missing_csrf_without_creating_snapshot(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = Account(
+                    workspace_id=workspace_id,
+                    name="Everyday Checking",
+                    account_type="checking",
+                    institution="Example CU",
+                    is_liability=False,
+                )
+                session.add(account)
+                session.commit()
+                account_id = account.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/accounts/{account_id}/balances",
+                data={"amount": "100.00", "as_of_date": "2026-08-10"},
+            )
+            with factory() as session:
+                snapshot_count = session.scalar(
+                    select(func.count())
+                    .select_from(AccountBalanceSnapshot)
+                    .where(AccountBalanceSnapshot.account_id == account_id)
+                )
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 403
+    assert snapshot_count == 0
 
 
 @pytest.mark.anyio

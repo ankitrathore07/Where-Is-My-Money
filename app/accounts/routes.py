@@ -1,6 +1,6 @@
 """Authorized server-rendered account and manual balance routes."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -27,6 +27,10 @@ from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["accounts"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
 
 
 def _context(
@@ -260,7 +264,7 @@ async def new_manual_balance(
         account = get_workspace_account(session, workspace.id, account_id)
     except AccountNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
-    return _render_balance_form(request, user, workspace, account, today=date.today())
+    return _render_balance_form(request, user, workspace, account, today=_utc_today())
 
 
 @router.post("/accounts/{account_id}/balances", dependencies=[Depends(require_csrf)])
@@ -273,7 +277,7 @@ async def manual_balance_create(
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> HTMLResponse:
-    today = date.today()
+    today = _utc_today()
     values = {"amount": amount, "as_of_date": as_of_date}
     try:
         add_manual_balance(
