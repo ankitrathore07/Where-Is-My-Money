@@ -40,3 +40,7 @@ COPY tests ./tests
 RUN mkdir -p /app/data
 
 CMD ["uv", "run", "pytest", "--basetemp=data/.pytest-container"]
+
+# Keep a plain `docker build .` production-safe while exposing browser-tests
+# as an explicit Compose/CI target above.
+FROM runtime AS final
