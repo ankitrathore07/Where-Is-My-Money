@@ -21,6 +21,7 @@ from app.core.middleware import CSRFMiddleware, UploadBodyLimitMiddleware
 from app.core.security import SlidingWindowRateLimiter
 from app.dashboard.routes import router as dashboard_router
 from app.db.models import User
+from app.documents.routes import router as document_router
 from app.imports.routes import router as import_router
 from app.imports.storage import LocalUploadStore
 from app.payslips.extraction import DocumentExtractor, TesseractOcrEngine
@@ -109,6 +110,7 @@ def create_app(
     application.include_router(account_router)
     application.include_router(category_router)
     application.include_router(planning_router)
+    application.include_router(document_router)
     application.include_router(import_router)
     application.include_router(payslip_router)
     application.include_router(transaction_router)
