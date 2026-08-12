@@ -20,8 +20,9 @@ from app.documents.catalog import (
     validate_processable_upload,
 )
 from app.documents.types import DocumentProcessResult
+from app.imports.document_parser import TransactionStatementFormatError
 from app.imports.parser import CsvValidationError
-from app.imports.service import ImportStateError, create_csv_import
+from app.imports.service import ImportStateError, create_transaction_import
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.payslips.extraction import DocumentExtractionError, DocumentExtractor
 from app.payslips.service import PayslipImportError, create_payslip_import
@@ -34,6 +35,8 @@ from app.workspaces.dependencies import require_workspace
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["documents"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
 STATEMENT_CATEGORY_BY_DOCUMENT_CATEGORY = {
+    "bank_balance_statement": "bank_account",
+    "credit_card_balance_statement": "credit_card",
     "retirement_401k_statement": "investment_401k",
     "brokerage_statement": "brokerage",
     "mortgage_statement": "mortgage",
@@ -87,14 +90,24 @@ def _error(
     )
 
 
-def _process_csv(
+def _process_transaction(
     session: Session,
     store: LocalUploadStore,
+    extractor: object,
     workspace: Workspace,
     document: UploadFile,
     retention_choice: str,
 ) -> DocumentProcessResult:
-    result = create_csv_import(session, store, workspace, document.file, retention_choice)
+    result = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        document.filename or "",
+        document.content_type or "",
+        document.file,
+        retention_choice,
+    )
     if result.kind == "already_committed":
         destination = f"/workspaces/{workspace.id}/transactions?already_imported=1"
         label = "View transactions"
@@ -185,10 +198,11 @@ def process_document_upload(
             document.filename or "",
             document.content_type,
         )
-        if category.processor == "csv_import":
-            result = _process_csv(
+        if category.processor == "transaction_import":
+            result = _process_transaction(
                 session,
                 request.app.state.upload_store,
+                request.app.state.statement_extractor,
                 workspace,
                 document,
                 retention_choice,
@@ -225,6 +239,7 @@ def process_document_upload(
         StatementFormatError,
         StatementStorageError,
         StatementImportError,
+        TransactionStatementFormatError,
     ) as exc:
         return _error(exc.code, exc.message)
     return JSONResponse(result.as_payload())

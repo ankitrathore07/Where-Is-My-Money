@@ -13,9 +13,9 @@
         <button class="button" type="submit">Retry source cleanup</button>
       </form>
     {% elif job.uploaded_file and job.uploaded_file.retention_choice == "retain" %}
-      <p>The raw CSV is retained privately for this workspace.</p>
+      <p>The raw statement is retained privately for this workspace.</p>
     {% else %}
-      <p>The raw CSV has been deleted.</p>
+      <p>The raw statement has been deleted.</p>
     {% endif %}
     <a class="button" href="/workspaces/{{ workspace.id }}/transactions">View transactions</a>
   </section>

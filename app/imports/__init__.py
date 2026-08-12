@@ -1,1 +1,1 @@
-"""Private CSV statement import workflow."""
+"""Private CSV and PDF transaction-statement import workflow."""

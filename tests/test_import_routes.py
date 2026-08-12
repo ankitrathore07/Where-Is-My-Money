@@ -140,7 +140,7 @@ async def test_invalid_extension_creates_no_private_record(tmp_path: Path) -> No
 
     assert response.status_code == 400
     assert count == 0
-    assert "Choose a CSV file" in response.text
+    assert "Choose a CSV or PDF transaction statement" in response.text
     assert list(tmp_path.rglob("*.csv")) == []
 
 

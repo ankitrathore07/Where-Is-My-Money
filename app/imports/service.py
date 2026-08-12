@@ -1,7 +1,8 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
-from typing import BinaryIO, Literal
+from pathlib import Path
+from typing import BinaryIO, Literal, Protocol
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationSource
 from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
+from app.imports.document_parser import parse_transaction_statement_text
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
 from app.imports.mapping import mapping_from_json, validate_mapping
 from app.imports.normalization import (
@@ -32,6 +34,14 @@ ACTIVE_STATUSES = {"awaiting_mapping", "reviewing"}
 COMMITTED_STATUSES = {"committed", "committed_cleanup_failed"}
 RETENTION_CHOICES = {"delete_after_import", "retain"}
 UploadResultKind = Literal["created", "resume", "already_committed"]
+
+
+class TransactionSourceText(Protocol):
+    text: str
+
+
+class TransactionSourceExtractor(Protocol):
+    def extract(self, data: bytes, suffix: str) -> TransactionSourceText: ...
 
 
 class ImportStateError(ValueError):
@@ -139,6 +149,76 @@ def create_csv_import(
         raise
 
 
+def create_transaction_import(
+    session: Session,
+    store: LocalUploadStore,
+    extractor: TransactionSourceExtractor,
+    workspace: Workspace,
+    filename: str,
+    media_type: str,
+    upload: BinaryIO,
+    retention_choice: str,
+) -> UploadResult:
+    """Create a reviewed CSV or locally extracted PDF transaction import."""
+    suffix = Path(filename).suffix.casefold()
+    if suffix == ".csv":
+        return create_csv_import(session, store, workspace, upload, retention_choice)
+    if suffix != ".pdf" or media_type.casefold() != "application/pdf":
+        raise ImportStateError(
+            "unsupported_file_type", "Choose a CSV or PDF transaction statement."
+        )
+    if retention_choice not in RETENTION_CHOICES:
+        raise ImportStateError(
+            "invalid_retention", "Choose whether to delete or retain the source file."
+        )
+
+    saved = store.save(workspace.id, upload, suffix)
+    try:
+        extracted = extractor.extract(store.read(saved.storage_key), suffix)
+        parse_transaction_statement_text(extracted.text)
+        existing = _matching_import(session, workspace.id, saved.checksum)
+        if existing is not None:
+            store.delete(saved.storage_key)
+            kind: UploadResultKind = (
+                "already_committed" if existing.status in COMMITTED_STATUSES else "resume"
+            )
+            return UploadResult(kind, existing)
+
+        mapping = ColumnMapping(
+            date_column="Date",
+            description_column="Description",
+            amount_mode="single",
+            amount_column="Amount",
+            debit_column=None,
+            credit_column=None,
+            date_format="iso",
+            amount_sign="as_is",
+        )
+        uploaded_file = UploadedFile(
+            workspace_id=workspace.id,
+            file_type="transaction_pdf",
+            storage_path=saved.storage_key,
+            checksum=saved.checksum,
+            size_bytes=saved.size_bytes,
+            retention_choice=retention_choice,
+            deleted=False,
+        )
+        job = ImportJob(
+            workspace_id=workspace.id,
+            uploaded_file=uploaded_file,
+            status="reviewing",
+            column_mapping=mapping.to_json(),
+            source_checksum=saved.checksum,
+        )
+        session.add(job)
+        session.commit()
+        return UploadResult("created", job)
+    except Exception:
+        session.rollback()
+        store.delete(saved.storage_key)
+        raise
+
+
 def cancel_import(session: Session, store: LocalUploadStore, job: ImportJob) -> ImportJob:
     """Cancel an uncommitted job and truthfully record source cleanup."""
     if job.status not in ACTIVE_STATUSES:
@@ -168,14 +248,24 @@ def cancel_import(session: Session, store: LocalUploadStore, job: ImportJob) -> 
     return job
 
 
-def load_source_document(store: LocalUploadStore, job: ImportJob) -> CsvDocument:
+def load_source_document(
+    store: LocalUploadStore,
+    job: ImportJob,
+    extractor: TransactionSourceExtractor | None = None,
+) -> CsvDocument:
     uploaded_file = job.uploaded_file
     if uploaded_file is None or uploaded_file.deleted:
         raise ImportStateError("source_missing", "The private source file is missing.")
     try:
-        return parse_csv_bytes(store.read(uploaded_file.storage_path))
+        data = store.read(uploaded_file.storage_path)
     except UploadStorageError as exc:
         raise ImportStateError("source_missing", "The private source file is missing.") from exc
+    suffix = Path(uploaded_file.storage_path).suffix.casefold()
+    if suffix == ".csv":
+        return parse_csv_bytes(data)
+    if suffix == ".pdf" and extractor is not None:
+        return parse_transaction_statement_text(extractor.extract(data, suffix).text)
+    raise ImportStateError("source_unreadable", "The private transaction statement cannot be read.")
 
 
 def save_mapping(
@@ -183,11 +273,12 @@ def save_mapping(
     store: LocalUploadStore,
     job: ImportJob,
     form: Mapping[str, object],
+    extractor: TransactionSourceExtractor | None = None,
 ) -> ColumnMapping:
     """Validate mapping fields against the job's exact private source headers."""
     if job.status not in ACTIVE_STATUSES:
         raise ImportStateError("mapping_not_editable", "This import can no longer be mapped.")
-    document = load_source_document(store, job)
+    document = load_source_document(store, job, extractor)
     mapping = validate_mapping(document.headers, form)
     job.column_mapping = mapping.to_json()
     job.validation_errors = None
@@ -215,13 +306,22 @@ def _raw_amount(row_values: Mapping[str, str], mapping: ColumnMapping) -> str:
     return f"-{debit}" if debit else credit
 
 
-def build_review(session: Session, store: LocalUploadStore, job: ImportJob) -> ImportReview:
+def build_review(
+    session: Session,
+    store: LocalUploadStore,
+    job: ImportJob,
+    extractor: TransactionSourceExtractor | None = None,
+) -> ImportReview:
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
-        raise ImportStateError("not_ready_for_review", "Map the CSV before reviewing it.")
-    document = load_source_document(store, job)
+        raise ImportStateError(
+            "not_ready_for_review", "Prepare the transaction statement before reviewing it."
+        )
+    document = load_source_document(store, job, extractor)
     if not isinstance(job.column_mapping, dict):
-        raise ImportStateError("mapping_missing", "Map the CSV before reviewing it.")
+        raise ImportStateError(
+            "mapping_missing", "Prepare the transaction statement before reviewing it."
+        )
     mapping = mapping_from_json(document.headers, job.column_mapping)
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
@@ -387,6 +487,7 @@ def commit_import(
     store: LocalUploadStore,
     job: ImportJob,
     edits: tuple[RowEdit, ...],
+    extractor: TransactionSourceExtractor | None = None,
 ) -> CommitResult:
     """Atomically persist reviewed non-duplicate edits, then honor retention."""
     if job.status in COMMITTED_STATUSES:
@@ -398,9 +499,11 @@ def commit_import(
             cleanup_failed=job.status == "committed_cleanup_failed",
         )
     if job.status != "reviewing":
-        raise ImportStateError("not_ready_to_commit", "Review the CSV before committing it.")
+        raise ImportStateError(
+            "not_ready_to_commit", "Review the transaction statement before committing it."
+        )
 
-    review = build_review(session, store, job)
+    review = build_review(session, store, job, extractor)
     expected_rows = tuple(row.row_number for row in review.rows)
     submitted_rows = tuple(edit.row_number for edit in edits)
     if submitted_rows != expected_rows or len(set(submitted_rows)) != len(submitted_rows):

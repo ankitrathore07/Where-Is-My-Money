@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import date
 
 SUPPORTED_STATEMENT_CATEGORIES = (
+    "bank_account",
+    "credit_card",
     "investment_401k",
     "brokerage",
     "mortgage",
@@ -10,6 +12,8 @@ SUPPORTED_STATEMENT_CATEGORIES = (
 )
 
 _COMPATIBLE_ACCOUNT_TYPES = {
+    "bank_account": frozenset({"checking", "savings"}),
+    "credit_card": frozenset({"credit_card"}),
     "investment_401k": frozenset({"investment_401k"}),
     "brokerage": frozenset({"investment_brokerage"}),
     "mortgage": frozenset({"mortgage"}),

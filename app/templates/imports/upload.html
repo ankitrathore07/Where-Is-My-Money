@@ -1,24 +1,25 @@
 {% extends "base.html" %}
 
-{% block title %}Import CSV · {{ workspace.name }}{% endblock %}
+{% block title %}Import transactions · {{ workspace.name }}{% endblock %}
 
 {% block content %}
   <section class="page-heading">
     <p class="eyebrow">{{ workspace.name }}</p>
-    <h1>Import a CSV statement</h1>
+    <h1>Import a transaction statement</h1>
     <p>Your file remains private to this workspace. Transactions are not saved until you review and commit them.</p>
   </section>
 
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
   <form action="/workspaces/{{ workspace.id }}/imports" method="post" enctype="multipart/form-data" class="stacked-form panel">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label for="statement">CSV statement</label>
-    <input id="statement" name="statement" type="file" accept=".csv,text/csv" required>
+    <label for="statement">CSV or PDF statement</label>
+    <input id="statement" name="statement" type="file" accept=".csv,.pdf,text/csv,application/pdf" required>
+    <p class="muted">PDF extraction stays local. Every transaction must show an explicit sign, parentheses, or debit/credit marker; ambiguous PDFs are rejected instead of guessed.</p>
     <fieldset>
       <legend>After a successful import</legend>
-      <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete the raw CSV</label>
-      <label><input type="radio" name="retention_choice" value="retain"> Retain the raw CSV privately</label>
+      <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete the raw statement</label>
+      <label><input type="radio" name="retention_choice" value="retain"> Retain the raw statement privately</label>
     </fieldset>
-    <button class="button" type="submit">Upload and map columns</button>
+    <button class="button" type="submit">Upload for review</button>
   </form>
 {% endblock %}

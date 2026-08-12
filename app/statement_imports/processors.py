@@ -8,6 +8,18 @@ from app.statement_imports.types import (
 )
 
 BALANCE_LABELS = {
+    "bank_account": (
+        "Ending balance",
+        "Closing balance",
+        "Current balance",
+        "Available balance",
+    ),
+    "credit_card": (
+        "New balance",
+        "Statement balance",
+        "Current balance",
+        "Total balance",
+    ),
     "investment_401k": (
         "Total account balance",
         "Total plan balance",

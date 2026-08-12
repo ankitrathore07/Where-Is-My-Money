@@ -134,11 +134,13 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
   categories never claim support, and the existing dashboard shows correct
   totals.
 - **Status:** Implemented with local deterministic processors for documented
-  401(k), brokerage, mortgage, loan, and other CSV/PDF/image statement content;
+  checking, savings, credit-card, 401(k), brokerage, mortgage, loan, and other
+  CSV/PDF/image statement content;
   private one-file ingestion compatible with a future multi-file uploader;
   editable workspace-scoped confirmation; idempotent snapshot creation; and PR
-  7 dashboard reuse. Checking, savings, and credit-card statement imports,
-  holdings, provider APIs, and AI extraction remain unavailable.
+  7 dashboard reuse. Locally extracted PDF transaction rows feed the existing
+  review/commit workflow. Holdings, provider APIs, and AI extraction remain
+  unavailable.
 
 ## PR 9 — Production readiness and learning documentation
 

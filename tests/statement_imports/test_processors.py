@@ -12,12 +12,16 @@ from app.statement_imports.types import (
 
 def test_supported_categories_map_only_to_implemented_account_types() -> None:
     assert SUPPORTED_STATEMENT_CATEGORIES == (
+        "bank_account",
+        "credit_card",
         "investment_401k",
         "brokerage",
         "mortgage",
         "loan",
         "other",
     )
+    assert compatible_account_types("bank_account") == frozenset({"checking", "savings"})
+    assert compatible_account_types("credit_card") == frozenset({"credit_card"})
     assert compatible_account_types("investment_401k") == frozenset({"investment_401k"})
     assert compatible_account_types("brokerage") == frozenset({"investment_brokerage"})
     assert compatible_account_types("mortgage") == frozenset({"mortgage"})
@@ -28,6 +32,14 @@ def test_supported_categories_map_only_to_implemented_account_types() -> None:
 @pytest.mark.parametrize(
     ("category", "label"),
     [
+        ("bank_account", "Ending balance"),
+        ("bank_account", "Closing balance"),
+        ("bank_account", "Current balance"),
+        ("bank_account", "Available balance"),
+        ("credit_card", "New balance"),
+        ("credit_card", "Statement balance"),
+        ("credit_card", "Current balance"),
+        ("credit_card", "Total balance"),
         ("investment_401k", "Total account balance"),
         ("investment_401k", "Total plan balance"),
         ("investment_401k", "Ending account value"),

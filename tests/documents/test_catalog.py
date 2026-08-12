@@ -13,6 +13,8 @@ from app.documents.catalog import (
 EXPECTED_KEYS = (
     "transaction_statement",
     "payslip",
+    "bank_balance_statement",
+    "credit_card_balance_statement",
     "retirement_401k_statement",
     "brokerage_statement",
     "mortgage_statement",
@@ -27,6 +29,8 @@ def test_catalog_exposes_stable_manual_categories_and_supported_processors() -> 
     assert {category.key for category in DOCUMENT_CATEGORIES if category.processor} == {
         "transaction_statement",
         "payslip",
+        "bank_balance_statement",
+        "credit_card_balance_statement",
         "retirement_401k_statement",
         "brokerage_statement",
         "mortgage_statement",
@@ -40,8 +44,14 @@ def test_catalog_exposes_stable_manual_categories_and_supported_processors() -> 
 @pytest.mark.parametrize(
     "key,filename,content_type,processor",
     [
-        ("transaction_statement", "checking.csv", "text/csv", "csv_import"),
-        ("transaction_statement", "checking.csv", "application/octet-stream", "csv_import"),
+        ("transaction_statement", "checking.csv", "text/csv", "transaction_import"),
+        (
+            "transaction_statement",
+            "checking.csv",
+            "application/octet-stream",
+            "transaction_import",
+        ),
+        ("transaction_statement", "checking.pdf", "application/pdf", "transaction_import"),
         ("payslip", "pay.pdf", "application/pdf", "payslip"),
         ("payslip", "pay.jpeg", "image/jpeg", "payslip"),
         ("retirement_401k_statement", "plan.csv", "text/csv", "statement_balance"),
@@ -64,7 +74,7 @@ def test_processable_metadata_returns_the_selected_category(
     [
         ("missing", "checking.csv", "text/csv", "unknown_category"),
         ("unlisted", "account.pdf", "application/pdf", "processor_unavailable"),
-        ("transaction_statement", "checking.pdf", "application/pdf", "category_format_mismatch"),
+        ("transaction_statement", "checking.png", "image/png", "category_format_mismatch"),
         ("payslip", "pay.pdf", "text/plain", "category_format_mismatch"),
     ],
 )
@@ -87,8 +97,8 @@ def test_client_catalog_contains_no_classifier_or_server_only_objects() -> None:
         "key": "transaction_statement",
         "label": "Bank or credit-card transaction statement",
         "supported": True,
-        "accepted_suffixes": [".csv"],
-        "max_bytes": 5_000_000,
+        "accepted_suffixes": [".csv", ".pdf"],
+        "max_bytes": 12_000_000,
     }
     assert payload[2]["supported"] is True
     assert payload[2]["accepted_suffixes"] == [".csv", ".jpeg", ".jpg", ".pdf", ".png"]

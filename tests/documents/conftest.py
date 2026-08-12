@@ -9,7 +9,7 @@ import uvicorn
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 from sqlalchemy import select
 
-from app.db.models import Workspace
+from app.db.models import Category, Workspace
 from app.payslips.extraction import ExtractedText
 from tests.route_helpers import build_route_test_app
 
@@ -28,6 +28,17 @@ class BrowserFakeExtractor:
         assert data == PDF_BYTES
         assert suffix == ".pdf"
         return ExtractedText(PAY_TEXT, "embedded_text")
+
+
+class BrowserFakeStatementExtractor:
+    def extract(self, data: bytes, suffix: str) -> ExtractedText:
+        assert data == PDF_BYTES
+        assert suffix == ".pdf"
+        return ExtractedText(
+            "08/01/2026 Example Market -$12.34 $1,250.00\n"
+            "2026-08-02 Payroll CREDIT $2,500.00 $3,750.00",
+            "embedded_text",
+        )
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +76,10 @@ def _free_port() -> int:
 def live_document_app(tmp_path: Path) -> Generator[tuple[str, object], None, None]:
     application, factory, engine = build_route_test_app(tmp_path)
     application.state.payslip_extractor = BrowserFakeExtractor()
+    application.state.statement_extractor = BrowserFakeStatementExtractor()
+    with factory() as session:
+        session.add(Category(workspace_id=None, name="Income", kind="income"))
+        session.commit()
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(

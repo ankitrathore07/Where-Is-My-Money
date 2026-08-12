@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-DocumentProcessorKey = Literal["csv_import", "payslip", "statement_balance"]
+DocumentProcessorKey = Literal["transaction_import", "payslip", "statement_balance"]
 
 
 @dataclass(frozen=True)

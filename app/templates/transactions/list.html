@@ -9,7 +9,7 @@
     <p>Negative amounts are money out; positive amounts are money in.</p>
   </section>
 
-  {% if already_imported %}<p class="notice" role="status">That CSV was already imported, so no duplicate transactions were added.</p>{% endif %}
+  {% if already_imported %}<p class="notice" role="status">That statement was already imported, so no duplicate transactions were added.</p>{% endif %}
   {% if semantic_filter_label %}<p class="notice" role="status">Showing {{ semantic_filter_label }} supporting the dashboard report.</p>{% endif %}
   {% if errors %}<div class="alert" role="alert"><strong>Correct the filters below.</strong><ul>{% for message in errors.values() %}<li>{{ message }}</li>{% endfor %}</ul></div>{% endif %}
 
@@ -65,8 +65,8 @@
   {% elif page %}
     <section class="panel">
       <h2>No transactions found</h2>
-      <p>Adjust the filters or import a CSV statement.</p>
-      <a class="button" href="/workspaces/{{ workspace.id }}/imports/new">Import CSV</a>
+      <p>Adjust the filters or import a CSV/PDF transaction statement.</p>
+      <a class="button" href="/workspaces/{{ workspace.id }}/imports/new">Import transactions</a>
     </section>
   {% endif %}
 {% endblock %}
