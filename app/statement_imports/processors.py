@@ -32,7 +32,8 @@ BALANCE_LABELS = {
     ),
     "other": ("Total balance", "Ending balance", "Current balance"),
 }
-IDENTITY_LABELS = ("Account name", "Plan name", "Account number", "Account ending in")
+IDENTITY_NAME_LABELS = ("Account name", "Plan name")
+IDENTITY_NUMBER_LABELS = ("Account number", "Account ending in")
 INSTITUTION_LABELS = ("Institution", "Provider", "Servicer", "Issuer")
 DATE_LABELS = ("As of date", "Statement date", "Period ending")
 
@@ -60,15 +61,31 @@ def _one(values: tuple[object, ...], missing_code: str, ambiguous_code: str) -> 
 def process_statement_text(category: str, text: str, method: str) -> StatementCandidate:
     compatible_account_types(category)
     lines = tuple(normalize_text(line) for line in text.splitlines() if normalize_text(line))
-    identity_values = _labeled_values(lines, IDENTITY_LABELS)
-    identities: list[tuple[str, str | None]] = []
-    for value in identity_values:
+    names = _labeled_values(lines, IDENTITY_NAME_LABELS)
+    numbers = _labeled_values(lines, IDENTITY_NUMBER_LABELS)
+    if not names and not numbers:
+        raise StatementFormatError(
+            "missing_account_identity", "The statement is missing an account identity."
+        )
+    account_name = None
+    if names:
+        account_name = _one(names, "missing_account_identity", "ambiguous_identity")
+        assert isinstance(account_name, str)
+    last_four_values: list[str] = []
+    for value in numbers:
         digits = re.sub(r"\D", "", value)
-        last_four = digits[-4:] if len(digits) >= 4 else None
-        name = f"Account ending in {last_four}" if last_four else value
-        identities.append((name, last_four))
-    identity = _one(tuple(identities), "missing_account_identity", "ambiguous_identity")
-    assert isinstance(identity, tuple)
+        if len(digits) >= 4:
+            last_four_values.append(digits[-4:])
+    last_four = None
+    if numbers:
+        if not last_four_values:
+            raise StatementFormatError(
+                "missing_account_identity", "The account number is not recognizable."
+            )
+        last_four = _one(tuple(last_four_values), "missing_account_identity", "ambiguous_identity")
+        assert isinstance(last_four, str)
+    if account_name is None:
+        account_name = f"Account ending in {last_four}"
 
     institution_values = _labeled_values(lines, INSTITUTION_LABELS)
     institution = None
@@ -90,9 +107,9 @@ def process_statement_text(category: str, text: str, method: str) -> StatementCa
     balance = _one(tuple(balances), "missing_balance", "ambiguous_balance")
     assert isinstance(balance, int)
     return StatementCandidate(
-        account_name=identity[0],
+        account_name=account_name,
         institution=institution,
-        account_last_four=identity[1],
+        account_last_four=last_four,
         balance_cents=balance,
         as_of_date=as_of_date,
         extraction_method=method,

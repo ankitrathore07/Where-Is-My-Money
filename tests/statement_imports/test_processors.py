@@ -80,6 +80,18 @@ def test_processor_accepts_repeated_identical_values_and_reduces_full_account_nu
     assert candidate.extraction_method == "ocr"
 
 
+def test_processor_combines_account_name_with_number_identity() -> None:
+    candidate = process_statement_text(
+        "investment_401k",
+        "Provider: Northstar Benefits\nPlan name: Northstar Bicycle Works 401(k)\n"
+        "Account number: 000099887742\nPeriod ending: 2026-07-31\n"
+        "Total plan balance: $100,000.00",
+        "embedded_text",
+    )
+    assert candidate.account_name == "Northstar Bicycle Works 401(k)"
+    assert candidate.account_last_four == "7742"
+
+
 @pytest.mark.parametrize(
     ("text", "code"),
     [
