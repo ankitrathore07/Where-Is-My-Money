@@ -13,6 +13,7 @@ from app.db.models import Base, Category
 from app.db.session import get_db
 from app.imports.storage import LocalUploadStore
 from app.main import create_app
+from app.payslips.storage import PayslipUploadStore
 
 
 class FakeGoogleClient:
@@ -66,6 +67,7 @@ def build_route_test_app(tmp_path: Path):
     )
     application = create_app(configured, google_oauth=FakeOAuth(verified_claims()))
     application.state.upload_store = LocalUploadStore(tmp_path)
+    application.state.payslip_store = PayslipUploadStore(tmp_path)
 
     def override_db() -> Generator[Session, None, None]:
         with factory() as session:

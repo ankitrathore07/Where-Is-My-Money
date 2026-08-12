@@ -18,6 +18,8 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --all-groups --locked
+      - name: Install Playwright Chromium
+        run: uv run playwright install --with-deps chromium
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - name: Run Alembic migrations

@@ -4,6 +4,7 @@ services:
   web:
     build:
       context: .
+      target: runtime
     environment:
       APP_ENV: ${APP_ENV:-development}
       SECRET_KEY: ${SECRET_KEY:-dev-only-ephemeral-key-do-not-use-in-production}
@@ -14,6 +15,17 @@ services:
       - "8000:8000"
     volumes:
       - app_data:/app/data
+
+  browser-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: browser-tests
+    environment:
+      APP_ENV: test
+      SECRET_KEY: browser-test-secret-key-with-at-least-32-characters
+      DATABASE_URL: sqlite:///data/where-is-my-money-test.db
+    shm_size: "1gb"
 
 volumes:
   app_data:

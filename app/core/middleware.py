@@ -14,15 +14,15 @@ CSRF_COOKIE_NAME = "wimm_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_MAX_AGE = 3600
-PAYSLIP_UPLOAD_PATH = re.compile(r"/workspaces/\d+/payslips")
+BOUNDED_UPLOAD_PATH = re.compile(r"/workspaces/[^/]+/(?:payslips|document-uploads)")
 
 
-class _PayslipBodyTooLarge(Exception):
-    """Stop multipart parsing once the route-specific request limit is crossed."""
+class _UploadBodyTooLarge(Exception):
+    """Stop multipart parsing once a bounded upload request is too large."""
 
 
-class PayslipUploadBodyLimitMiddleware:
-    """Bound payslip multipart bodies before Starlette spools uploaded files."""
+class UploadBodyLimitMiddleware:
+    """Bound supported upload bodies before Starlette spools uploaded files."""
 
     def __init__(
         self,
@@ -35,7 +35,7 @@ class PayslipUploadBodyLimitMiddleware:
         self.max_body_bytes = max_file_bytes + multipart_overhead_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not self._targets_payslip_upload(scope):
+        if not self._targets_upload(scope):
             await self.app(scope, receive, send)
             return
 
@@ -49,23 +49,23 @@ class PayslipUploadBodyLimitMiddleware:
                 if message["type"] == "http.request":
                     received_bytes += len(message.get("body", b""))
                     if received_bytes > self.max_body_bytes:
-                        raise _PayslipBodyTooLarge
+                        raise _UploadBodyTooLarge
                 return message
 
             try:
                 await self.app(scope, limited_receive, send)
-            except _PayslipBodyTooLarge:
+            except _UploadBodyTooLarge:
                 await self._reject(scope, receive, send)
             return
 
         await self._reject(scope, receive, send)
 
     @staticmethod
-    def _targets_payslip_upload(scope: Scope) -> bool:
+    def _targets_upload(scope: Scope) -> bool:
         return (
             scope["type"] == "http"
             and scope.get("method") == "POST"
-            and PAYSLIP_UPLOAD_PATH.fullmatch(scope.get("path", "")) is not None
+            and BOUNDED_UPLOAD_PATH.fullmatch(scope.get("path", "")) is not None
         )
 
     @staticmethod
@@ -80,10 +80,11 @@ class PayslipUploadBodyLimitMiddleware:
 
     @staticmethod
     async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
-        response = PlainTextResponse(
-            "Payslip upload is too large.",
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        payslip_route = scope.get("path", "").endswith("/payslips")
+        message = (
+            "Payslip upload is too large." if payslip_route else "Document upload is too large."
         )
+        response = PlainTextResponse(message, status_code=status.HTTP_413_CONTENT_TOO_LARGE)
         await response(scope, receive, send)
 
 

@@ -219,3 +219,6 @@ __marimo__/
 
 # Where Is My Money local application data
 data/
+
+# Local isolated feature worktrees
+.worktrees/

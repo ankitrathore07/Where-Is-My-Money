@@ -124,7 +124,8 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
   balance, and as-of date locally, require editable confirmation, and save a
   workspace-scoped asset/liability snapshot only after confirmation.
 - Keep categories unavailable until their processor and review workflow are
-  implemented and tested.
+  implemented and tested, then connect each completed processor to the unified
+  document-category catalog.
 - Refresh the PR 7 dashboard from confirmed snapshots without duplicating its
   net-worth calculations or manual-entry flow.
 - Test workspace scoping, that totals do not change before confirmation, and

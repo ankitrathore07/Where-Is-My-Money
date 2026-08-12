@@ -1,8 +1,11 @@
 import asyncio
 
+import pytest
+from fastapi import FastAPI, Request, Response
+from httpx import ASGITransport, AsyncClient
 from starlette.types import Message, Receive, Scope, Send
 
-from app.core.middleware import PayslipUploadBodyLimitMiddleware
+from app.core.middleware import UploadBodyLimitMiddleware
 from app.core.security import (
     SlidingWindowRateLimiter,
     create_csrf_token,
@@ -60,7 +63,16 @@ def test_rate_limiter_keeps_client_windows_separate() -> None:
     assert limiter.allow("second", now=1)
 
 
-def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> None:
+@pytest.mark.parametrize(
+    "path,message",
+    [
+        ("/workspaces/1/payslips", b"Payslip upload is too large."),
+        ("/workspaces/1/document-uploads", b"Document upload is too large."),
+    ],
+)
+def test_upload_body_limit_counts_streamed_chunks_without_content_length(
+    path: str, message: bytes
+) -> None:
     completed_downstream = False
 
     async def consuming_app(scope: Scope, receive: Receive, send: Send) -> None:
@@ -71,7 +83,7 @@ def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> N
             more_body = message.get("more_body", False)
         completed_downstream = True
 
-    middleware = PayslipUploadBodyLimitMiddleware(
+    middleware = UploadBodyLimitMiddleware(
         consuming_app,
         max_file_bytes=5,
         multipart_overhead_bytes=0,
@@ -88,26 +100,100 @@ def test_payslip_body_limit_counts_streamed_chunks_without_content_length() -> N
     async def send(message: Message) -> None:
         sent.append(message)
 
-    scope: Scope = {
+    scope = upload_scope(path)
+    asyncio.run(middleware(scope, receive, send))
+
+    assert completed_downstream is False
+    assert sent[0]["status"] == 413
+    assert sent[1]["body"] == message
+
+
+@pytest.mark.parametrize(
+    "path,message",
+    [
+        ("/workspaces/-1/payslips", "Payslip upload is too large."),
+        ("/workspaces/not-an-integer/payslips", "Payslip upload is too large."),
+        ("/workspaces/-1/document-uploads", "Document upload is too large."),
+        ("/workspaces/not-an-integer/document-uploads", "Document upload is too large."),
+    ],
+)
+def test_upload_body_limit_rejects_any_workspace_segment_before_multipart_parsing(
+    path: str,
+    message: str,
+) -> None:
+    downstream_invoked = False
+    multipart_parsed = False
+    application = FastAPI()
+
+    @application.post("/workspaces/{workspace_id}/{upload_route}")
+    async def parse_upload(request: Request, workspace_id: str, upload_route: str) -> Response:
+        nonlocal downstream_invoked, multipart_parsed
+        downstream_invoked = True
+        await request.form()
+        multipart_parsed = True
+        return Response(status_code=204)
+
+    application.add_middleware(
+        UploadBodyLimitMiddleware,
+        max_file_bytes=32,
+        multipart_overhead_bytes=0,
+    )
+
+    async def post_oversized_multipart() -> tuple[int, str]:
+        async with AsyncClient(
+            transport=ASGITransport(app=application),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                path,
+                files={"document": ("synthetic.pdf", b"x" * 64, "application/pdf")},
+            )
+        return response.status_code, response.text
+
+    status_code, response_text = asyncio.run(post_oversized_multipart())
+
+    assert (status_code, response_text) == (413, message)
+    assert downstream_invoked is False
+    assert multipart_parsed is False
+
+
+def test_upload_body_limit_does_not_match_extra_path_segments() -> None:
+    downstream_invoked = False
+
+    async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+        nonlocal downstream_invoked
+        downstream_invoked = True
+
+    middleware = UploadBodyLimitMiddleware(
+        downstream,
+        max_file_bytes=1,
+        multipart_overhead_bytes=0,
+    )
+    scope = upload_scope("/workspaces/1/document-uploads/extra")
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"oversized", "more_body": False}
+
+    async def send(message: Message) -> None:
+        raise AssertionError(f"unexpected response: {message}")
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert downstream_invoked is True
+
+
+def upload_scope(path: str) -> Scope:
+    return {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/workspaces/1/payslips",
-        "raw_path": b"/workspaces/1/payslips",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
         "headers": [],
         "client": ("127.0.0.1", 1234),
         "server": ("test", 80),
     }
-    asyncio.run(middleware(scope, receive, send))
-
-    assert completed_downstream is False
-    assert sent[0] == {
-        "type": "http.response.start",
-        "status": 413,
-        "headers": [(b"content-length", b"28"), (b"content-type", b"text/plain; charset=utf-8")],
-    }
-    assert sent[1]["body"] == b"Payslip upload is too large."

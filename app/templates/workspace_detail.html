@@ -16,6 +16,13 @@
   </section>
 
   <section class="panel">
+    <h2>Documents</h2>
+    <p>Upload transaction statements and payslips together, choose each category, then review every supported file.</p>
+    <a class="button" href="/workspaces/{{ workspace.id }}/documents/new">Upload documents</a>
+    <p class="muted">CSV transaction statements and PDF/image payslips are supported now. Other account-statement processors are planned.</p>
+  </section>
+
+  <section class="panel">
     <h2>Accounts</h2>
     <p>Add the accounts you use, then record their current balances.</p>
     <a class="button" href="/workspaces/{{ workspace.id }}/accounts/new">Add account</a>
@@ -36,15 +43,11 @@
 
   <section class="panel">
     <h2>Transactions</h2>
-    <p>Import a bank statement, review every row, then commit it to this workspace.</p>
-    <a class="button" href="/workspaces/{{ workspace.id }}/imports/new">Import CSV</a>
     <a href="/workspaces/{{ workspace.id }}/transactions">View transactions</a>
   </section>
 
   <section class="panel">
     <h2>Income</h2>
-    <p>Import a payslip locally, correct the extracted details, then confirm one separate income record.</p>
-    <a class="button" href="/workspaces/{{ workspace.id }}/payslips/new">Import payslip</a>
     <a href="/workspaces/{{ workspace.id }}/income">View confirmed income</a>
   </section>
 

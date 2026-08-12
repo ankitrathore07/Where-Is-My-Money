@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import BinaryIO
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.payslips.storage import (
 )
 
 RETENTION_CHOICES = {"retain", "delete_after_import"}
+REUSABLE_PAYSLIP_STATUSES = {"pending", "confirmed", "confirmed_cleanup_failed"}
 
 
 class PayslipImportError(ValueError):
@@ -59,6 +60,56 @@ def _cleanup_failed_source(
         ) from exc
 
 
+def _matching_payslip(session: Session, workspace_id: int, checksum: str) -> Payslip | None:
+    """Prefer a confirmed match and never cross the workspace boundary."""
+    confirmed_first = case(
+        (Payslip.review_status.in_({"confirmed", "confirmed_cleanup_failed"}), 0),
+        else_=1,
+    )
+    return session.scalar(
+        select(Payslip)
+        .join(UploadedFile, Payslip.uploaded_file_id == UploadedFile.id)
+        .where(
+            Payslip.workspace_id == workspace_id,
+            UploadedFile.workspace_id == workspace_id,
+            UploadedFile.checksum == checksum,
+            Payslip.review_status.in_(REUSABLE_PAYSLIP_STATUSES),
+        )
+        .order_by(confirmed_first, Payslip.id)
+    )
+
+
+def _serialize_workspace_payslip_insert(session: Session, workspace_id: int) -> None:
+    """Take a schema-free database row lock before checksum lookup and insert."""
+    session.execute(
+        update(Workspace).where(Workspace.id == workspace_id).values(name=Workspace.name)
+    )
+
+
+def _delete_retry_source(store: PayslipUploadStore, stored: StoredPayslipUpload) -> None:
+    try:
+        store.delete(stored.storage_key)
+    except (OSError, PayslipStorageError) as exc:
+        raise PayslipImportError(
+            "cleanup_failed",
+            "The duplicate private payslip source could not be removed.",
+        ) from exc
+
+
+def _reuse_matching_payslip(
+    session: Session,
+    store: PayslipUploadStore,
+    workspace_id: int,
+    stored: StoredPayslipUpload,
+) -> Payslip | None:
+    existing = _matching_payslip(session, workspace_id, stored.checksum)
+    if existing is None:
+        return None
+    _delete_retry_source(store, stored)
+    session.commit()
+    return existing
+
+
 def create_payslip_import(
     session: Session,
     store: PayslipUploadStore,
@@ -75,15 +126,26 @@ def create_payslip_import(
         )
 
     stored: StoredPayslipUpload | None = None
+    workspace_id = workspace.id
     try:
-        stored = store.save(workspace.id, suffix, stream)
+        stored = store.save(workspace_id, suffix, stream)
+        existing = _reuse_matching_payslip(session, store, workspace_id, stored)
+        if existing is not None:
+            return existing
+        session.rollback()
+
         extracted = extractor.extract(store.read(stored.storage_key), suffix)
         candidate = extract_candidates(extracted.text)
         candidate_fields = candidate.to_json()
         candidate_fields["extraction_method"] = extracted.method
         canonical_type = "jpg" if suffix.casefold() == ".jpeg" else suffix.casefold().lstrip(".")
+        _serialize_workspace_payslip_insert(session, workspace_id)
+        existing = _reuse_matching_payslip(session, store, workspace_id, stored)
+        if existing is not None:
+            return existing
+
         uploaded_file = UploadedFile(
-            workspace_id=workspace.id,
+            workspace_id=workspace_id,
             file_type=canonical_type,
             storage_path=stored.storage_key,
             checksum=stored.checksum,
@@ -91,7 +153,7 @@ def create_payslip_import(
             retention_choice=retention_choice,
         )
         payslip = Payslip(
-            workspace_id=workspace.id,
+            workspace_id=workspace_id,
             uploaded_file=uploaded_file,
             employer=candidate.employer,
             pay_period_start=_as_datetime(candidate.pay_period_start),
