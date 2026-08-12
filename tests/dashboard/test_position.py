@@ -186,3 +186,15 @@ def test_net_worth_series_uses_none_for_years_before_any_balance(
         AnnualPosition(2023, None, None, None),
     )
     assert series[2] == AnnualPosition(2024, 250_000, 0, 250_000)
+
+
+def test_net_worth_series_returns_only_available_calendar_years_at_date_min(
+    session: Session, workspace: Workspace
+) -> None:
+    """Generating a five-year range must never construct nonexistent year zero dates."""
+    checking = _account(session, workspace.id, "Checking", "checking", False)
+    _snapshot(session, workspace.id, checking.id, 250_000, date.min)
+
+    series = build_net_worth_series(session, workspace.id, date.min, years=5)
+
+    assert series == (AnnualPosition(1, 250_000, 0, 250_000),)

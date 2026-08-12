@@ -161,6 +161,16 @@ def _fallback_row(page: str, caption: str, year: str) -> list[str]:
     )
 
 
+def _chart_payload(page: str) -> dict[str, dict[str, list[str | int | None]]]:
+    match = re.search(
+        r'<script id="dashboard-chart-data" type="application/json">(.*?)</script>',
+        page,
+        re.DOTALL,
+    )
+    assert match is not None
+    return json.loads(match.group(1))
+
+
 @pytest.mark.anyio
 async def test_dashboard_renders_aggregate_totals_five_year_fallbacks_and_safe_payload(
     tmp_path: Path,
@@ -336,10 +346,86 @@ async def test_dashboard_rejects_bad_dates_and_keeps_partial_data_truthful(tmp_p
 
 
 @pytest.mark.anyio
-async def test_dashboard_accepts_safe_date_edges_and_rejects_unsupported_iso_dates(
+async def test_dashboard_renders_inferred_and_explicit_date_min_account_history(
     tmp_path: Path,
 ) -> None:
-    """Changing supported query bounds would reintroduce calendar underflow or overflow failures."""
+    """A valid year-one account snapshot must not make the dashboard narrower than writes."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = _account(session, workspace_id, "Checking", "checking", False)
+                _snapshot(session, workspace_id, account.id, 12_345, date.min)
+                session.commit()
+
+            inferred = await client.get(f"/workspaces/{workspace_id}/dashboard")
+            explicit = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=0001-01-01")
+    finally:
+        engine.dispose()
+
+    assert inferred.status_code == 200
+    assert explicit.status_code == 200
+    assert "As of 0001-01-01." in inferred.text
+    assert "$123.45" in inferred.text
+    assert _chart_payload(inferred.text)["net_worth"]["labels"] == ["1"]
+    assert _chart_payload(inferred.text)["cash_flow"]["labels"] == ["1"]
+    assert _chart_payload(explicit.text) == _chart_payload(inferred.text)
+
+
+@pytest.mark.anyio
+async def test_dashboard_renders_inferred_and_explicit_date_max_transaction(
+    tmp_path: Path,
+) -> None:
+    """A transaction on date.max must remain visible through the full cutoff day."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                income = Category(workspace_id=None, name="Income", kind="income")
+                session.add(income)
+                session.flush()
+                session.add(
+                    Transaction(
+                        workspace_id=workspace_id,
+                        date=datetime.max.replace(tzinfo=UTC),
+                        description="Synthetic boundary income",
+                        amount_cents=12_345,
+                        category_id=income.id,
+                        categorization_source="test",
+                    )
+                )
+                session.commit()
+
+            inferred = await client.get(f"/workspaces/{workspace_id}/dashboard")
+            explicit = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-31")
+    finally:
+        engine.dispose()
+
+    assert inferred.status_code == 200
+    assert explicit.status_code == 200
+    assert "As of 9999-12-31." in inferred.text
+    assert "$123.45" in inferred.text
+    assert _chart_payload(inferred.text)["cash_flow"] == {
+        "labels": ["9995", "9996", "9997", "9998", "9999"],
+        "income": [None, None, None, None, 12_345],
+        "spending": [None, None, None, None, 0],
+    }
+    assert _chart_payload(explicit.text) == _chart_payload(inferred.text)
+
+
+@pytest.mark.anyio
+async def test_dashboard_rejects_malformed_and_nonexistent_iso_dates(tmp_path: Path) -> None:
+    """Accepting the full ISO date domain must not weaken strict calendar parsing."""
     application, factory, engine = build_route_test_app(tmp_path)
     try:
         async with AsyncClient(
@@ -350,19 +436,15 @@ async def test_dashboard_accepts_safe_date_edges_and_rejects_unsupported_iso_dat
                 workspace_id = session.scalar(select(Workspace.id))
                 assert workspace_id is not None
 
-            lower_edge = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=0005-01-01")
-            upper_edge = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-30")
-            too_early = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=0004-12-31")
-            too_late = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-31")
+            malformed = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=2026-8-10")
+            nonexistent = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=2026-02-30")
     finally:
         engine.dispose()
 
-    assert lower_edge.status_code == 200
-    assert upper_edge.status_code == 200
-    assert too_early.status_code == 422
-    assert too_late.status_code == 422
-    assert "Dashboard dates must be between 0005-01-01 and 9999-12-30." in too_early.text
-    assert "Dashboard dates must be between 0005-01-01 and 9999-12-30." in too_late.text
+    assert malformed.status_code == 422
+    assert nonexistent.status_code == 422
+    assert "Use a valid date in YYYY-MM-DD format." in malformed.text
+    assert "Use a valid date in YYYY-MM-DD format." in nonexistent.text
 
 
 @pytest.mark.anyio

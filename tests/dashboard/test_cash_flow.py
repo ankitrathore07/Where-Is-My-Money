@@ -112,6 +112,33 @@ def test_cash_flow_compiles_utc_aware_postgresql_date_bounds(
     ]
 
 
+def test_cash_flow_includes_date_max_through_its_last_instant_with_aware_bounds(
+    session: Session, workspace: Workspace
+) -> None:
+    """An exclusive next-day bound must not overflow and drop a date.max transaction."""
+    income = _category(session, "Income", "income")
+    _transaction(session, workspace.id, datetime.max.replace(tzinfo=UTC), 200, income.id)
+    statements = []
+
+    def capture_statement(execute_state: object) -> None:
+        statements.append(execute_state.statement)  # type: ignore[attr-defined]
+
+    event.listen(session, "do_orm_execute", capture_statement)
+    try:
+        series = build_cash_flow_series(session, workspace.id, date.max)
+    finally:
+        event.remove(session, "do_orm_execute", capture_statement)
+
+    assert [point.year for point in series] == [9995, 9996, 9997, 9998, 9999]
+    assert series[-1] == AnnualCashFlow(9999, 200, 0, 200, 10_000, 0)
+    compiled = statements[0].compile(dialect=postgresql.dialect())
+    bounds = [value for value in compiled.params.values() if isinstance(value, datetime)]
+    assert bounds == [
+        datetime(9995, 1, 1, tzinfo=UTC),
+        datetime.max.replace(tzinfo=UTC),
+    ]
+
+
 def test_cash_flow_assigns_aware_transactions_to_their_utc_calendar_year(
     session: Session, workspace: Workspace
 ) -> None:

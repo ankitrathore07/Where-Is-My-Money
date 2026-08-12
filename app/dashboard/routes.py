@@ -17,13 +17,7 @@ from app.dashboard.presentation import (
     format_basis_points,
     format_money,
 )
-from app.dashboard.service import (
-    MAX_DASHBOARD_DATE,
-    MIN_DASHBOARD_DATE,
-    DashboardDateRangeError,
-    build_dashboard_report,
-    validate_dashboard_as_of_date,
-)
+from app.dashboard.service import build_dashboard_report
 from app.db.models import User, Workspace
 from app.db.session import get_db
 from app.workspaces.dependencies import require_workspace
@@ -95,28 +89,7 @@ async def dashboard(
         return _date_error_response(
             request, user, workspace, "Use a valid date in YYYY-MM-DD format."
         )
-    if as_of_date is not None:
-        try:
-            validate_dashboard_as_of_date(as_of_date)
-        except DashboardDateRangeError:
-            return _date_error_response(
-                request,
-                user,
-                workspace,
-                f"Dashboard dates must be between {MIN_DASHBOARD_DATE.isoformat()} and "
-                f"{MAX_DASHBOARD_DATE.isoformat()}.",
-            )
-
-    try:
-        report = build_dashboard_report(session, workspace.id, as_of_date)
-    except DashboardDateRangeError:
-        return _date_error_response(
-            request,
-            user,
-            workspace,
-            f"Dashboard dates must be between {MIN_DASHBOARD_DATE.isoformat()} and "
-            f"{MAX_DASHBOARD_DATE.isoformat()}.",
-        )
+    report = build_dashboard_report(session, workspace.id, as_of_date)
     return templates.TemplateResponse(
         request=request,
         name="dashboard/index.html",

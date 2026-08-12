@@ -17,19 +17,6 @@ from app.dashboard.types import (
 from app.db.models import Account, AccountBalanceSnapshot, Category, Transaction
 
 _CASH_ACCOUNT_TYPES = {"checking", "savings"}
-MIN_DASHBOARD_DATE = date(5, 1, 1)
-MAX_DASHBOARD_DATE = date(9999, 12, 30)
-
-
-class DashboardDateRangeError(ValueError):
-    """Raised when a dashboard date cannot safely produce a five-year report."""
-
-
-def validate_dashboard_as_of_date(value: date) -> date:
-    """Return a date safe for annual points and exclusive transaction bounds."""
-    if not MIN_DASHBOARD_DATE <= value <= MAX_DASHBOARD_DATE:
-        raise DashboardDateRangeError
-    return value
 
 
 def _workspace_accounts(session: Session, workspace_id: int) -> tuple[Account, ...]:
@@ -146,7 +133,8 @@ def build_net_worth_series(
 ) -> tuple[AnnualPosition, ...]:
     """Build ascending annual positions with historical December 31 cutoffs."""
     points: list[AnnualPosition] = []
-    for year in range(cutoff.year - years + 1, cutoff.year + 1):
+    start_year = max(date.min.year, cutoff.year - years + 1)
+    for year in range(start_year, cutoff.year + 1):
         annual_cutoff = cutoff if year == cutoff.year else date(year, 12, 31)
         summary = _position_summary(session, workspace_id, annual_cutoff)
         if all(account.balance_cents is None for account in summary.accounts):
@@ -167,16 +155,15 @@ def build_cash_flow_series(
     session: Session, workspace_id: int, cutoff: date, *, years: int = 5
 ) -> tuple[AnnualCashFlow, ...]:
     """Build annual income, spending, and review totals through ``cutoff``."""
-    start_year = cutoff.year - years + 1
+    start_year = max(date.min.year, cutoff.year - years + 1)
     start_date = date(start_year, 1, 1)
-    end_date = cutoff + timedelta(days=1)
     rows = session.execute(
         select(Transaction, Category)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
             Transaction.date >= datetime.combine(start_date, time.min, tzinfo=UTC),
-            Transaction.date < datetime.combine(end_date, time.min, tzinfo=UTC),
+            _transaction_cutoff_condition(cutoff),
         )
         .order_by(Transaction.date, Transaction.id)
     )
@@ -243,7 +230,6 @@ def build_dashboard_report(
                 _build_highlights(position, (), ()) if position.accounts else (_setup_highlight(),)
             ),
         )
-    validate_dashboard_as_of_date(cutoff)
     position = _position_summary(session, workspace_id, cutoff)
     net_worth_series = build_net_worth_series(session, workspace_id, cutoff)
     cash_flow_series = build_cash_flow_series(session, workspace_id, cutoff)
@@ -265,13 +251,18 @@ def _has_workspace_transaction_before_or_on(
             select(Transaction.id)
             .where(
                 Transaction.workspace_id == workspace_id,
-                Transaction.date
-                < datetime.combine(cutoff + timedelta(days=1), time.min, tzinfo=UTC),
+                _transaction_cutoff_condition(cutoff),
             )
             .limit(1)
         )
         is not None
     )
+
+
+def _transaction_cutoff_condition(cutoff: date):
+    if cutoff == date.max:
+        return Transaction.date <= datetime.combine(cutoff, time.max, tzinfo=UTC)
+    return Transaction.date < datetime.combine(cutoff + timedelta(days=1), time.min, tzinfo=UTC)
 
 
 def _build_highlights(
