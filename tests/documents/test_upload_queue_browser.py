@@ -9,6 +9,10 @@ from sqlalchemy import func, select
 from app.db.models import Payslip, UploadedFile
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example Market,-12.34\n"
+STATEMENT_CSV_BYTES = (
+    b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+    b"Example account,Example institution,1234,12345.67,2026-08-01\n"
+)
 PDF_BYTES = b"%PDF-synthetic-browser"
 
 
@@ -154,7 +158,7 @@ def test_manual_categories_control_file_eligibility(
     page.locator("#document-files").set_input_files(
         [
             payload("wrong.pdf", "application/pdf", b"%PDF-wrong"),
-            payload("future.pdf", "application/pdf", b"%PDF-future"),
+            payload("statement.pdf", "application/pdf", b"%PDF-statement"),
             payload("unlisted.pdf", "application/pdf", b"%PDF-unlisted"),
             payload("large.csv", "text/csv", b"x" * (5 * 1024 * 1024 + 1)),
             payload("notes.txt", "text/plain", b"not supported"),
@@ -167,13 +171,13 @@ def test_manual_categories_control_file_eligibility(
     rows.nth(3).locator("select").select_option("transaction_statement")
 
     expect(rows.nth(0).locator(".document-status")).to_contain_text("does not support")
-    expect(rows.nth(1).locator(".document-status")).to_contain_text("not available yet")
+    expect(rows.nth(1).locator(".document-status")).to_contain_text("Ready to process")
     expect(rows.nth(2).locator(".document-status")).to_contain_text("Remove this file")
     expect(rows.nth(3).locator(".document-status")).to_contain_text("5 MiB limit")
     expect(rows.nth(4).locator(".document-status")).to_contain_text(
         "Choose a CSV, PDF, PNG, or JPEG"
     )
-    expect(page.locator("#process-documents")).to_be_disabled()
+    expect(page.locator("#process-documents")).to_have_text("Process 1 file")
 
 
 def test_ready_files_process_sequentially_and_keep_independent_results(
@@ -193,7 +197,7 @@ def test_ready_files_process_sequentially_and_keep_independent_results(
         [
             payload("broken.csv", "text/csv", b"not,a,rectangular\n1,2\n"),
             payload("pay.pdf", "application/pdf", PDF_BYTES),
-            payload("future.pdf", "application/pdf", b"private future statement"),
+            payload("balance.csv", "text/csv", STATEMENT_CSV_BYTES),
         ]
     )
     rows = page.locator("#document-queue-body tr")
@@ -206,18 +210,20 @@ def test_ready_files_process_sequentially_and_keep_independent_results(
 
     expect(rows.nth(0).locator(".document-status")).to_contain_text("fewer fields than the header")
     expect(rows.nth(1).get_by_role("link", name="Review payslip")).to_be_visible()
-    expect(rows.nth(2).locator(".document-status")).to_contain_text("not available yet")
+    expect(rows.nth(2).get_by_role("link", name="Review balance")).to_be_visible()
     expect(rows.nth(0)).to_have_attribute("aria-busy", "false")
     expect(rows.nth(1)).to_have_attribute("aria-busy", "false")
+    expect(rows.nth(2)).to_have_attribute("aria-busy", "false")
     expect(page.locator("#process-documents")).to_have_text("Process 0 files")
     expect(page.locator("#process-documents")).to_be_disabled()
-    assert len(requests) == 2
+    assert len(requests) == 3
     announcements = live_announcements(page)
     assert any(
         announcement.startswith("broken.csv:") and "fewer fields than the header" in announcement
         for announcement in announcements
     )
     assert "pay.pdf: Ready for review." in announcements
+    assert "balance.csv: Ready for review." in announcements
     assert announcements[-1] == "Processing complete. 0 files ready to process."
 
 

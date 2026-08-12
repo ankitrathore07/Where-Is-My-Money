@@ -111,7 +111,11 @@ def create_app(
     application.add_middleware(CSRFMiddleware, configured=configured)
     application.add_middleware(
         UploadBodyLimitMiddleware,
-        max_file_bytes=configured.max_payslip_upload_bytes,
+        max_file_bytes=max(
+            configured.max_csv_upload_bytes,
+            configured.max_payslip_upload_bytes,
+            configured.max_statement_upload_bytes,
+        ),
     )
     application.add_middleware(
         StatementUploadBodyLimitMiddleware,

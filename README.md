@@ -110,13 +110,13 @@ who creates it so they can share it privately.
    categories.
 4. Remove unwanted files with **X**, choose one source-retention policy, and
    select **Process**. Queued documents process one at a time, in order.
-5. Follow **Map columns** for transaction CSVs or **Review payslip** for
-   PDF/image payslips.
+5. Follow **Map columns** for transaction CSVs, **Review payslip** for
+   PDF/image payslips, or **Review balance** for a supported account statement.
 
-Only transaction CSV and payslip processors are available in V1. 401(k),
-brokerage/stocks, mortgage, loan, and other account statements remain in the
-browser and are not uploaded. Their processors are tracked in
-[PR 8b](docs/where-is-my-money-pr-breakdown.md#pr-8b--account-statement-imports-and-net-worth-view).
+V1 processes transaction CSVs, payslips, and documented total-balance formats
+for 401(k), brokerage/stocks, mortgage, loan, and other account statements.
+Checking, savings, credit-card, and unlisted document categories remain
+unavailable and are not uploaded.
 
 The default policy deletes each raw source only after its import or confirmation
 succeeds. Selecting **retain** keeps it below the configured private local data
@@ -250,7 +250,8 @@ PR 8b supports reviewed total-balance imports for 401(k), brokerage, mortgage,
 auto-loan, student-loan, and other accounts. Checking, savings, and credit-card
 statement imports remain unavailable; use **Add balance** for those accounts.
 
-1. Open **Accounts** and select **Import statement** beside a supported account.
+1. Use **Upload documents**, or open **Accounts** and select **Import statement**
+   beside a supported account.
 2. Upload one CSV, PDF, PNG, or JPEG no larger than 10 MiB. The file is processed
    locally. A scanned PDF or image requires Tesseract.
 3. Review and edit the statement account identity, destination account, total
@@ -294,12 +295,11 @@ Northstar Retirement Plan,Fictional Provider,4821,125430.18,2026-07-31
 columns and transaction exports are rejected. The importer tracks only total
 account balances—not securities, holdings, lots, or prices.
 
-The ingestion service accepts one file stream at a time through
-`ingest_one_statement(...)`. A future drag-and-drop multi-file uploader can call
-that operation once per statement without changing statement processors,
-confirmation, or dashboard logic. A future optional AI extractor may propose
-candidates only behind the same editable confirmation boundary; PR 8b itself
-does not use AI or send documents over the network.
+The drag-and-drop queue calls `ingest_one_statement(...)` once per statement,
+without duplicating statement processors, confirmation, or dashboard logic. A
+future optional AI extractor may propose candidates only behind the same
+editable confirmation boundary; PR 8b itself does not use AI or send documents
+over the network.
 
 ### Try the synthetic dashboard demo
 

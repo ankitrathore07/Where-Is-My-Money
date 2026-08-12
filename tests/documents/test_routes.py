@@ -4,11 +4,22 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
-from app.db.models import ImportJob, Payslip, UploadedFile, User, Workspace
+from app.db.models import (
+    AccountStatementImport,
+    ImportJob,
+    Payslip,
+    UploadedFile,
+    User,
+    Workspace,
+)
 from app.payslips.extraction import ExtractedText
 from tests.route_helpers import build_route_test_app, complete_sign_in, csrf_token
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example Market,-12.34\n"
+STATEMENT_CSV_BYTES = (
+    b"account_name,institution,account_last_four,total_balance,as_of_date\n"
+    b"Example account,Example institution,1234,12345.67,2026-08-01\n"
+)
 PDF_BYTES = b"%PDF-synthetic-document-route"
 PAY_TEXT = """Employer: Northstar Bicycle Works
 Pay Date: 2026-07-20
@@ -55,7 +66,7 @@ async def test_document_upload_requires_csrf_before_storage(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("category_key", ["brokerage_statement", "unlisted", "missing"])
+@pytest.mark.parametrize("category_key", ["unlisted", "missing"])
 async def test_unprocessable_category_never_reaches_private_storage(
     tmp_path: Path, category_key: str
 ) -> None:
@@ -317,6 +328,54 @@ async def test_supported_document_returns_its_existing_review_destination(
     assert payload["message"] == "Ready for review."
     assert payload["next_label"] == next_label
     assert path_fragment in payload["next_url"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "category_key,statement_category",
+    [
+        ("retirement_401k_statement", "investment_401k"),
+        ("brokerage_statement", "brokerage"),
+        ("mortgage_statement", "mortgage"),
+        ("loan_statement", "loan"),
+        ("other_account_statement", "other"),
+    ],
+)
+async def test_supported_account_statement_returns_balance_review_destination(
+    tmp_path: Path, category_key: str, statement_category: str
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+            response = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={
+                    "category_key": category_key,
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                },
+                files={"document": ("balance.csv", STATEMENT_CSV_BYTES, "text/csv")},
+            )
+        with factory() as session:
+            pending = session.scalar(select(AccountStatementImport))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert pending is not None
+    assert pending.statement_category == statement_category
+    assert response.json() == {
+        "ok": True,
+        "message": "Ready for review.",
+        "next_url": f"/workspaces/{workspace_id}/statement-imports/{pending.id}/review",
+        "next_label": "Review balance",
+    }
 
 
 @pytest.mark.anyio
