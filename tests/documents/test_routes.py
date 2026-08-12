@@ -150,6 +150,47 @@ async def test_document_upload_rejects_multiple_files_before_storage(tmp_path: P
 
 
 @pytest.mark.anyio
+async def test_document_upload_rejects_file_under_unexpected_field_before_storage(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+            response = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={
+                    "category_key": "transaction_statement",
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                },
+                files=[
+                    ("document", ("checking.csv", CSV_BYTES, "text/csv")),
+                    ("unexpected", ("private.pdf", b"%PDF-private", "application/pdf")),
+                ],
+            )
+        with factory() as session:
+            assert session.scalar(select(func.count(ImportJob.id))) == 0
+            assert session.scalar(select(func.count(Payslip.id))) == 0
+            assert session.scalar(select(func.count(UploadedFile.id))) == 0
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "ok": False,
+        "code": "invalid_file_count",
+        "message": "Upload exactly one document.",
+    }
+    assert list(tmp_path.rglob("*.*")) == []
+
+
+@pytest.mark.anyio
 async def test_document_upload_hides_a_foreign_workspace(tmp_path: Path) -> None:
     application, factory, engine = build_route_test_app(tmp_path)
     try:

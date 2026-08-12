@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.auth.dependencies import require_current_user
 from app.core.middleware import require_csrf
@@ -22,6 +23,13 @@ from app.payslips.storage import PayslipStorageError, PayslipUploadStore
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["documents"])
+
+
+async def _multipart_file_count(request: Request) -> int:
+    form = await request.form()
+    return sum(
+        isinstance(value, StarletteUploadFile) for _, value in form.multi_items()
+    )
 
 
 def _error(
@@ -83,6 +91,7 @@ def _process_payslip(
 @router.post("/document-uploads", dependencies=[Depends(require_csrf)])
 def process_document_upload(
     request: Request,
+    multipart_file_count: Annotated[int, Depends(_multipart_file_count)],
     documents: Annotated[list[UploadFile], File(alias="document")],
     category_key: Annotated[str, Form()],
     retention_choice: Annotated[str, Form()],
@@ -91,7 +100,7 @@ def process_document_upload(
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> JSONResponse:
     """Validate and dispatch one supported private document for review."""
-    if len(documents) != 1:
+    if multipart_file_count != 1 or len(documents) != 1:
         return _error(
             "invalid_file_count",
             "Upload exactly one document.",
