@@ -84,9 +84,7 @@ async def test_account_without_financial_data_remains_visible_with_a_balance_act
     assert "Balance missing" in response.text
     assert "Add an account, balance, or transaction to see your dashboard." not in response.text
     assert '<h2 id="net-worth-heading">Unavailable</h2>' in response.text
-    assert (
-        f'href="/workspaces/{workspace_id}/accounts/{account_id}/balances/new"' in response.text
-    )
+    assert f'href="/workspaces/{workspace_id}/accounts/{account_id}/balances/new"' in response.text
 
 
 def _account(
@@ -352,18 +350,10 @@ async def test_dashboard_accepts_safe_date_edges_and_rejects_unsupported_iso_dat
                 workspace_id = session.scalar(select(Workspace.id))
                 assert workspace_id is not None
 
-            lower_edge = await client.get(
-                f"/workspaces/{workspace_id}/dashboard?as_of=0005-01-01"
-            )
-            upper_edge = await client.get(
-                f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-30"
-            )
-            too_early = await client.get(
-                f"/workspaces/{workspace_id}/dashboard?as_of=0004-12-31"
-            )
-            too_late = await client.get(
-                f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-31"
-            )
+            lower_edge = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=0005-01-01")
+            upper_edge = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-30")
+            too_early = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=0004-12-31")
+            too_late = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-31")
     finally:
         engine.dispose()
 

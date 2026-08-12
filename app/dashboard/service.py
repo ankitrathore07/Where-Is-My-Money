@@ -240,9 +240,7 @@ def build_dashboard_report(
             net_worth_series=(),
             cash_flow_series=(),
             highlights=(
-                _build_highlights(position, (), ())
-                if position.accounts
-                else (_setup_highlight(),)
+                _build_highlights(position, (), ()) if position.accounts else (_setup_highlight(),)
             ),
         )
     validate_dashboard_as_of_date(cutoff)
