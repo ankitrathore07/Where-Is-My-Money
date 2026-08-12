@@ -133,8 +133,12 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - **Done when:** synthetic examples produce confirmed snapshots, unsupported
   categories never claim support, and the existing dashboard shows correct
   totals.
-- **Status:** Planned. PR 7 supplies accounts, manual balance entry, and the
-  dashboard; processors and review workflows are not implemented yet.
+- **Status:** Implemented with local deterministic processors for documented
+  401(k), brokerage, mortgage, loan, and other CSV/PDF/image statement content;
+  private one-file ingestion compatible with a future multi-file uploader;
+  editable workspace-scoped confirmation; idempotent snapshot creation; and PR
+  7 dashboard reuse. Checking, savings, and credit-card statement imports,
+  holdings, provider APIs, and AI extraction remain unavailable.
 
 ## PR 9 — Production readiness and learning documentation
 

@@ -21,6 +21,9 @@
             <span>{{ "Liability" if account.is_liability else "Asset" }}</span>
             <a href="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/edit">Edit</a>
             <a href="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/balances/new">Add balance</a>
+            {% if account.account_type in ("investment_401k", "investment_brokerage", "mortgage", "auto_loan", "student_loan", "other") %}
+              <a href="/workspaces/{{ workspace.id }}/accounts/{{ account.id }}/statements/new">Import statement</a>
+            {% endif %}
           </li>
         {% endfor %}
       </ul>

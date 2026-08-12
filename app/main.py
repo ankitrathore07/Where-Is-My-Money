@@ -28,6 +28,10 @@ from app.payslips.extraction import DocumentExtractor, TesseractOcrEngine
 from app.payslips.routes import router as payslip_router
 from app.payslips.storage import PayslipUploadStore
 from app.planning.routes import router as planning_router
+from app.statement_imports.body_limit import StatementUploadBodyLimitMiddleware
+from app.statement_imports.extraction import StatementDocumentExtractor
+from app.statement_imports.routes import router as statement_import_router
+from app.statement_imports.storage import StatementUploadStore
 from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
@@ -89,6 +93,12 @@ def create_app(
         configured.upload_directory, configured.max_payslip_upload_bytes
     )
     application.state.payslip_extractor = DocumentExtractor(TesseractOcrEngine())
+    application.state.statement_store = StatementUploadStore(
+        configured.upload_directory, configured.max_statement_upload_bytes
+    )
+    application.state.statement_extractor = StatementDocumentExtractor(
+        DocumentExtractor(TesseractOcrEngine())
+    )
 
     application.add_middleware(
         SessionMiddleware,
@@ -101,7 +111,15 @@ def create_app(
     application.add_middleware(CSRFMiddleware, configured=configured)
     application.add_middleware(
         UploadBodyLimitMiddleware,
-        max_file_bytes=configured.max_payslip_upload_bytes,
+        max_file_bytes=max(
+            configured.max_csv_upload_bytes,
+            configured.max_payslip_upload_bytes,
+            configured.max_statement_upload_bytes,
+        ),
+    )
+    application.add_middleware(
+        StatementUploadBodyLimitMiddleware,
+        max_file_bytes=configured.max_statement_upload_bytes,
     )
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
@@ -113,6 +131,7 @@ def create_app(
     application.include_router(document_router)
     application.include_router(import_router)
     application.include_router(payslip_router)
+    application.include_router(statement_import_router)
     application.include_router(transaction_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")

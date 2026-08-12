@@ -14,6 +14,16 @@
       {% endif %}
     </header>
 
+    {% if statement_cleanup_import %}
+      <aside class="notice" role="status">
+        <p>The confirmed balance was saved, but its private statement source could not be deleted.</p>
+        <form action="/workspaces/{{ workspace.id }}/statement-imports/{{ statement_cleanup_import.id }}/cleanup" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="link-button" type="submit">Retry private source deletion</button>
+        </form>
+      </aside>
+    {% endif %}
+
     {% if error %}
       <p class="alert" role="alert">{{ error }}</p>
     {% elif report %}

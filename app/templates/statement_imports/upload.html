@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Import statement · {{ workspace.name }} · Where Is My Money?{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">{{ workspace.name }}</p>
+  <h1>Import {{ category.replace('_', ' ') }} statement{% if account %} for {{ account.name }}{% endif %}</h1>
+  <p>Upload one supported CSV, PDF, PNG, or JPEG. Processing stays local and imports only the total balance.</p>
+</section>
+<section class="panel">
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <form action="/workspaces/{{ workspace.id }}/statement-imports" method="post" enctype="multipart/form-data" class="stacked-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="statement_category" value="{{ category }}">
+    <label for="statement-file">Statement file</label>
+    <input id="statement-file" name="statement_file" type="file" accept=".csv,.pdf,.png,.jpg,.jpeg" required>
+    <fieldset>
+      <legend>Private source file</legend>
+      <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete after confirmation</label>
+      <label><input type="radio" name="retention_choice" value="retain"> Retain privately</label>
+    </fieldset>
+    <button class="button" type="submit">Extract for review</button>
+  </form>
+  <p>Nothing reaches the dashboard until you review and confirm it. If this layout is not recognized, use Add balance instead.</p>
+</section>
+{% endblock %}

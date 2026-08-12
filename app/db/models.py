@@ -73,6 +73,9 @@ class Workspace(Base):
     account_balance_snapshots: Mapped[list["AccountBalanceSnapshot"]] = relationship(
         back_populates="workspace"
     )
+    statement_imports: Mapped[list["AccountStatementImport"]] = relationship(
+        back_populates="workspace"
+    )
 
 
 class WorkspaceMembership(Base):
@@ -124,6 +127,9 @@ class UploadedFile(Base):
     account_balance_snapshots: Mapped[list["AccountBalanceSnapshot"]] = relationship(
         back_populates="uploaded_file"
     )
+    statement_imports: Mapped[list["AccountStatementImport"]] = relationship(
+        back_populates="uploaded_file"
+    )
 
 
 class ImportJob(Base):
@@ -167,6 +173,42 @@ class Account(Base):
         back_populates="account"
     )
     import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="account")
+    statement_imports: Mapped[list["AccountStatementImport"]] = relationship(
+        back_populates="account"
+    )
+
+
+class AccountStatementImport(Base):
+    __tablename__ = "account_statement_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "statement_category",
+            "source_checksum",
+            name="uix_statement_import_workspace_category_checksum",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    uploaded_file_id: Mapped[int] = mapped_column(ForeignKey("uploaded_files.id"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
+    statement_category: Mapped[str] = mapped_column(String(50))
+    source_checksum: Mapped[str] = mapped_column(String(64))
+    candidate_fields: Mapped[dict] = mapped_column(JSON)
+    confirmed_fields: Mapped[dict | None] = mapped_column(JSON)
+    review_status: Mapped[str] = mapped_column(String(50), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="statement_imports")
+    uploaded_file: Mapped["UploadedFile"] = relationship(back_populates="statement_imports")
+    account: Mapped["Account | None"] = relationship(back_populates="statement_imports")
+    balance_snapshot: Mapped["AccountBalanceSnapshot | None"] = relationship(
+        back_populates="statement_import", uselist=False
+    )
 
 
 class AccountBalanceSnapshot(Base):
@@ -174,6 +216,11 @@ class AccountBalanceSnapshot(Base):
     __table_args__ = (
         Index("ix_workspace_balance_snapshot_date", "workspace_id", "as_of_date"),
         Index("ix_account_balance_snapshot_date", "account_id", "as_of_date"),
+        Index(
+            "uix_balance_snapshot_statement_import_id",
+            "statement_import_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -183,12 +230,18 @@ class AccountBalanceSnapshot(Base):
     as_of_date: Mapped[date] = mapped_column(Date)
     source: Mapped[str] = mapped_column(String(50), default="manual")
     uploaded_file_id: Mapped[int | None] = mapped_column(ForeignKey("uploaded_files.id"))
+    statement_import_id: Mapped[int | None] = mapped_column(
+        ForeignKey("account_statement_imports.id")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     workspace: Mapped["Workspace"] = relationship(back_populates="account_balance_snapshots")
     account: Mapped["Account"] = relationship(back_populates="balance_snapshots")
     uploaded_file: Mapped["UploadedFile | None"] = relationship(
         back_populates="account_balance_snapshots"
+    )
+    statement_import: Mapped["AccountStatementImport | None"] = relationship(
+        back_populates="balance_snapshot"
     )
 
 

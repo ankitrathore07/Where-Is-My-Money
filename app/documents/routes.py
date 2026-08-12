@@ -26,10 +26,20 @@ from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.payslips.extraction import DocumentExtractionError, DocumentExtractor
 from app.payslips.service import PayslipImportError, create_payslip_import
 from app.payslips.storage import PayslipStorageError, PayslipUploadStore
+from app.statement_imports.service import StatementImportError, ingest_one_statement
+from app.statement_imports.storage import StatementStorageError, StatementUploadStore
+from app.statement_imports.types import StatementFormatError
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["documents"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
+STATEMENT_CATEGORY_BY_DOCUMENT_CATEGORY = {
+    "retirement_401k_statement": "investment_401k",
+    "brokerage_statement": "brokerage",
+    "mortgage_statement": "mortgage",
+    "loan_statement": "loan",
+    "other_account_statement": "other",
+}
 
 
 @router.get("/documents/new", response_class=HTMLResponse)
@@ -45,6 +55,7 @@ async def new_document_upload(
         "categories": client_catalog(
             max_csv_bytes=settings.max_csv_upload_bytes,
             max_payslip_bytes=settings.max_payslip_upload_bytes,
+            max_statement_bytes=settings.max_statement_upload_bytes,
         ),
     }
     return templates.TemplateResponse(
@@ -121,6 +132,34 @@ def _process_payslip(
     )
 
 
+def _process_statement(
+    session: Session,
+    store: StatementUploadStore,
+    extractor: object,
+    workspace: Workspace,
+    document: UploadFile,
+    document_category: str,
+    retention_choice: str,
+) -> DocumentProcessResult:
+    statement_category = STATEMENT_CATEGORY_BY_DOCUMENT_CATEGORY[document_category]
+    pending = ingest_one_statement(
+        session,
+        store,
+        extractor,
+        workspace,
+        statement_category,
+        document.filename or "",
+        document.content_type or "",
+        document.file,
+        retention_choice,
+    )
+    return DocumentProcessResult(
+        "Ready for review.",
+        f"/workspaces/{workspace.id}/statement-imports/{pending.id}/review",
+        "Review balance",
+    )
+
+
 @router.post("/document-uploads", dependencies=[Depends(require_csrf)])
 def process_document_upload(
     request: Request,
@@ -154,14 +193,24 @@ def process_document_upload(
                 document,
                 retention_choice,
             )
-        else:
-            assert category.processor == "payslip"
+        elif category.processor == "payslip":
             result = _process_payslip(
                 session,
                 request.app.state.payslip_store,
                 request.app.state.payslip_extractor,
                 workspace,
                 document,
+                retention_choice,
+            )
+        else:
+            assert category.processor == "statement_balance"
+            result = _process_statement(
+                session,
+                request.app.state.statement_store,
+                request.app.state.statement_extractor,
+                workspace,
+                document,
+                category.key,
                 retention_choice,
             )
     except DocumentUploadValidationError as exc:
@@ -173,6 +222,9 @@ def process_document_upload(
         DocumentExtractionError,
         PayslipStorageError,
         PayslipImportError,
+        StatementFormatError,
+        StatementStorageError,
+        StatementImportError,
     ) as exc:
         return _error(exc.code, exc.message)
     return JSONResponse(result.as_payload())

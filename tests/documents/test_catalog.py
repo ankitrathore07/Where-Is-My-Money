@@ -22,11 +22,16 @@ EXPECTED_KEYS = (
 )
 
 
-def test_catalog_exposes_stable_manual_categories_and_only_two_processors() -> None:
+def test_catalog_exposes_stable_manual_categories_and_supported_processors() -> None:
     assert tuple(category.key for category in DOCUMENT_CATEGORIES) == EXPECTED_KEYS
     assert {category.key for category in DOCUMENT_CATEGORIES if category.processor} == {
         "transaction_statement",
         "payslip",
+        "retirement_401k_statement",
+        "brokerage_statement",
+        "mortgage_statement",
+        "loan_statement",
+        "other_account_statement",
     }
     assert ALLOWED_QUEUE_SUFFIXES == frozenset({".csv", ".pdf", ".png", ".jpg", ".jpeg"})
     assert MAX_QUEUE_FILES == 10
@@ -39,6 +44,11 @@ def test_catalog_exposes_stable_manual_categories_and_only_two_processors() -> N
         ("transaction_statement", "checking.csv", "application/octet-stream", "csv_import"),
         ("payslip", "pay.pdf", "application/pdf", "payslip"),
         ("payslip", "pay.jpeg", "image/jpeg", "payslip"),
+        ("retirement_401k_statement", "plan.csv", "text/csv", "statement_balance"),
+        ("brokerage_statement", "brokerage.pdf", "application/pdf", "statement_balance"),
+        ("mortgage_statement", "mortgage.png", "image/png", "statement_balance"),
+        ("loan_statement", "loan.jpg", "image/jpeg", "statement_balance"),
+        ("other_account_statement", "other.jpeg", "image/jpeg", "statement_balance"),
     ],
 )
 def test_processable_metadata_returns_the_selected_category(
@@ -53,7 +63,6 @@ def test_processable_metadata_returns_the_selected_category(
     "key,filename,content_type,code",
     [
         ("missing", "checking.csv", "text/csv", "unknown_category"),
-        ("brokerage_statement", "account.pdf", "application/pdf", "processor_unavailable"),
         ("unlisted", "account.pdf", "application/pdf", "processor_unavailable"),
         ("transaction_statement", "checking.pdf", "application/pdf", "category_format_mismatch"),
         ("payslip", "pay.pdf", "text/plain", "category_format_mismatch"),
@@ -69,7 +78,11 @@ def test_invalid_metadata_has_a_safe_stable_error(
 
 
 def test_client_catalog_contains_no_classifier_or_server_only_objects() -> None:
-    payload = client_catalog(max_csv_bytes=5_000_000, max_payslip_bytes=10_000_000)
+    payload = client_catalog(
+        max_csv_bytes=5_000_000,
+        max_payslip_bytes=10_000_000,
+        max_statement_bytes=12_000_000,
+    )
     assert payload[0] == {
         "key": "transaction_statement",
         "label": "Bank or credit-card transaction statement",
@@ -77,8 +90,9 @@ def test_client_catalog_contains_no_classifier_or_server_only_objects() -> None:
         "accepted_suffixes": [".csv"],
         "max_bytes": 5_000_000,
     }
-    assert payload[2]["supported"] is False
-    assert payload[2]["accepted_suffixes"] == []
+    assert payload[2]["supported"] is True
+    assert payload[2]["accepted_suffixes"] == [".csv", ".jpeg", ".jpg", ".pdf", ".png"]
+    assert payload[2]["max_bytes"] == 12_000_000
     assert "suggestion" not in payload[0]
     assert "confidence" not in payload[0]
 

@@ -5,9 +5,9 @@ now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
 invitations, route-level workspace authorization, reviewed CSV imports,
 deterministic transaction categorization, reviewed local payslip imports with
-gross/net income summaries, and a centralized financial dashboard with accounts
-and manual balances. It also includes explicit monthly budgets and deterministic
-savings-goal projections.
+gross/net income summaries, a centralized financial dashboard with accounts and
+manual balances, explicit monthly budgets and deterministic savings-goal
+projections, and reviewed local account-statement balance imports.
 
 The application does not connect to banks, move money, or call an LLM. Those are
 separate later pull requests so each privacy boundary can be reviewed and tested
@@ -18,8 +18,9 @@ before financial workflows rely on it.
 - Python 3.12. The project uses uv to find or install it.
 - uv. It manages Python, the virtual environment, and locked dependencies.
 - A Google Cloud OAuth web client for interactive sign-in.
-- The local Tesseract OCR executable only for image or scanned-PDF payslips.
-  Text-based PDFs do not need it. The Docker image installs it automatically.
+- The local Tesseract OCR executable for image or scanned-PDF payslips and
+  account statements. Text-based PDFs do not need it. The Docker image installs
+  it automatically.
 - Docker Desktop only if you want to run the container workflow.
 
 ## Configure Google sign-in
@@ -109,13 +110,13 @@ who creates it so they can share it privately.
    categories.
 4. Remove unwanted files with **X**, choose one source-retention policy, and
    select **Process**. Queued documents process one at a time, in order.
-5. Follow **Map columns** for transaction CSVs or **Review payslip** for
-   PDF/image payslips.
+5. Follow **Map columns** for transaction CSVs, **Review payslip** for
+   PDF/image payslips, or **Review balance** for a supported account statement.
 
-Only transaction CSV and payslip processors are available in V1. 401(k),
-brokerage/stocks, mortgage, loan, and other account statements remain in the
-browser and are not uploaded. Their processors are tracked in
-[PR 8b](docs/where-is-my-money-pr-breakdown.md#pr-8b--account-statement-imports-and-net-worth-view).
+V1 processes transaction CSVs, payslips, and documented total-balance formats
+for 401(k), brokerage/stocks, mortgage, loan, and other account statements.
+Checking, savings, credit-card, and unlisted document categories remain
+unavailable and are not uploaded.
 
 The default policy deletes each raw source only after its import or confirmation
 succeeds. Selecting **retain** keeps it below the configured private local data
@@ -242,6 +243,63 @@ up to the next cent so the projection does not fall short. Goal cards show the
 supplied input, calculated value, remaining amount, and whether the plan is on
 track, completed, or past an unmet deadline. These are deterministic scenarios,
 not automatic transfers or guarantees; the app never moves money.
+
+## Import an account statement balance
+
+PR 8b supports reviewed total-balance imports for 401(k), brokerage, mortgage,
+auto-loan, student-loan, and other accounts. Checking, savings, and credit-card
+statement imports remain unavailable; use **Add balance** for those accounts.
+
+1. Use **Upload documents**, or open **Accounts** and select **Import statement**
+   beside a supported account.
+2. Upload one CSV, PDF, PNG, or JPEG no larger than 10 MiB. The file is processed
+   locally. A scanned PDF or image requires Tesseract.
+3. Review and edit the statement account identity, destination account, total
+   balance, and as-of date. The dashboard does not change during this step.
+4. Select **Confirm balance snapshot**. The existing dashboard automatically
+   uses the confirmed snapshot; its asset, liability, and net-worth calculations
+   are not duplicated by the importer.
+
+Financial institutions do not share one statement layout. A PDF or image is
+accepted only when one category-specific processor finds an unambiguous account
+identity, total, and date. Recognized total labels are:
+
+- 401(k): `Total account balance`, `Total plan balance`, `Ending account value`,
+  or `Account value`;
+- brokerage: `Total account value`, `Ending account value`, `Net account value`,
+  or `Portfolio value`;
+- mortgage: `Unpaid principal balance`, `Current principal balance`, or
+  `Remaining principal balance`;
+- auto/student loan: `Outstanding principal balance`, `Current principal
+  balance`, or `Remaining principal balance`; and
+- other: `Total balance`, `Ending balance`, or `Current balance`.
+
+The same document must label an account with `Account name`, `Plan name`,
+`Account number`, or `Account ending in`, and label its date with `As of date`,
+`Statement date`, or `Period ending`. Values such as amount due, minimum
+payment, buying power, available cash, payoff amount, and individual holdings
+are never treated as the total balance. Unsupported or ambiguous documents are
+rejected safely; return to the account's **Add balance** form instead.
+
+CSV uses a deliberately strict, user-prepared WIMM balance template—not a claim
+that a provider's transaction CSV is supported. Save UTF-8 CSV with exactly this
+header and one data row:
+
+```csv
+account_name,institution,account_last_four,total_balance,as_of_date
+Northstar Retirement Plan,Fictional Provider,4821,125430.18,2026-07-31
+```
+
+`account_name`, `total_balance`, and the ISO `as_of_date` are required.
+`institution` and the four-digit `account_last_four` may be empty. Extra rows or
+columns and transaction exports are rejected. The importer tracks only total
+account balances—not securities, holdings, lots, or prices.
+
+The drag-and-drop queue calls `ingest_one_statement(...)` once per statement,
+without duplicating statement processors, confirmation, or dashboard logic. A
+future optional AI extractor may propose candidates only behind the same
+editable confirmation boundary; PR 8b itself does not use AI or send documents
+over the network.
 
 ### Try the synthetic dashboard demo
 
@@ -380,6 +438,7 @@ and does not mount `app_data`.
     app/accounts/               Workspace account setup and manual balance snapshots
     app/dashboard/              Deterministic financial dashboard and synthetic demo
     app/planning/               Explicit budgets and savings-goal projections
+    app/statement_imports/      Local statement processors and reviewed balances
     app/core/config.py          Environment settings and production validation
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
     app/core/middleware.py      Browser CSRF cookie and form enforcement
@@ -397,8 +456,7 @@ and does not mount `app_data`.
 
 ## What's next
 
-PR 8b adds reviewed account-statement balance extraction without changing the
-manual account flow. LangGraph is reserved for PR 10's optional financial coach.
-That later assistant can answer scoped money questions and draft a goal plan,
-but a person must explicitly confirm the exact goal fields before any goal is
-created or changed. It will never move money.
+LangGraph is reserved for PR 10's optional financial coach. That later assistant
+can answer scoped money questions and draft a goal plan, but a person must
+explicitly confirm the exact goal fields before any goal is created or changed.
+It will never move money.

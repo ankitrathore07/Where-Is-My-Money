@@ -20,6 +20,12 @@ PAYSLIP_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType(
         ".jpeg": frozenset({"image/jpeg", "image/jpg"}),
     }
 )
+STATEMENT_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        ".csv": CSV_CONTENT_TYPES,
+        **PAYSLIP_CONTENT_TYPES,
+    }
+)
 NO_CONTENT_TYPES: Mapping[str, frozenset[str]] = MappingProxyType({})
 
 
@@ -39,14 +45,29 @@ DOCUMENT_CATEGORIES = (
     ),
     DocumentCategory("payslip", "Payslip", "payslip", PAYSLIP_CONTENT_TYPES),
     DocumentCategory(
-        "retirement_401k_statement", "401(k) retirement statement", None, NO_CONTENT_TYPES
+        "retirement_401k_statement",
+        "401(k) retirement statement",
+        "statement_balance",
+        STATEMENT_CONTENT_TYPES,
     ),
     DocumentCategory(
-        "brokerage_statement", "Brokerage or stocks statement", None, NO_CONTENT_TYPES
+        "brokerage_statement",
+        "Brokerage or stocks statement",
+        "statement_balance",
+        STATEMENT_CONTENT_TYPES,
     ),
-    DocumentCategory("mortgage_statement", "Mortgage statement", None, NO_CONTENT_TYPES),
-    DocumentCategory("loan_statement", "Loan statement", None, NO_CONTENT_TYPES),
-    DocumentCategory("other_account_statement", "Other account statement", None, NO_CONTENT_TYPES),
+    DocumentCategory(
+        "mortgage_statement", "Mortgage statement", "statement_balance", STATEMENT_CONTENT_TYPES
+    ),
+    DocumentCategory(
+        "loan_statement", "Loan statement", "statement_balance", STATEMENT_CONTENT_TYPES
+    ),
+    DocumentCategory(
+        "other_account_statement",
+        "Other account statement",
+        "statement_balance",
+        STATEMENT_CONTENT_TYPES,
+    ),
     DocumentCategory("unlisted", "Category not listed", None, NO_CONTENT_TYPES),
 )
 _CATEGORY_BY_KEY: Mapping[str, DocumentCategory] = MappingProxyType(
@@ -73,15 +94,26 @@ def validate_processable_upload(
     allowed_types = category.content_types_by_suffix.get(suffix)
     normalized_type = (content_type or "").casefold()
     if allowed_types is None or normalized_type not in allowed_types:
-        expected = "CSV" if category.processor == "csv_import" else "PDF, PNG, or JPEG"
+        if category.processor == "csv_import":
+            expected = "CSV"
+        elif category.processor == "payslip":
+            expected = "PDF, PNG, or JPEG"
+        else:
+            expected = "CSV, PDF, PNG, or JPEG"
         raise DocumentUploadValidationError(
             "category_format_mismatch", f"{category.label} files must use {expected}."
         )
     return category
 
 
-def client_catalog(*, max_csv_bytes: int, max_payslip_bytes: int) -> list[dict[str, object]]:
-    limits = {"csv_import": max_csv_bytes, "payslip": max_payslip_bytes}
+def client_catalog(
+    *, max_csv_bytes: int, max_payslip_bytes: int, max_statement_bytes: int
+) -> list[dict[str, object]]:
+    limits = {
+        "csv_import": max_csv_bytes,
+        "payslip": max_payslip_bytes,
+        "statement_balance": max_statement_bytes,
+    }
     return [
         {
             "key": category.key,
