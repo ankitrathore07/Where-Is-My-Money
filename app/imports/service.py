@@ -314,10 +314,14 @@ def build_review(
 ) -> ImportReview:
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
-        raise ImportStateError("not_ready_for_review", "Map the CSV before reviewing it.")
+        raise ImportStateError(
+            "not_ready_for_review", "Prepare the transaction statement before reviewing it."
+        )
     document = load_source_document(store, job, extractor)
     if not isinstance(job.column_mapping, dict):
-        raise ImportStateError("mapping_missing", "Map the CSV before reviewing it.")
+        raise ImportStateError(
+            "mapping_missing", "Prepare the transaction statement before reviewing it."
+        )
     mapping = mapping_from_json(document.headers, job.column_mapping)
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
@@ -495,7 +499,9 @@ def commit_import(
             cleanup_failed=job.status == "committed_cleanup_failed",
         )
     if job.status != "reviewing":
-        raise ImportStateError("not_ready_to_commit", "Review the CSV before committing it.")
+        raise ImportStateError(
+            "not_ready_to_commit", "Review the transaction statement before committing it."
+        )
 
     review = build_review(session, store, job, extractor)
     expected_rows = tuple(row.row_number for row in review.rows)

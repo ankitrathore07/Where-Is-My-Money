@@ -111,6 +111,156 @@ def test_ambiguous_pdf_transaction_statement_is_removed_without_database_rows(
     assert list(tmp_path.rglob("*.pdf")) == []
 
 
+@pytest.mark.parametrize(
+    ("filename", "media_type", "retention_choice", "code"),
+    [
+        ("checking.png", "image/png", "retain", "unsupported_file_type"),
+        ("checking.pdf", "text/plain", "retain", "unsupported_file_type"),
+        ("checking.pdf", "application/pdf", "forever", "invalid_retention"),
+    ],
+)
+def test_pdf_validation_happens_before_private_storage(
+    session: Session,
+    workspace: Workspace,
+    tmp_path: Path,
+    filename: str,
+    media_type: str,
+    retention_choice: str,
+    code: str,
+) -> None:
+    with pytest.raises(ImportStateError) as error:
+        create_transaction_import(
+            session,
+            LocalUploadStore(tmp_path),
+            FakeTransactionExtractor("08/01/2026 Example -$1.00"),
+            workspace,
+            filename,
+            media_type,
+            BytesIO(PDF_BYTES),
+            retention_choice,
+        )
+
+    assert error.value.code == code
+    assert list(tmp_path.rglob("*.*")) == []
+
+
+def test_pdf_reupload_resumes_then_recognizes_committed_job(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    extractor = FakeTransactionExtractor("08/01/2026 Example -$1.00")
+
+    first = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+    resumed = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+    first.job.status = "committed"
+    session.commit()
+    committed = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+
+    assert resumed.kind == "resume"
+    assert committed.kind == "already_committed"
+    assert resumed.job.id == committed.job.id == first.job.id
+    assert session.scalar(select(func.count()).select_from(ImportJob)) == 1
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+def test_pdf_checksum_deduplication_is_workspace_scoped(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+    tmp_path: Path,
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    extractor = FakeTransactionExtractor("08/01/2026 Example -$1.00")
+
+    first = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+    second = create_transaction_import(
+        session,
+        store,
+        extractor,
+        other_workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+    )
+
+    assert first.kind == second.kind == "created"
+    assert first.job.workspace_id == workspace.id
+    assert second.job.workspace_id == other_workspace.id
+    assert session.scalar(select(func.count()).select_from(ImportJob)) == 2
+
+
+def test_pdf_commit_uses_existing_review_and_deletes_source(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    store = LocalUploadStore(tmp_path)
+    extractor = FakeTransactionExtractor("08/01/2026 Example Market -$12.34")
+    created = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "delete_after_import",
+    )
+    add_uncategorized(session)
+    review = build_review(session, store, created.job, extractor)
+    row = review.rows[0]
+
+    result = commit_import(
+        session,
+        store,
+        created.job,
+        (RowEdit(row.row_number, True, row.date_value, row.description_value, row.amount_value),),
+        extractor,
+    )
+
+    transaction = session.scalar(select(Transaction))
+    assert result.inserted_count == 1
+    assert transaction is not None and transaction.amount_cents == -1234
+    assert created.job.uploaded_file is not None
+    assert created.job.uploaded_file.deleted is True
+    assert list(tmp_path.rglob("*.pdf")) == []
+
+
 def test_create_job_links_private_file_and_checksum(
     session: Session, workspace: Workspace, tmp_path: Path
 ) -> None:

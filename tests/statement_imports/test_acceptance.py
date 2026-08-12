@@ -23,18 +23,22 @@ def _csv(name: str, balance: str) -> bytes:
     ).encode()
 
 
-def test_five_supported_categories_update_existing_dashboard_only_after_confirmation(
+def test_all_supported_account_types_update_dashboard_only_after_confirmation(
     tmp_path: Path, session: Session, workspace: Workspace
 ) -> None:
     definitions = (
+        ("bank_account", "Checking", "checking", False, "5000.00"),
+        ("bank_account", "Savings", "savings", False, "15000.00"),
+        ("credit_card", "Credit card", "credit_card", True, "2500.00"),
         ("investment_401k", "401(k)", "investment_401k", False, "100000.00"),
         ("brokerage", "Brokerage", "investment_brokerage", False, "50000.00"),
         ("mortgage", "Mortgage", "mortgage", True, "200000.00"),
         ("loan", "Auto loan", "auto_loan", True, "20000.00"),
+        ("loan", "Student loan", "student_loan", True, "10000.00"),
         ("other", "Other asset", "other", False, "10000.00"),
     )
     accounts: dict[str, Account] = {}
-    for category, name, account_type, is_liability, _ in definitions:
+    for _category, name, account_type, is_liability, _ in definitions:
         account = Account(
             workspace_id=workspace.id,
             name=name,
@@ -42,14 +46,14 @@ def test_five_supported_categories_update_existing_dashboard_only_after_confirma
             is_liability=is_liability,
         )
         session.add(account)
-        accounts[category] = account
+        accounts[name] = account
     session.commit()
     store = StatementUploadStore(tmp_path)
     pending_imports = []
     for category, name, _, _, balance in definitions:
         pending_imports.append(
             (
-                category,
+                name,
                 balance,
                 ingest_one_statement(
                     session,
@@ -68,16 +72,16 @@ def test_five_supported_categories_update_existing_dashboard_only_after_confirma
     before = build_dashboard_report(session, workspace.id, date(2026, 7, 31))
     assert before.position.assets_cents == 0
     assert before.position.liabilities_cents == 0
-    assert before.position.missing_balance_count == 5
+    assert before.position.missing_balance_count == 9
 
-    for category, balance, pending in pending_imports:
+    for name, balance, pending in pending_imports:
         candidate = pending.candidate_fields
         confirm_statement_import(
             session,
             store,
             pending,
             {
-                "account_id": str(accounts[category].id),
+                "account_id": str(accounts[name].id),
                 "account_name": str(candidate["account_name"]),
                 "institution": str(candidate["institution"]),
                 "account_last_four": str(candidate["account_last_four"]),
@@ -88,14 +92,18 @@ def test_five_supported_categories_update_existing_dashboard_only_after_confirma
         )
 
     after = build_dashboard_report(session, workspace.id, date(2026, 7, 31))
-    assert after.position.assets_cents == 16_000_000
-    assert after.position.liabilities_cents == 22_000_000
-    assert after.position.net_worth_cents == -6_000_000
+    assert after.position.assets_cents == 18_000_000
+    assert after.position.liabilities_cents == 23_250_000
+    assert after.position.net_worth_cents == -5_250_000
     assert after.position.missing_balance_count == 0
     assert {position.name for position in after.position.accounts} == {
         "401(k)",
+        "Checking",
+        "Savings",
+        "Credit card",
         "Brokerage",
         "Mortgage",
         "Auto loan",
+        "Student loan",
         "Other asset",
     }

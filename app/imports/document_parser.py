@@ -8,8 +8,9 @@ DATE_AT_START = re.compile(
     r"^\s*(?P<date>\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/(?:\d{2}|\d{4}))\s+(?P<body>.+)$"
 )
 MONEY_TOKEN = re.compile(
-    r"(?<![\w.])(?P<amount>\(?[-+]?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})\)?)"
-    r"(?:\s*(?P<direction>CR|DR|CREDIT|DEBIT))?(?![\w.])",
+    r"(?<![\w.])(?:(?P<direction_before>CR|DR|CREDIT|DEBIT)\s+)?"
+    r"(?P<amount>\(?[-+]?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})\)?)"
+    r"(?:\s*(?P<direction_after>CR|DR|CREDIT|DEBIT))?(?![\w.])",
     re.IGNORECASE,
 )
 MAX_TRANSACTIONS = 50_000
@@ -43,7 +44,6 @@ def _iso_date(value: str) -> str:
 
 def _signed_amount(match: re.Match[str]) -> str | None:
     raw = match.group("amount")
-    direction = (match.group("direction") or "").casefold()
     accounting_negative = raw.startswith("(") and raw.endswith(")")
     normalized = raw.strip("()").replace("$", "").replace(",", "")
     try:
@@ -52,12 +52,24 @@ def _signed_amount(match: re.Match[str]) -> str | None:
         return None
     if amount == 0:
         return None
-    if accounting_negative or normalized.startswith("-") or direction in {"dr", "debit"}:
-        amount = -abs(amount)
-    elif normalized.startswith("+") or direction in {"cr", "credit"}:
-        amount = abs(amount)
-    else:
+
+    directions = {
+        value.casefold()
+        for value in (match.group("direction_before"), match.group("direction_after"))
+        if value
+    }
+    cues: set[int] = set()
+    if accounting_negative or normalized.startswith("-"):
+        cues.add(-1)
+    elif normalized.startswith("+"):
+        cues.add(1)
+    if directions & {"dr", "debit"}:
+        cues.add(-1)
+    if directions & {"cr", "credit"}:
+        cues.add(1)
+    if len(cues) != 1:
         return None
+    amount = abs(amount) * cues.pop()
     return f"{amount:.2f}"
 
 

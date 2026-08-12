@@ -34,8 +34,12 @@ def test_supported_categories_map_only_to_implemented_account_types() -> None:
     [
         ("bank_account", "Ending balance"),
         ("bank_account", "Closing balance"),
+        ("bank_account", "Current balance"),
+        ("bank_account", "Available balance"),
         ("credit_card", "New balance"),
         ("credit_card", "Statement balance"),
+        ("credit_card", "Current balance"),
+        ("credit_card", "Total balance"),
         ("investment_401k", "Total account balance"),
         ("investment_401k", "Total plan balance"),
         ("investment_401k", "Ending account value"),

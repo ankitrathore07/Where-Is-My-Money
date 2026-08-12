@@ -4,7 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
-from app.db.models import Category, ImportJob, Transaction, Workspace
+from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.payslips.extraction import DocumentExtractor
 from app.statement_imports.extraction import StatementDocumentExtractor
 from tests.payslips.pdf_helpers import make_text_pdf
@@ -27,13 +27,10 @@ async def test_text_pdf_transactions_are_extracted_locally_for_review(tmp_path: 
     application.state.statement_extractor = StatementDocumentExtractor(
         DocumentExtractor(UnexpectedOcr())
     )
-    pdf = make_text_pdf(
-        [
-            "Fictional Checking Statement",
-            "08/01/2026 Example Market -$12.34 $1,250.00",
-            "2026-08-02 Payroll $2,500.00 CR $3,750.00",
-        ]
+    fixture = (
+        Path(__file__).parent / "fixtures" / "statements" / "synthetic_transaction_pdf_text.txt"
     )
+    pdf = make_text_pdf(fixture.read_text(encoding="utf-8").splitlines())
     try:
         async with AsyncClient(
             transport=ASGITransport(app=application), base_url="http://testserver"
@@ -66,3 +63,40 @@ async def test_text_pdf_transactions_are_extracted_locally_for_review(tmp_path: 
     assert "2500.00" in review.text
     assert job is not None and job.status == "reviewing"
     assert transaction_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("filename", "content_type", "body"),
+    [
+        ("checking.pdf", "application/pdf", b"%PDF-this-is-malformed"),
+        ("checking.pdf", "text/plain", b"private"),
+    ],
+)
+async def test_invalid_pdf_upload_returns_safe_error_without_private_state(
+    tmp_path: Path, filename: str, content_type: str, body: bytes
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": (filename, body, content_type)},
+            )
+        with factory() as session:
+            jobs = session.scalar(select(func.count(ImportJob.id)))
+            uploads = session.scalar(select(func.count(UploadedFile.id)))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 400
+    assert jobs == 0
+    assert uploads == 0
+    assert list(tmp_path.rglob("*.pdf")) == []

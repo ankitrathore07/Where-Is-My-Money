@@ -3,7 +3,7 @@
 Where Is My Money? is a privacy-conscious personal-finance learning project. It
 now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
-invitations, route-level workspace authorization, reviewed CSV imports,
+invitations, route-level workspace authorization, reviewed CSV/PDF transaction imports,
 deterministic transaction categorization, reviewed local payslip imports with
 gross/net income summaries, a centralized financial dashboard with accounts and
 manual balances, explicit monthly budgets and deterministic savings-goal
@@ -407,9 +407,10 @@ Then run:
 - Ruff lint catches common Python errors and risky patterns.
 - Ruff format checks that contributors produce the same layout.
 - Pytest runs synthetic unit, integration, and Chromium browser-flow fixtures.
-  No real financial or identity data belongs in tests. CSV coverage uses only the
-  included fictional `synthetic_checking.csv` fixture, and payslip coverage uses
-  only the fictional Northstar Bicycle Works fixture.
+  No real financial or identity data belongs in tests. Transaction coverage uses
+  only the included fictional `synthetic_checking.csv` and
+  `synthetic_transaction_pdf_text.txt` fixtures, and payslip coverage uses only
+  the fictional Northstar Bicycle Works fixture.
 - Alembic migrations describe database changes in source control. PR 4 adds a
   reversible data migration for the built-in categories, PR 6 adds the unique
   one-income-record-per-payslip rule, and CI upgrades a fresh SQLite database
@@ -467,7 +468,7 @@ and does not mount `app_data`.
     app/auth/                   Google OAuth, identity service, session dependencies
     app/workspaces/             Membership, invitation, and authorized routes
     app/documents/              Unified document catalog, upload queue, and dispatch
-    app/imports/                CSV mapping, review, categorization, duplicates, storage
+    app/imports/                CSV/PDF transaction review, categorization, duplicates, storage
     app/payslips/               PDF/image storage, local extraction/OCR, review, income
     app/categorization/         Merchant normalization, built-in catalog, precedence
     app/categories/             Workspace category validation and routes

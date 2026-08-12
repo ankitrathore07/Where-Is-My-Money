@@ -46,37 +46,52 @@ async def test_accounts_show_import_for_every_supported_account_type(tmp_path: P
             await complete_sign_in(client)
             with factory() as session:
                 workspace_id = session.scalar(select(Workspace.id))
+                account_definitions = (
+                    ("Checking", "checking", False),
+                    ("Savings", "savings", False),
+                    ("Credit card", "credit_card", True),
+                    ("401(k)", "investment_401k", False),
+                    ("Brokerage", "investment_brokerage", False),
+                    ("Mortgage", "mortgage", True),
+                    ("Auto loan", "auto_loan", True),
+                    ("Student loan", "student_loan", True),
+                    ("Other", "other", False),
+                )
                 session.add_all(
-                    [
-                        Account(
-                            workspace_id=workspace_id,
-                            name="Brokerage",
-                            account_type="investment_brokerage",
-                            is_liability=False,
-                        ),
-                        Account(
-                            workspace_id=workspace_id,
-                            name="Checking",
-                            account_type="checking",
-                            is_liability=False,
-                        ),
-                    ]
+                    Account(
+                        workspace_id=workspace_id,
+                        name=name,
+                        account_type=account_type,
+                        is_liability=is_liability,
+                    )
+                    for name, account_type, is_liability in account_definitions
                 )
                 session.commit()
                 accounts = {
                     account.name: account.id for account in session.scalars(select(Account))
                 }
             response = await client.get(f"/workspaces/{workspace_id}/accounts")
-            checking_upload = await client.get(
-                f"/workspaces/{workspace_id}/accounts/{accounts['Checking']}/statements/new"
-            )
+            upload_pages = {
+                name: await client.get(
+                    f"/workspaces/{workspace_id}/accounts/{account_id}/statements/new"
+                )
+                for name, account_id in accounts.items()
+            }
     finally:
         engine.dispose()
     assert response.status_code == 200
-    assert f"/accounts/{accounts['Brokerage']}/statements/new" in response.text
-    assert f"/accounts/{accounts['Checking']}/statements/new" in response.text
-    assert checking_upload.status_code == 200
-    assert 'value="bank_account"' in checking_upload.text
+    for account_id in accounts.values():
+        assert f"/accounts/{account_id}/statements/new" in response.text
+    assert all(page.status_code == 200 for page in upload_pages.values())
+    assert 'value="bank_account"' in upload_pages["Checking"].text
+    assert 'value="bank_account"' in upload_pages["Savings"].text
+    assert 'value="credit_card"' in upload_pages["Credit card"].text
+    assert 'value="investment_401k"' in upload_pages["401(k)"].text
+    assert 'value="brokerage"' in upload_pages["Brokerage"].text
+    assert 'value="mortgage"' in upload_pages["Mortgage"].text
+    assert 'value="loan"' in upload_pages["Auto loan"].text
+    assert 'value="loan"' in upload_pages["Student loan"].text
+    assert 'value="other"' in upload_pages["Other"].text
 
 
 @pytest.mark.anyio

@@ -1,0 +1,5 @@
+Fictional Northstar Checking Statement
+Statement period ending 2026-08-31
+08/01/2026 Example Market -$12.34 $1,250.00
+08/02/2026 Payroll CREDIT $2,500.00 $3,750.00
+08/03/2026 Coffee ($4.50) $3,745.50

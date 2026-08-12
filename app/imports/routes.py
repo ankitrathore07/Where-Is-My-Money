@@ -1,4 +1,4 @@
-"""Authenticated, workspace-scoped CSV import pages."""
+"""Authenticated, workspace-scoped transaction-statement import pages."""
 
 from pathlib import Path
 from typing import Annotated

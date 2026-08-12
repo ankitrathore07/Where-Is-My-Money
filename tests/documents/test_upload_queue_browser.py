@@ -3,10 +3,10 @@ import re
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Browser, Page, expect
 from sqlalchemy import func, select
 
-from app.db.models import Payslip, UploadedFile
+from app.db.models import Payslip, Transaction, UploadedFile, Workspace
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example Market,-12.34\n"
 STATEMENT_CSV_BYTES = (
@@ -255,6 +255,71 @@ def test_valid_csv_and_payslip_produce_locked_review_links_and_keep_retention(
     with factory() as session:
         uploads = session.scalars(select(UploadedFile).order_by(UploadedFile.id)).all()
         assert [upload.retention_choice for upload in uploads] == ["retain", "retain"]
+
+
+def test_pdf_transaction_processes_reviews_commits_and_navigates_without_page_errors(
+    signed_in_upload_page: tuple[Page, int], live_document_app: tuple[str, object]
+) -> None:
+    page, _ = signed_in_upload_page
+    _, factory = live_document_app
+    page_errors: list[object] = []
+    page.on("pageerror", lambda error: page_errors.append(error))
+    page.locator("#document-files").set_input_files(
+        payload("checking.pdf", "application/pdf", PDF_BYTES)
+    )
+    row = page.locator("#document-queue-body tr")
+    row.locator("select").select_option("transaction_statement")
+
+    page.locator("#process-documents").click()
+
+    review_link = row.get_by_role("link", name="Review transactions")
+    expect(review_link).to_be_visible()
+    review_link.click()
+    expect(page.get_by_role("heading", name="Review transactions")).to_be_visible()
+    expect(page.locator('input[name="description_1"]')).to_have_value("Example Market")
+    expect(page.locator('input[name="amount_1"]')).to_have_value("-12.34")
+    expect(page.locator('input[name="amount_2"]')).to_have_value("2500.00")
+
+    page.get_by_role("button", name="Commit selected transactions").click()
+    expect(page.get_by_role("heading", name="Import complete")).to_be_visible()
+    expect(page.get_by_text("The raw statement has been deleted.")).to_be_visible()
+    page.get_by_role("link", name="View transactions").click()
+    expect(page.get_by_text("Example Market", exact=True)).to_be_visible()
+    expect(page.get_by_text("Payroll", exact=True)).to_be_visible()
+
+    with factory() as session:
+        transactions = session.scalars(select(Transaction).order_by(Transaction.id)).all()
+    assert [transaction.amount_cents for transaction in transactions] == [-1234, 250000]
+    assert page_errors == []
+
+
+def test_javascript_disabled_page_keeps_semantic_individual_import_fallback(
+    browser: Browser, live_document_app: tuple[str, object]
+) -> None:
+    base_url, factory = live_document_app
+    context = browser.new_context(java_script_enabled=False)
+    page = context.new_page()
+    try:
+        page.goto(base_url)
+        csrf = page.locator('input[name="csrf_token"]').first.get_attribute("value")
+        assert csrf
+        started = context.request.post(
+            f"{base_url}/auth/google", form={"csrf_token": csrf}, max_redirects=0
+        )
+        assert started.status == 302
+        callback = context.request.get(f"{base_url}/auth/google/callback", max_redirects=0)
+        assert callback.status == 303
+        with factory() as session:
+            workspace_id = session.scalar(select(Workspace.id))
+            assert workspace_id is not None
+
+        page.goto(f"{base_url}/workspaces/{workspace_id}/documents/new")
+
+        expect(page.get_by_role("heading", name="Upload documents")).to_be_visible()
+        expect(page.get_by_role("link", name="Import CSV or PDF transactions")).to_be_visible()
+        expect(page.get_by_role("link", name="Import a payslip")).to_be_visible()
+    finally:
+        context.close()
 
 
 def test_network_failure_can_retry_only_the_failed_row(
