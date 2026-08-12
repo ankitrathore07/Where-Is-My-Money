@@ -533,6 +533,128 @@ td {
   width: 1px;
 }
 
+.planning-section-heading,
+.planning-goal-title {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.planning-section-heading h2,
+.planning-goal-title h3 {
+  margin-top: 0;
+}
+
+.planning-month-form {
+  align-items: end;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+.planning-budget-list,
+.planning-goal-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.planning-budget-row,
+.planning-goal-card {
+  background: #f8fbf9;
+  border: 1px solid #dce8e1;
+  border-radius: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.planning-budget-row {
+  align-items: start;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.4fr) minmax(12rem, 0.8fr) minmax(12rem, 0.8fr);
+}
+
+.planning-budget-row h3,
+.planning-goal-card h3 {
+  margin: 0 0 0.4rem;
+}
+
+.planning-budget-values {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.planning-budget-values div {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.planning-budget-values dt {
+  color: #52615a;
+}
+
+.planning-budget-values dd {
+  font-weight: 700;
+  margin: 0;
+}
+
+.planning-budget-form {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.planning-goal-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.planning-goal-card p {
+  margin: 0.45rem 0;
+}
+
+.planning-status-on_track,
+.planning-status-completed {
+  background: #dff3e7;
+  color: #225b39;
+}
+
+.planning-status-off_track {
+  background: #fde7e2;
+  color: #8b2e21;
+}
+
+.planning-goal-options {
+  border: 1px solid #ccd8d1;
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  margin: 0.5rem 0;
+  padding: 1rem;
+}
+
+.planning-goal-options > div {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.planning-or {
+  align-self: center;
+  color: #52615a;
+  margin: 0;
+}
+
+.planning-goal-form-panel {
+  max-width: 48rem;
+}
+
+.negative {
+  color: #9b2f24;
+}
+
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
@@ -597,6 +719,32 @@ select:focus-visible {
 
   .dashboard,
   .dashboard * {
+    min-width: 0;
+  }
+
+  .planning-section-heading,
+  .planning-goal-title {
+    flex-wrap: wrap;
+  }
+
+  .planning-budget-row,
+  .planning-goal-grid,
+  .planning-goal-options {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-month-form {
+    width: 100%;
+  }
+
+  .planning-or {
+    justify-self: start;
+  }
+
+  .planning-budget-panel,
+  .planning-budget-panel *,
+  .planning-goal-form-panel,
+  .planning-goal-form-panel * {
     min-width: 0;
   }
 

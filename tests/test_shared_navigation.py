@@ -77,6 +77,7 @@ async def test_workspace_page_exposes_all_authenticated_navigation_destinations(
         ("Workspaces", "/workspaces"),
         ("Dashboard", f"/workspaces/{workspace_id}/dashboard"),
         ("Accounts", f"/workspaces/{workspace_id}/accounts"),
+        ("Planning", f"/workspaces/{workspace_id}/planning"),
         ("Transactions", f"/workspaces/{workspace_id}/transactions"),
         ("Income", f"/workspaces/{workspace_id}/income"),
         ("Categories", f"/workspaces/{workspace_id}/categories"),

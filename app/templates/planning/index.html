@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Planning · {{ workspace.name }} · Where Is My Money?{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Budgets and savings goals</h1>
+    <p>Make an explicit monthly plan and see deterministic savings projections. Nothing here moves money.</p>
+  </section>
+
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+  <section class="panel planning-budget-panel" aria-labelledby="budget-heading">
+    <div class="planning-section-heading">
+      <div>
+        <h2 id="budget-heading">Monthly budget{% if period_month %} · {{ format_month(period_month) }}{% endif %}</h2>
+        {% if report %}<p>Suggestions use spending from {{ format_period(report.source_start, report.source_end) }}: the median of those three complete months plus a 10% buffer.</p>{% endif %}
+      </div>
+      <form action="/workspaces/{{ workspace.id }}/planning" method="get" class="planning-month-form">
+        <label for="budget-month">Budget month</label>
+        <input id="budget-month" name="month" type="month" required value="{{ month_value }}">
+        <button type="submit">View month</button>
+      </form>
+    </div>
+
+    {% if report and report.lines %}
+      <div class="planning-budget-list">
+        {% for line in report.lines %}
+          <article class="planning-budget-row">
+            <div>
+              <h3>{{ line.category_name }}</h3>
+              {% if line.suggestion %}
+                <p class="muted">Three months: {% for cents in line.suggestion.monthly_spend_cents %}{{ format_money(cents) }}{% if not loop.last %}, {% endif %}{% endfor %}. Median {{ format_money(line.suggestion.median_cents) }}.</p>
+              {% endif %}
+            </div>
+            {% if line.limit_cents is not none %}
+              <dl class="planning-budget-values">
+                <div><dt>Limit</dt><dd>{{ format_money(line.limit_cents) }}</dd></div>
+                <div><dt>Spent</dt><dd>{{ format_money(line.spent_cents) }}</dd></div>
+                <div><dt>Remaining</dt><dd class="{% if line.remaining_cents < 0 %}negative{% endif %}">{{ format_money(line.remaining_cents) }}</dd></div>
+              </dl>
+            {% else %}
+              <p><strong>Suggested limit {{ format_money(line.suggestion.suggested_cents) }}</strong></p>
+            {% endif %}
+            <form action="/workspaces/{{ workspace.id }}/planning/budgets" method="post" class="planning-budget-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="category_id" value="{{ line.category_id }}">
+              <input type="hidden" name="period_month" value="{{ month_value }}">
+              <label for="budget-amount-{{ line.category_id }}">Monthly limit</label>
+              <input id="budget-amount-{{ line.category_id }}" name="amount" inputmode="decimal" required value="{% if submitted_category_id == line.category_id %}{{ submitted_amount }}{% elif line.limit_cents is not none %}{{ format_money_input(line.limit_cents) }}{% else %}{{ format_money_input(line.suggestion.suggested_cents) }}{% endif %}">
+              {% if submitted_category_id == line.category_id and field_errors.amount %}<p class="field-error">{{ field_errors.amount }}</p>{% endif %}
+              <button class="button" type="submit">{% if line.budget_id %}Save limit{% else %}Accept suggestion{% endif %}</button>
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+    {% elif report %}
+      <div class="notice">
+        <p>No eligible category spending exists in the three complete source months.</p>
+        <a href="/workspaces/{{ workspace.id }}/imports/new">Import transactions</a>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="goals-heading">
+    <div class="planning-section-heading"><div><h2 id="goals-heading">Savings goals</h2><p>Choose a deadline or a monthly contribution and the other value will be calculated.</p></div><a class="button" href="/workspaces/{{ workspace.id }}/planning/goals/new">New savings goal</a></div>
+    {% if goals %}
+      <div class="planning-goal-grid">
+        {% for goal in goals %}
+          <article class="planning-goal-card">
+            <div class="planning-goal-title"><h3>{{ goal.name }}</h3><span class="badge planning-status-{{ goal.status }}">{% if goal.status == "on_track" %}On track{% elif goal.status == "off_track" %}Off track{% else %}Completed{% endif %}</span></div>
+            <p><strong>{{ format_money(goal.current_amount_cents) }}</strong> saved of {{ format_money(goal.target_amount_cents) }}</p>
+            <p>{{ format_money(goal.remaining_cents) }} remaining.</p>
+            {% if goal.supplied_target_date %}<p>Target date: {{ format_date(goal.supplied_target_date) }}.</p>{% endif %}
+            {% if goal.supplied_monthly_contribution_cents is not none %}<p>Plan: {{ format_money(goal.supplied_monthly_contribution_cents) }} per month.</p>{% endif %}
+            {% if goal.calculated_monthly_contribution_cents is not none %}<p><strong>Projection:</strong> {{ format_money(goal.calculated_monthly_contribution_cents) }} per month{% if goal.contribution_months %} for {{ goal.contribution_months }} months{% endif %}.</p>{% endif %}
+            {% if goal.calculated_target_date %}<p><strong>Projection:</strong> target date {{ format_date(goal.calculated_target_date) }}.</p>{% endif %}
+            {% if goal.status == "off_track" %}<p class="negative">The deadline has passed before the target was reached.</p>{% endif %}
+            <a href="/workspaces/{{ workspace.id }}/planning/goals/{{ goal.goal_id }}/edit">Edit goal</a>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No savings goals yet. Add one to calculate a contribution or target date.</p>
+    {% endif %}
+  </section>
+{% endblock %}
