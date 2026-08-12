@@ -46,4 +46,5 @@
   </noscript>
 
   <script id="document-category-config" type="application/json">{{ client_config | tojson }}</script>
+  <script src="{{ url_for('static', path='/document-upload.js') }}" defer></script>
 {% endblock %}
