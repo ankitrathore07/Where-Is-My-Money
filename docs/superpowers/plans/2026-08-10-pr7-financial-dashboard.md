@@ -1033,8 +1033,8 @@ upgrade head`, `uv run alembic current`, downgrade to
 `0006_builtin_categories`, and upgrade head again. Then start the application
 lifespan against the fresh database with a TestClient and assert `/health`
 returns `{"status": "ok"}`. Expected Alembic head remains
-`0007_categorization_constraints` because merged PR 6 required no new schema and
-PR 7 adds no migration.
+`0008_unique_payslip_income`: merged PR 6 added that uniqueness migration, while
+PR 7 itself adds no migration.
 
 - [ ] **Step 4: Audit privacy, dependencies, and repository scope**
 
