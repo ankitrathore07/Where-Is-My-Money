@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -247,6 +248,78 @@ async def test_account_update_rejects_missing_csrf_without_mutating_account(tmp_
 
 
 @pytest.mark.anyio
+async def test_invalid_account_edit_keeps_edit_form_and_resubmits_to_update(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = Account(
+                    workspace_id=workspace_id,
+                    name="Original Name",
+                    account_type="checking",
+                    institution="Original Bank",
+                    is_liability=False,
+                )
+                session.add(account)
+                session.commit()
+                account_id = account.id
+            invalid = await client.post(
+                f"/workspaces/{workspace_id}/accounts/{account_id}",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "name": "Entered Name",
+                    "account_type": "credit_card",
+                    "institution": "Entered Bank",
+                    "classification": "asset",
+                },
+            )
+            form_action = re.search(
+                r'<form action="([^"]+)" method="post" class="stacked-form">', invalid.text
+            )
+            assert form_action is not None
+            corrected = await client.post(
+                form_action.group(1),
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "name": "Corrected Name",
+                    "account_type": "credit_card",
+                    "institution": "Corrected Bank",
+                    "classification": "liability",
+                },
+                follow_redirects=False,
+            )
+            with factory() as session:
+                accounts = tuple(session.scalars(select(Account).order_by(Account.id)))
+    finally:
+        engine.dispose()
+
+    assert invalid.status_code == 422
+    assert "This account type has a fixed classification." in invalid.text
+    assert "<h1>Edit account</h1>" in invalid.text
+    assert ">Save account</button>" in invalid.text
+    assert form_action.group(1) == f"/workspaces/{workspace_id}/accounts/{account_id}"
+    assert 'value="Entered Name"' in invalid.text
+    assert 'value="credit_card" selected' in invalid.text
+    assert 'value="Entered Bank"' in invalid.text
+    assert corrected.status_code == 303
+    assert len(accounts) == 1
+    assert (
+        accounts[0].id,
+        accounts[0].name,
+        accounts[0].account_type,
+        accounts[0].institution,
+        accounts[0].is_liability,
+    ) == (account_id, "Corrected Name", "credit_card", "Corrected Bank", True)
+
+
+@pytest.mark.anyio
 async def test_manual_balance_rejects_missing_csrf_without_creating_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -391,3 +464,74 @@ async def test_foreign_account_routes_return_generic_not_found(tmp_path: Path) -
     assert foreign_account is not None
     assert foreign_account.name == "SECRET OTHER ACCOUNT"
     assert snapshot_count == 1
+
+
+@pytest.mark.anyio
+async def test_account_update_authorizes_before_validating_classification(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                other_user = User(
+                    google_sub="invalid-foreign-account-owner",
+                    email="invalid-foreign-owner@example.com",
+                )
+                other_workspace = Workspace(
+                    name="Invalid foreign workspace", is_personal=True, owner=other_user
+                )
+                session.add(other_workspace)
+                session.flush()
+                foreign_account = Account(
+                    workspace_id=other_workspace.id,
+                    name="SECRET UNCHANGED ACCOUNT",
+                    account_type="savings",
+                    institution="Secret Bank",
+                    is_liability=False,
+                )
+                session.add(foreign_account)
+                session.commit()
+                foreign_account_id = foreign_account.id
+                missing_account_id = foreign_account_id + 10_000
+            token = client.cookies["wimm_csrf"]
+            responses = tuple(
+                [
+                    await client.post(
+                        f"/workspaces/{workspace_id}/accounts/{account_id}",
+                        data={
+                            "csrf_token": token,
+                            "name": "Changed",
+                            "account_type": "savings",
+                            "institution": "Changed Bank",
+                            "classification": "invalid",
+                        },
+                    )
+                    for account_id in (foreign_account_id, missing_account_id)
+                ]
+            )
+            with factory() as session:
+                unchanged = session.get(Account, foreign_account_id)
+                account_count = session.scalar(select(func.count()).select_from(Account))
+    finally:
+        engine.dispose()
+
+    assert [response.status_code for response in responses] == [404, 404]
+    assert [response.json() for response in responses] == [
+        {"detail": "Not Found"},
+        {"detail": "Not Found"},
+    ]
+    assert all("Choose asset or liability." not in response.text for response in responses)
+    assert unchanged is not None
+    assert (
+        unchanged.name,
+        unchanged.account_type,
+        unchanged.institution,
+        unchanged.is_liability,
+    ) == ("SECRET UNCHANGED ACCOUNT", "savings", "Secret Bank", False)
+    assert account_count == 1

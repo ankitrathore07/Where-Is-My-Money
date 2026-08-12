@@ -198,6 +198,7 @@ async def account_update(
         "classification": classification,
     }
     try:
+        account = get_workspace_account(session, workspace.id, account_id)
         update_account(
             session,
             workspace.id,
@@ -216,6 +217,7 @@ async def account_update(
             request,
             user,
             workspace,
+            account=account,
             values=values,
             field_errors=exc.field_errors,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
