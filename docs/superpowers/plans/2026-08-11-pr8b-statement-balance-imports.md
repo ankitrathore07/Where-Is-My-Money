@@ -52,8 +52,21 @@
 
 ```python
 def test_statement_import_round_trips_with_pending_candidates(session, workspace):
-    uploaded = UploadedFile(workspace_id=workspace.id, file_type="account_statement", storage_path="1/a.csv", checksum="a" * 64, size_bytes=10)
-    pending = AccountStatementImport(workspace_id=workspace.id, uploaded_file=uploaded, statement_category="brokerage", source_checksum="a" * 64, candidate_fields={"balance_cents": 12500}, review_status="pending")
+    uploaded = UploadedFile(
+        workspace_id=workspace.id,
+        file_type="account_statement",
+        storage_path="1/a.csv",
+        checksum="a" * 64,
+        size_bytes=10,
+    )
+    pending = AccountStatementImport(
+        workspace_id=workspace.id,
+        uploaded_file=uploaded,
+        statement_category="brokerage",
+        source_checksum="a" * 64,
+        candidate_fields={"balance_cents": 12500},
+        review_status="pending",
+    )
     session.add(pending)
     session.commit()
     assert pending.uploaded_file.workspace_id == workspace.id
@@ -103,7 +116,9 @@ git commit -m "feat: add statement import persistence"
 Cover exact header/order and one row, optional UTF-8 BOM, required name/balance/date, optional institution/last four, exact four ASCII digits, non-negative money with at most two decimals, ISO dates, and rejection of extra rows/columns/formulas/transaction exports.
 
 ```python
-candidate = parse_wimm_csv(b"account_name,institution,account_last_four,total_balance,as_of_date\nNorthstar Brokerage,Fictional Brokerage,4821,125430.18,2026-07-31\n")
+candidate = parse_wimm_csv(
+    b"account_name,institution,account_last_four,total_balance,as_of_date\nNorthstar Brokerage,Fictional Brokerage,4821,125430.18,2026-07-31\n"
+)
 assert candidate.balance_cents == 12_543_018
 assert candidate.as_of_date == date(2026, 7, 31)
 assert candidate.extraction_method == "wimm_csv"
@@ -122,7 +137,11 @@ Use Python's `csv.DictReader`, `Decimal`, exact header comparison, and shared bo
 Parameterize every label from the design. Assert case/whitespace tolerance, ISO/US/spelled-month dates, full account-number reduction to last four, repeated-identical values, and rejection of conflicting totals/dates/identities, negative/parenthesized totals, payment amounts, buying power, holdings, and consolidated multi-account statements.
 
 ```python
-candidate = process_statement_text("mortgage", "Servicer: Northstar Home Loans\nAccount ending in 7742\nStatement date: July 31, 2026\nUnpaid principal balance: $248,125.44", "embedded_text")
+candidate = process_statement_text(
+    "mortgage",
+    "Servicer: Northstar Home Loans\nAccount ending in 7742\nStatement date: July 31, 2026\nUnpaid principal balance: $248,125.44",
+    "embedded_text",
+)
 assert candidate.balance_cents == 24_812_544
 assert candidate.account_last_four == "7742"
 ```
@@ -202,7 +221,17 @@ git commit -m "feat: store and extract statement sources locally"
 Cover valid CSV and extracted document creation, actual/declared type validation, retention validation before storage, safe cleanup on extraction/parsing failure, uploaded-file metadata, no snapshot before confirmation, workspace/category/checksum duplicate resume, same bytes under a corrected category, and the explicit one-file stream interface.
 
 ```python
-pending = ingest_one_statement(session, store, extractor, workspace, "brokerage", "statement.csv", "text/csv", BytesIO(csv_bytes), "retain")
+pending = ingest_one_statement(
+    session,
+    store,
+    extractor,
+    workspace,
+    "brokerage",
+    "statement.csv",
+    "text/csv",
+    BytesIO(csv_bytes),
+    "retain",
+)
 assert pending.review_status == "pending"
 assert session.query(AccountBalanceSnapshot).count() == 0
 ```
@@ -248,7 +277,20 @@ Cover normalized name/institution, optional exact last four, account ID, positiv
 Cover compatible 401(k)/brokerage/mortgage/loan/other accounts, foreign/incompatible accounts, exact reviewed edits, `source="statement_import"`, uploaded/import linkage, confirmed fields, repeated confirmation, unique-link concurrency recovery, source retain/delete behavior, and cleanup-failure state.
 
 ```python
-result = confirm_statement_import(session, store, pending, {"account_id": str(account.id), "account_name": "Reviewed", "institution": "Northstar", "account_last_four": "4821", "total_balance": "125430.18", "as_of_date": "2026-07-31"}, today=date(2026, 8, 11))
+result = confirm_statement_import(
+    session,
+    store,
+    pending,
+    {
+        "account_id": str(account.id),
+        "account_name": "Reviewed",
+        "institution": "Northstar",
+        "account_last_four": "4821",
+        "total_balance": "125430.18",
+        "as_of_date": "2026-07-31",
+    },
+    today=date(2026, 8, 11),
+)
 assert result.snapshot.balance_cents == 12_543_018
 assert result.snapshot.source == "statement_import"
 ```
