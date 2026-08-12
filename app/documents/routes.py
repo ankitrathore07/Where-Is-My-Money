@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -12,7 +13,12 @@ from app.auth.dependencies import require_current_user
 from app.core.middleware import require_csrf
 from app.db.models import User, Workspace
 from app.db.session import get_db
-from app.documents.catalog import DocumentUploadValidationError, validate_processable_upload
+from app.documents.catalog import (
+    MAX_QUEUE_FILES,
+    DocumentUploadValidationError,
+    client_catalog,
+    validate_processable_upload,
+)
 from app.documents.types import DocumentProcessResult
 from app.imports.parser import CsvValidationError
 from app.imports.service import ImportStateError, create_csv_import
@@ -23,6 +29,35 @@ from app.payslips.storage import PayslipStorageError, PayslipUploadStore
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["documents"])
+templates = Jinja2Templates(directory=Path(__file__).resolve().parents[1] / "templates")
+
+
+@router.get("/documents/new", response_class=HTMLResponse)
+async def new_document_upload(
+    request: Request,
+    user: Annotated[User, Depends(require_current_user)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    settings = request.app.state.settings
+    client_config = {
+        "max_files": MAX_QUEUE_FILES,
+        "endpoint": f"/workspaces/{workspace.id}/document-uploads",
+        "categories": client_catalog(
+            max_csv_bytes=settings.max_csv_upload_bytes,
+            max_payslip_bytes=settings.max_payslip_upload_bytes,
+        ),
+    }
+    return templates.TemplateResponse(
+        request=request,
+        name="documents/upload.html",
+        context={
+            "request": request,
+            "current_user": user,
+            "workspace": workspace,
+            "csrf_token": request.state.csrf_token,
+            "client_config": client_config,
+        },
+    )
 
 
 async def _multipart_file_count(request: Request) -> int:

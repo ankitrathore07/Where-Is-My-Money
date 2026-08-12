@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Upload documents · {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <p class="eyebrow">{{ workspace.name }}</p>
+    <h1>Upload documents</h1>
+    <p>Add up to 10 files, choose every document category manually, then review the queue before processing.</p>
+    <p class="muted">Category suggestions using AI or machine learning are planned for a future version.</p>
+  </section>
+
+  <form id="document-upload-form" class="panel document-upload" novalidate>
+    <input id="document-csrf-token" type="hidden" value="{{ csrf_token }}">
+    <button id="document-drop-zone" class="document-drop-zone" type="button" aria-describedby="document-file-help">
+      <strong>Drop files here or browse</strong>
+      <span id="document-file-help">CSV, PDF, PNG, or JPEG · multiple files supported</span>
+    </button>
+    <input id="document-files" class="visually-hidden" type="file" multiple accept=".csv,.pdf,.png,.jpg,.jpeg,text/csv,application/pdf,image/png,image/jpeg">
+
+    <div id="document-page-alert" class="alert" role="alert" hidden></div>
+    <p id="document-live-status" class="visually-hidden" aria-live="polite"></p>
+
+    <div class="table-wrap document-queue-wrap" hidden>
+      <table class="document-queue">
+        <thead><tr><th scope="col">File</th><th scope="col">Document category</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+        <tbody id="document-queue-body"></tbody>
+      </table>
+    </div>
+
+    <fieldset class="document-retention">
+      <legend>After each successful import or confirmation</legend>
+      <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete each raw document</label>
+      <label><input type="radio" name="retention_choice" value="retain"> Retain each raw document privately</label>
+    </fieldset>
+
+    <button id="process-documents" class="button" type="submit" disabled>Process 0 files</button>
+  </form>
+
+  <noscript>
+    <section class="notice">
+      <p>JavaScript is required for a multi-file queue. You can still use the individual upload pages.</p>
+      <a href="/workspaces/{{ workspace.id }}/imports/new">Import a transaction CSV</a>
+      <a href="/workspaces/{{ workspace.id }}/payslips/new">Import a payslip</a>
+    </section>
+  </noscript>
+
+  <script id="document-category-config" type="application/json">{{ client_config | tojson }}</script>
+{% endblock %}
