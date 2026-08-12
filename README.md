@@ -139,12 +139,17 @@ dashboard; choosing the right workspace keeps those views separate.
    for a liability.
 3. Open **Dashboard**. It brings together assets, liabilities, net worth
    (assets minus liabilities), cash available from checking and savings, and the
-   savings rate when the workspace has income data. The account list shows where
-   money is held. Accounts without a balance are marked **Balance not added** and
-   are left out of the totals instead of being treated as zero.
+   savings rate when the workspace has categorized income transactions. The
+   account list shows where money is held. Accounts without a balance are marked
+   **Balance not added** and are left out of the totals instead of being treated
+   as zero.
 4. Use the five-year net-worth and income-versus-spending views to see the data
    recorded in this workspace. The short highlights are factual, repeatable
    calculations from that data, not personalized advice.
+
+The income-versus-spending view and savings rate use categorized transactions.
+Confirmed payslip income records remain separate today, so they do not change
+those dashboard cash-flow or savings-rate calculations.
 
 The dashboard uses deterministic Python calculations: it does not call AI or a
 network service to calculate totals, trends, or highlights. Its Chart.js copy is
