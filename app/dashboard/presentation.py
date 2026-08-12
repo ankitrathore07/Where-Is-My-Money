@@ -13,6 +13,7 @@ class DashboardPageData:
     is_empty: bool
     has_accounts: bool
     has_transactions: bool
+    has_known_position: bool
     has_position_history: bool
     savings_rate_basis_points: int | None
     needs_review_count: int
@@ -37,9 +38,16 @@ def dashboard_page_data(report: DashboardReport) -> DashboardPageData:
     """Derive bounded display-state facts without putting report logic in Jinja."""
     current_cash_flow = report.cash_flow_series[-1] if report.cash_flow_series else None
     return DashboardPageData(
-        is_empty=report.as_of_date is None,
+        is_empty=(
+            report.as_of_date is None
+            and not report.position.accounts
+            and not report.has_transactions
+        ),
         has_accounts=bool(report.position.accounts),
         has_transactions=report.has_transactions,
+        has_known_position=any(
+            account.balance_cents is not None for account in report.position.accounts
+        ),
         has_position_history=sum(
             point.net_worth_cents is not None for point in report.net_worth_series
         )

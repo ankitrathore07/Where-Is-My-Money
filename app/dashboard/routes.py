@@ -17,7 +17,13 @@ from app.dashboard.presentation import (
     format_basis_points,
     format_money,
 )
-from app.dashboard.service import build_dashboard_report
+from app.dashboard.service import (
+    MAX_DASHBOARD_DATE,
+    MIN_DASHBOARD_DATE,
+    DashboardDateRangeError,
+    build_dashboard_report,
+    validate_dashboard_as_of_date,
+)
 from app.db.models import User, Workspace
 from app.db.session import get_db
 from app.workspaces.dependencies import require_workspace
@@ -52,6 +58,28 @@ def _parse_as_of_date(value: str) -> date | None:
     return date.fromisoformat(value)
 
 
+def _date_error_response(
+    request: Request, user: User, workspace: Workspace, error: str
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard/index.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            error=error,
+            report=None,
+            page_data=None,
+            chart_data=None,
+            format_money=format_money,
+            format_basis_points=format_basis_points,
+            account_type_labels=_ACCOUNT_TYPE_LABELS,
+        ),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 @router.get("/dashboard", response_class=HTMLResponse, name="dashboard")
 async def dashboard(
     request: Request,
@@ -64,25 +92,31 @@ async def dashboard(
     try:
         as_of_date = _parse_as_of_date(as_of)
     except ValueError:
-        return templates.TemplateResponse(
-            request=request,
-            name="dashboard/index.html",
-            context=_context(
+        return _date_error_response(
+            request, user, workspace, "Use a valid date in YYYY-MM-DD format."
+        )
+    if as_of_date is not None:
+        try:
+            validate_dashboard_as_of_date(as_of_date)
+        except DashboardDateRangeError:
+            return _date_error_response(
                 request,
                 user,
                 workspace,
-                error="Use a valid date in YYYY-MM-DD format.",
-                report=None,
-                page_data=None,
-                chart_data=None,
-                format_money=format_money,
-                format_basis_points=format_basis_points,
-                account_type_labels=_ACCOUNT_TYPE_LABELS,
-            ),
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        )
+                f"Dashboard dates must be between {MIN_DASHBOARD_DATE.isoformat()} and "
+                f"{MAX_DASHBOARD_DATE.isoformat()}.",
+            )
 
-    report = build_dashboard_report(session, workspace.id, as_of_date)
+    try:
+        report = build_dashboard_report(session, workspace.id, as_of_date)
+    except DashboardDateRangeError:
+        return _date_error_response(
+            request,
+            user,
+            workspace,
+            f"Dashboard dates must be between {MIN_DASHBOARD_DATE.isoformat()} and "
+            f"{MAX_DASHBOARD_DATE.isoformat()}.",
+        )
     return templates.TemplateResponse(
         request=request,
         name="dashboard/index.html",

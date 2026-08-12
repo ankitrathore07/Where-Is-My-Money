@@ -17,6 +17,19 @@ from app.dashboard.types import (
 from app.db.models import Account, AccountBalanceSnapshot, Category, Transaction
 
 _CASH_ACCOUNT_TYPES = {"checking", "savings"}
+MIN_DASHBOARD_DATE = date(5, 1, 1)
+MAX_DASHBOARD_DATE = date(9999, 12, 30)
+
+
+class DashboardDateRangeError(ValueError):
+    """Raised when a dashboard date cannot safely produce a five-year report."""
+
+
+def validate_dashboard_as_of_date(value: date) -> date:
+    """Return a date safe for annual points and exclusive transaction bounds."""
+    if not MIN_DASHBOARD_DATE <= value <= MAX_DASHBOARD_DATE:
+        raise DashboardDateRangeError
+    return value
 
 
 def _workspace_accounts(session: Session, workspace_id: int) -> tuple[Account, ...]:
@@ -226,8 +239,13 @@ def build_dashboard_report(
             position=position,
             net_worth_series=(),
             cash_flow_series=(),
-            highlights=(_setup_highlight(),),
+            highlights=(
+                _build_highlights(position, (), ())
+                if position.accounts
+                else (_setup_highlight(),)
+            ),
         )
+    validate_dashboard_as_of_date(cutoff)
     position = _position_summary(session, workspace_id, cutoff)
     net_worth_series = build_net_worth_series(session, workspace_id, cutoff)
     cash_flow_series = build_cash_flow_series(session, workspace_id, cutoff)

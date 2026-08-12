@@ -55,6 +55,40 @@ async def test_empty_dashboard_offers_account_and_transaction_setup(tmp_path: Pa
     assert "Import transactions" in response.text
 
 
+@pytest.mark.anyio
+async def test_account_without_financial_data_remains_visible_with_a_balance_action(
+    tmp_path: Path,
+) -> None:
+    """Treating an account-only workspace as empty would hide the account that needs a balance."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                account = _account(session, workspace_id, "Checking", "checking", False)
+                account_id = account.id
+                session.commit()
+
+            response = await client.get(f"/workspaces/{workspace_id}/dashboard")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert "No accounts or transactions yet." not in response.text
+    assert "Checking" in response.text
+    assert "Balance not added" in response.text
+    assert "Balance missing" in response.text
+    assert "Add an account, balance, or transaction to see your dashboard." not in response.text
+    assert '<h2 id="net-worth-heading">Unavailable</h2>' in response.text
+    assert (
+        f'href="/workspaces/{workspace_id}/accounts/{account_id}/balances/new"' in response.text
+    )
+
+
 def _account(
     session, workspace_id: int, name: str, account_type: str, is_liability: bool
 ) -> Account:
@@ -301,6 +335,44 @@ async def test_dashboard_rejects_bad_dates_and_keeps_partial_data_truthful(tmp_p
     assert "Unavailable" in current.text
     assert "1 account needs balances added" in current.text
     assert future.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_dashboard_accepts_safe_date_edges_and_rejects_unsupported_iso_dates(
+    tmp_path: Path,
+) -> None:
+    """Changing supported query bounds would reintroduce calendar underflow or overflow failures."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+
+            lower_edge = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=0005-01-01"
+            )
+            upper_edge = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-30"
+            )
+            too_early = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=0004-12-31"
+            )
+            too_late = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=9999-12-31"
+            )
+    finally:
+        engine.dispose()
+
+    assert lower_edge.status_code == 200
+    assert upper_edge.status_code == 200
+    assert too_early.status_code == 422
+    assert too_late.status_code == 422
+    assert "Dashboard dates must be between 0005-01-01 and 9999-12-30." in too_early.text
+    assert "Dashboard dates must be between 0005-01-01 and 9999-12-30." in too_late.text
 
 
 @pytest.mark.anyio
