@@ -95,6 +95,11 @@ The original single PR 2 created all ~13 tables at once, which is too large to r
 - **Done when:** fixed fixture data produces repeatable totals and charts, every
   value is workspace-scoped, and a new contributor can enter balances and view
   the polished dashboard.
+- **Status:** Implemented with workspace-scoped account setup and positive
+  manual balance entry, deterministic assets/liabilities/net-worth/cash/savings
+  calculations, factual partial-data highlights, locally bundled Chart.js with
+  table fallbacks when JavaScript is unavailable, and an opt-in non-overwriting
+  synthetic dashboard demo.
 
 ## PR 8 — Budgets and savings goals
 

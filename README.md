@@ -4,8 +4,9 @@ Where Is My Money? is a privacy-conscious personal-finance learning project. It
 now has a small Python web app, a complete database foundation, verified Google
 sign-in, private personal workspaces, shared household workspaces, pending email
 invitations, route-level workspace authorization, reviewed CSV imports,
-deterministic transaction categorization, and reviewed local payslip imports with
-gross/net income summaries.
+deterministic transaction categorization, reviewed local payslip imports with
+gross/net income summaries, and a centralized financial dashboard with accounts
+and manual balances.
 
 The application does not yet connect to banks, calculate budgets, or call an
 LLM. Those are separate later pull requests so each privacy boundary can be
@@ -121,6 +122,48 @@ committed import without adding duplicate transactions.
 The review page applies the same workspace and built-in rules used everywhere
 else, but the visible reviewed decision is what commit saves. A rule change made
 after preview cannot silently replace the decision that the member approved.
+
+## Use the financial dashboard
+
+Sign in once, then choose the personal or household workspace whose finances you
+want to view. Each workspace has its own accounts, balances, transactions, and
+dashboard; choosing the right workspace keeps those views separate.
+
+1. Open **Accounts** and select **Add account**. Give the account a name, choose
+   its type, and classify it as an asset or liability. Checking, savings, 401(k),
+   and brokerage accounts normally hold value; credit cards, mortgages, and loans
+   normally represent amounts owed.
+2. Select **Add balance** beside an account. Enter a positive dollar value and an
+   as-of date. For an asset, the value is what you own. For a liability, it is
+   the positive amount you still owe. You never need to enter a negative balance
+   for a liability.
+3. Open **Dashboard**. It brings together assets, liabilities, net worth
+   (assets minus liabilities), cash available from checking and savings, and the
+   savings rate when the workspace has income data. The account list shows where
+   money is held. Accounts without a balance are marked **Balance not added** and
+   are left out of the totals instead of being treated as zero.
+4. Use the five-year net-worth and income-versus-spending views to see the data
+   recorded in this workspace. The short highlights are factual, repeatable
+   calculations from that data, not personalized advice.
+
+The dashboard uses deterministic Python calculations: it does not call AI or a
+network service to calculate totals, trends, or highlights. Its Chart.js copy is
+bundled and served locally, so the dashboard does not need a chart CDN. If
+JavaScript is unavailable, the page still shows the chart values in tables.
+
+### Try the synthetic dashboard demo
+
+After you have signed in at least once, run this from the project directory with
+the same email address you used for Google sign-in:
+
+    uv run python -m app.dashboard.demo --email your-google-email@example.com
+
+The command creates a separate, fictional **Dashboard Demo** workspace and
+prints its dashboard URL. It does not create a Google identity or change your
+existing workspaces. Running it again for the same user safely reports that the
+Dashboard Demo already exists and that nothing changed; it does not overwrite or
+duplicate the demo. Keep the demo until a future supported deletion flow is
+available—do not remove it by editing the database directly.
 
 ## Import a payslip and confirm income
 
@@ -261,6 +304,8 @@ database volume.
     app/categorization/         Merchant normalization, built-in catalog, precedence
     app/categories/             Workspace category validation and routes
     app/transactions/           Scoped queries, manual edits, and future merchant rules
+    app/accounts/               Workspace account setup and manual balance snapshots
+    app/dashboard/              Deterministic financial dashboard and synthetic demo
     app/core/config.py          Environment settings and production validation
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
     app/core/middleware.py      Browser CSRF cookie and form enforcement
@@ -276,13 +321,10 @@ database volume.
     .github/workflows/ci.yml    Clean-machine quality checks
     docs/                       Product plan, PR scope, designs, and implementation plans
 
-## Next step
+## What's next
 
-PR 7 adds a centralized, responsive financial dashboard plus basic account setup
-and manual balance entry. It uses deterministic Python calculations and locally
-served charts, not AI.
-
-LangGraph is reserved for PR 10's optional financial coach, after accounts,
-budgets, and savings goals exist. That later assistant will answer scoped money
-questions and help draft goal plans, while explicit confirmation remains
-required before it can create or change a goal. It will never move money.
+PR 8 adds editable budgets and savings goals. LangGraph is reserved for PR 10's
+optional financial coach, after accounts, budgets, and savings goals exist. That
+later assistant can answer scoped money questions and draft a goal plan, but a
+person must explicitly confirm the exact goal fields before any goal is created
+or changed. It will never move money.
