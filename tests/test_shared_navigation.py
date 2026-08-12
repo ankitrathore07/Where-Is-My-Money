@@ -16,12 +16,17 @@ class _NavigationParser(HTMLParser):
         super().__init__()
         self._inside_navigation = False
         self._active_element: dict[str, str] | None = None
+        self.navigation_attributes: dict[str, str] = {}
         self.elements: list[dict[str, str]] = []
+        self.forms: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name: value or "" for name, value in attrs}
         if tag == "nav" and attributes.get("class") == "site-nav":
             self._inside_navigation = True
+            self.navigation_attributes = attributes
+        elif self._inside_navigation and tag == "form":
+            self.forms.append(attributes)
         if self._inside_navigation and tag in {"a", "button"}:
             self._active_element = {"tag": tag, **attributes, "text": ""}
 
@@ -38,55 +43,16 @@ class _NavigationParser(HTMLParser):
             self._inside_navigation = False
 
 
-def _mobile_stylesheet(css: str) -> str:
-    media_start = css.index("@media (max-width: 42.5rem)")
-    block_start = css.index("{", media_start)
-    depth = 0
-    for index, character in enumerate(css[block_start:], start=block_start):
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return css[block_start + 1 : index]
-    raise AssertionError("The mobile navigation media query is not closed")
-
-
-def _mobile_rule_hides(element: dict[str, str], css: str) -> bool:
-    """Evaluate the relevant simple selectors against the rendered nav element."""
-    for rule in _mobile_stylesheet(css).split("}"):
-        if "{" not in rule:
-            continue
-        selectors, declarations = rule.split("{", maxsplit=1)
-        if "display: none" not in declarations:
-            continue
-        for selector in selectors.split(","):
-            normalized = " ".join(selector.split())
-            if normalized == ".site-nav a" and element["tag"] == "a":
-                return True
-            if (
-                normalized == '.site-nav a:not([href*="/dashboard"])'
-                and element["tag"] == "a"
-                and "/dashboard" not in element["href"]
-            ):
-                return True
-            if normalized == ".site-nav .link-button" and "link-button" in element.get(
-                "class", ""
-            ).split():
-                return True
-    return False
-
-
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
 
 
 @pytest.mark.anyio
-async def test_mobile_workspace_navigation_keeps_all_authenticated_destinations_visible(
+async def test_workspace_page_exposes_all_authenticated_navigation_destinations(
     tmp_path: Path,
 ) -> None:
-    """A mobile-only hide rule would make Income and sign-out unreachable."""
+    """Removing a shared destination would make it unreachable from Income."""
     application, factory, engine = build_route_test_app(tmp_path)
     try:
         async with AsyncClient(
@@ -103,6 +69,10 @@ async def test_mobile_workspace_navigation_keeps_all_authenticated_destinations_
     assert response.status_code == 200
     navigation = _NavigationParser()
     navigation.feed(response.text)
+    assert navigation.navigation_attributes["aria-label"] == "Account navigation"
+    assert "hidden" not in navigation.navigation_attributes
+    assert "inert" not in navigation.navigation_attributes
+    assert navigation.navigation_attributes.get("aria-hidden") != "true"
     assert [(element["text"], element.get("href")) for element in navigation.elements] == [
         ("Workspaces", "/workspaces"),
         ("Dashboard", f"/workspaces/{workspace_id}/dashboard"),
@@ -112,9 +82,8 @@ async def test_mobile_workspace_navigation_keeps_all_authenticated_destinations_
         ("Categories", f"/workspaces/{workspace_id}/categories"),
         ("Sign out", None),
     ]
-
-    css = (Path(__file__).parents[1] / "app" / "static" / "styles.css").read_text()
-    hidden = [
-        element["text"] for element in navigation.elements if _mobile_rule_hides(element, css)
-    ]
-    assert hidden == []
+    assert navigation.forms == [{"action": "/auth/sign-out", "method": "post"}]
+    for element in navigation.elements:
+        assert "hidden" not in element
+        assert "inert" not in element
+        assert element.get("aria-hidden") != "true"
