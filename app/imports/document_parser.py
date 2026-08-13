@@ -108,7 +108,7 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
             description_parts: list[str] = []
             previous_end = 0
             for match in money_matches:
-                description_parts.append(body[previous_end : match.start()])
+                description_parts.append(body[previous_end:match.start()])
                 previous_end = match.end()
             description_parts.append(body[previous_end:])
             description = " ".join(" ".join(description_parts).split())
@@ -150,11 +150,7 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
             raise
         # decide whether to attempt permissive fallback based on heuristics
         upper = text.upper()
-        date_lines = (
-            1
-            for line in text.splitlines()
-            if DATE_AT_START.match(" ".join(line.split()))
-        )
+        date_lines = (1 for line in text.splitlines() if DATE_AT_START.match(" ".join(line.split())))
         date_line_count = sum(date_lines)
         looks_like_statement = (
             date_line_count >= 3
@@ -197,9 +193,7 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
         balance_str = monies[-1]
         amount_str = monies[-2] if len(monies) >= 2 else None
         try:
-            balance = Decimal(
-                balance_str.replace("$", "").replace(",", "").strip("()")
-            )
+            balance = Decimal(balance_str.replace("$", "").replace(",", "").strip("()"))
         # parentheses indicate negative balance token (rare for balances);
         # ignore sign for the parsed balance value
         except InvalidOperation:
@@ -214,7 +208,7 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
                 parsed_amount = f"{(amt_val * sign):.2f}"
             elif raw_amt.startswith("-") or raw_amt.startswith("+"):
                 try:
-                    parsed_amount = f"{Decimal(raw_amt.replace("$", "").replace(",", "")):.2f}"
+                    parsed_amount = f"{Decimal(raw_amt.replace('$', '').replace(',', '')):.2f}"
                 except InvalidOperation:
                     parsed_amount = None
             else:
