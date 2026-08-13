@@ -139,7 +139,11 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
                 "debit/credit marker.",
             )
         if rows:
-            return CsvDocument(headers=("Date", "Description", "Amount"), rows=tuple(rows), delimiter="pdf")
+            return CsvDocument(
+                headers=("Date", "Description", "Amount"),
+                rows=tuple(rows),
+                delimiter="pdf",
+            )
     except TransactionStatementFormatError as exc:
         # always propagate the transaction-limit error
         if getattr(exc, "code", None) == "too_many_transactions":
