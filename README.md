@@ -23,6 +23,33 @@ before financial workflows rely on it.
   it automatically.
 - Docker Desktop only if you want to run the container workflow.
 
+For the shortest path from a clean checkout:
+
+```powershell
+Copy-Item .env.example .env
+uv sync --all-groups --locked
+uv run playwright install chromium
+uv run fastapi dev app/main.py
+```
+
+The public home and `/health` pages work without Google credentials. Interactive
+sign-in requires the OAuth setup below.
+
+## Environment reference
+
+| Setting | Development default | Production requirement |
+| --- | --- | --- |
+| `APP_ENV` | `development` | Exactly `production` |
+| `SECRET_KEY` | Ephemeral key with a warning | Unique secret, at least 32 characters |
+| `DATABASE_URL` | `sqlite:///data/where-is-my-money.db` | Persistent database URL |
+| `GOOGLE_CLIENT_ID` | Empty | Google OAuth web client ID for sign-in |
+| `GOOGLE_CLIENT_SECRET` | Empty | Secret-manager value for the OAuth client |
+| `TRUSTED_HOSTS` | Localhost JSON list | JSON list containing every public hostname |
+
+Upload limits are also configurable with `MAX_CSV_UPLOAD_BYTES`,
+`MAX_PAYSLIP_UPLOAD_BYTES`, and `MAX_STATEMENT_UPLOAD_BYTES`. Keep `.env` local and
+never put real credentials or financial data in Git, logs, tests, or screenshots.
+
 ## Configure Google sign-in
 
 1. Open Google Cloud Console and create an OAuth client with application type
@@ -422,6 +449,17 @@ locked dependencies, runs lint and formatting, migrates a fresh database, and
 runs all tests. Passing locally is the quick feedback loop; passing CI proves the
 work did not depend on an uncommitted file or one developer's machine.
 
+## Operations and learning guides
+
+- [Architecture](docs/architecture.md) maps request, authorization, database,
+  and private-upload boundaries.
+- [Operations](docs/operations.md) covers production configuration, SQLite
+  backup/restore drills, and the staged PostgreSQL migration path.
+- [Troubleshooting](docs/troubleshooting.md) lists common local, container,
+  OAuth, upload, and migration failures.
+- [Beginner learning path](docs/learning-path.md) gives a safe order for reading
+  the code and making a first contribution.
+
 ## Database transactions in plain language
 
 SQLAlchemy's `Session` groups reads and writes. A successful Google callback
@@ -433,8 +471,9 @@ security state.
 
 ## Docker
 
-Docker packages the app and Python runtime into a repeatable container. After
-Docker Desktop is running:
+Docker packages the app and Python runtime into repeatable targets. The Compose
+`web` service uses the `dev` target so local checks and migrations remain
+available. After Docker Desktop is running:
 
     docker compose up --build
 
@@ -448,10 +487,14 @@ with Control+C, then remove the stopped container with:
 
     docker compose down
 
-The production `web` image intentionally omits developer dependencies, test
-sources, Chromium, and its system libraries. Build the separate browser-capable
-test stage for CI-equivalent checks; it is larger, but none of that test-only
-weight ships in the runtime image:
+Build the production target separately. It contains runtime dependencies,
+Alembic migrations, and the direct `fastapi` command, but omits tests, Ruff,
+Playwright, Chromium, and test fixtures:
+
+    docker build --target prod -t where-is-my-money:prod .
+
+Build the separate browser-capable test stage for CI-equivalent checks; it is
+larger, but none of that test-only weight ships in the production image:
 
     docker compose build browser-tests
     docker compose run --rm browser-tests uv run ruff check .
@@ -478,8 +521,9 @@ and does not mount `app_data`.
     app/planning/               Explicit budgets and savings-goal projections
     app/statement_imports/      Local statement processors and reviewed balances
     app/core/config.py          Environment settings and production validation
+    app/core/logging.py         Redacted JSON event formatter and safe fields
     app/core/security.py        CSRF, invitation hashing, and auth rate limiting
-    app/core/middleware.py      Browser CSRF cookie and form enforcement
+    app/core/middleware.py      Request IDs, security headers, limits, and CSRF
     app/db/models.py            SQLAlchemy tables and relationships
     app/db/session.py           Engine and transaction/session dependency
     app/templates/              Server-rendered HTML pages
@@ -490,7 +534,7 @@ and does not mount `app_data`.
     uv.lock                     Exact transitive dependency versions
     compose.yaml                Local container configuration
     .github/workflows/ci.yml    Clean-machine quality checks
-    docs/                       Product plan, PR scope, designs, and implementation plans
+    docs/                       Architecture, operations, learning, and product plans
 
 ## What's next
 

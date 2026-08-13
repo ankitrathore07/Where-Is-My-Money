@@ -1,6 +1,9 @@
 """Browser security middleware and CSRF enforcement."""
 
+import logging
 import re
+import time
+import uuid
 
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -15,6 +18,49 @@ CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_MAX_AGE = 3600
 BOUNDED_UPLOAD_PATH = re.compile(r"/workspaces/[^/]+/(?:payslips|document-uploads)")
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+request_logger = logging.getLogger("where_is_my_money.request")
+
+
+def safe_request_path(request: Request) -> str:
+    """Return a route template without logging arbitrary unmatched path text."""
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    if isinstance(route_path, str):
+        return route_path
+    return "[unmatched]"
+
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """Attach a correlation ID, safe response headers, and one request log event."""
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        supplied_id = request.headers.get("X-Request-ID", "")
+        request_id = supplied_id if REQUEST_ID_PATTERN.fullmatch(supplied_id) else uuid.uuid4().hex
+        request.state.request_id = request_id
+        started = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        request_logger.info(
+            "request.completed",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": safe_request_path(request),
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
 
 
 class _UploadBodyTooLarge(Exception):

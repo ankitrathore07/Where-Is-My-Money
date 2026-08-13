@@ -13,25 +13,14 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
 
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 
-FROM base AS runtime
+FROM base AS dev
 
-RUN uv sync --locked --no-dev
-
-COPY app ./app
-RUN mkdir -p /app/data
-
-EXPOSE 8000
-
-CMD ["uv", "run", "--no-dev", "fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
-
-FROM base AS browser-tests
-
-RUN uv sync --locked --all-groups \
-    && uv run playwright install --with-deps chromium
+RUN uv sync --locked --all-groups
 
 COPY alembic.ini ./
 COPY migrations ./migrations
@@ -39,8 +28,29 @@ COPY app ./app
 COPY tests ./tests
 RUN mkdir -p /app/data
 
-CMD ["uv", "run", "pytest", "--basetemp=data/.pytest-container"]
+EXPOSE 8000
+
+CMD ["fastapi", "dev", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS prod
+
+RUN uv sync --locked --no-dev
+
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY app ./app
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+CMD ["fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM dev AS browser-tests
+
+RUN playwright install --with-deps chromium
+
+CMD ["pytest", "--basetemp=data/.pytest-container"]
 
 # Keep a plain `docker build .` production-safe while exposing browser-tests
 # as an explicit Compose/CI target above.
-FROM runtime AS final
+FROM prod AS final
