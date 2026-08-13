@@ -70,9 +70,9 @@ def test_zero_password_pdf_is_accepted_when_no_password_is_needed() -> None:
     output = BytesIO()
     writer.write(output)
 
-    extracted = DocumentExtractor(RecordingOcr("Zero password PDF text is readable with OCR.")).extract(
-        output.getvalue(), ".pdf"
-    )
+    extracted = DocumentExtractor(
+        RecordingOcr("Zero password PDF text is readable with OCR.")
+    ).extract(output.getvalue(), ".pdf")
 
     assert extracted.method == "ocr"
     assert "Zero password PDF text is readable with OCR." in extracted.text
