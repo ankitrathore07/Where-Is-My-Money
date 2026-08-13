@@ -71,6 +71,100 @@ def test_pdf_text_parser_never_guesses_transaction_direction(text: str, code: st
     assert error.value.code == code
 
 
+def test_pdf_text_parser_infers_unsigned_checking_rows_from_running_balances() -> None:
+    document = parse_transaction_statement_text(
+        "Fictional Northstar Checking Statement\n"
+        "Opening Balance $1,000.00\n"
+        "08/01/2026 Rent 100.00 900.00\n"
+        "08/02/2026 Payroll 250.00 1,150.00\n"
+        "08/03/2026 Coffee 10.00 1,140.00"
+    )
+
+    assert [row.values for row in document.rows] == [
+        {"Date": "2026-08-01", "Description": "Rent", "Amount": "-100.00"},
+        {"Date": "2026-08-02", "Description": "Payroll", "Amount": "250.00"},
+        {"Date": "2026-08-03", "Description": "Coffee", "Amount": "-10.00"},
+    ]
+
+
+def test_pdf_text_parser_inverts_credit_card_balance_changes() -> None:
+    document = parse_transaction_statement_text(
+        "Fictional Northstar Credit Card Statement\n"
+        "Beginning Balance $100.00\n"
+        "08/01/2026 Groceries 25.00 125.00\n"
+        "08/02/2026 Payment 50.00 75.00\n"
+        "08/03/2026 Coffee 5.00 80.00"
+    )
+
+    assert [row.values for row in document.rows] == [
+        {"Date": "2026-08-01", "Description": "Groceries", "Amount": "-25.00"},
+        {"Date": "2026-08-02", "Description": "Payment", "Amount": "50.00"},
+        {"Date": "2026-08-03", "Description": "Coffee", "Amount": "-5.00"},
+    ]
+
+
+def test_pdf_text_parser_preserves_direction_markers_in_column_fallback() -> None:
+    document = parse_transaction_statement_text(
+        "Checking Statement Transactions\n"
+        "Opening Balance $1,000.00\n"
+        "08/01/2026 Rent DEBIT 100.00 900.00\n"
+        "08/02/2026 Payroll 250.00 1,150.00\n"
+        "08/03/2026 Coffee 10.00 1,140.00"
+    )
+
+    assert [row.values["Amount"] for row in document.rows] == ["-100.00", "250.00", "-10.00"]
+
+
+def test_pdf_text_parser_derives_orientation_from_consistent_explicit_rows() -> None:
+    document = parse_transaction_statement_text(
+        "Transactions\n"
+        "08/01/2026 Rent DEBIT 100.00 900.00\n"
+        "08/02/2026 Payroll 250.00 1,150.00\n"
+        "08/03/2026 Coffee DEBIT 10.00 1,140.00"
+    )
+
+    assert [row.values["Amount"] for row in document.rows] == ["-100.00", "250.00", "-10.00"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "Transactions\n"
+            "Opening Balance $1,000.00\n"
+            "08/01/2026 Rent 100.00 900.00\n"
+            "08/02/2026 Payroll 250.00 1,150.00\n"
+            "08/03/2026 Coffee 10.00 1,140.00"
+        ),
+        (
+            "Checking Statement Transactions\n"
+            "08/01/2026 Rent 100.00 900.00\n"
+            "08/02/2026 Payroll 250.00 1,150.00\n"
+            "08/03/2026 Coffee 10.00 1,140.00"
+        ),
+        (
+            "Checking Statement Transactions\n"
+            "Opening Balance $1,000.00\n"
+            "08/01/2026 Rent 100.00 900.00\n"
+            "08/02/2026 Payroll 250.00 980.00\n"
+            "08/03/2026 Coffee 10.00 970.00"
+        ),
+        "08/01/2026 First 100.00\n08/02/2026 Second 90.00\n08/03/2026 Third 80.00",
+    ],
+    ids=[
+        "unknown-account-orientation",
+        "missing-opening-balance",
+        "amount-balance-mismatch",
+        "one-money-column",
+    ],
+)
+def test_pdf_text_parser_rejects_unsafe_column_inference(text: str) -> None:
+    with pytest.raises(TransactionStatementFormatError) as error:
+        parse_transaction_statement_text(text)
+
+    assert error.value.code == "ambiguous_transaction_rows"
+
+
 def test_pdf_text_parser_enforces_transaction_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(document_parser, "MAX_TRANSACTIONS", 2)
 

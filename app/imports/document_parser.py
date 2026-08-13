@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -13,6 +14,13 @@ MONEY_TOKEN = re.compile(
     r"(?:\s*(?P<direction_after>CR|DR|CREDIT|DEBIT))?(?![\w.])",
     re.IGNORECASE,
 )
+OPENING_BALANCE_LABEL = re.compile(r"\b(?:BEGINNING|OPENING)\s+BALANCE\b", re.IGNORECASE)
+ASSET_STATEMENT_LABEL = re.compile(
+    r"\b(?:CHECKING|SAVINGS)(?:\s+ACCOUNT)?(?:\s+STATEMENT)?\b", re.IGNORECASE
+)
+LIABILITY_STATEMENT_LABEL = re.compile(
+    r"\bCREDIT[\s-]*CARD(?:\s+ACCOUNT)?(?:\s+STATEMENT)?\b", re.IGNORECASE
+)
 MAX_TRANSACTIONS = 50_000
 
 
@@ -21,6 +29,16 @@ class TransactionStatementFormatError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+@dataclass(frozen=True)
+class _ColumnTransaction:
+    line_number: int
+    date: str
+    description: str
+    amount_magnitude: Decimal
+    explicit_amount: Decimal | None
+    balance: Decimal
 
 
 def _iso_date(value: str) -> str:
@@ -73,201 +91,270 @@ def _signed_amount(match: re.Match[str]) -> str | None:
     return f"{amount:.2f}"
 
 
-def parse_transaction_statement_text(text: str) -> CsvDocument:
-    """Extract transaction rows from local PDF/OCR text.
+def _ambiguous_transaction_rows() -> TransactionStatementFormatError:
+    return TransactionStatementFormatError(
+        "ambiguous_transaction_rows",
+        "Some dated statement rows do not identify exactly one debit or credit. "
+        "Use a statement whose transactions show a sign, parentheses, a debit/credit "
+        "marker, or balances that prove each transaction direction.",
+    )
 
-    Strategy:
-    1) Try the original strict parser that requires signed/parenthesized amounts
-       or explicit debit/credit markers (preserves safety and avoids false-positives).
-    2) If that finds nothing or reports ambiguous rows, fall back to a more
-       permissive column-style parser that uses the rightmost numeric tokens as
-       balance and amount and infers sign by comparing successive balances.
-    """
-    # First attempt: original strict behavior (unchanged)
+
+def _description_without_money(body: str, money_matches: tuple[re.Match[str], ...]) -> str:
+    parts: list[str] = []
+    previous_end = 0
+    for match in money_matches:
+        parts.append(body[previous_end : match.start()])
+        previous_end = match.end()
+    parts.append(body[previous_end:])
+    return " ".join(" ".join(parts).split())
+
+
+def _money_value(match: re.Match[str]) -> Decimal | None:
+    raw = match.group("amount")
+    accounting_negative = raw.startswith("(") and raw.endswith(")")
+    normalized = raw.strip("()").replace("$", "").replace(",", "")
     try:
-        # Reuse the original strict implementation by copying its semantics here
-        rows: list[CsvSourceRow] = []
-        ambiguous_lines: list[int] = []
-        for line_number, raw_line in enumerate(text.splitlines(), start=1):
-            line_match = DATE_AT_START.match(" ".join(raw_line.split()))
-            if line_match is None:
-                continue
-            body = line_match.group("body")
-            money_matches = tuple(MONEY_TOKEN.finditer(body))
-            if not money_matches:
-                continue
-            directional = tuple(
-                (match, amount)
-                for match in money_matches
-                if (amount := _signed_amount(match)) is not None
-            )
-            if len(directional) != 1:
-                ambiguous_lines.append(line_number)
-                continue
-            _, amount = directional[0]
-            description_parts: list[str] = []
-            previous_end = 0
-            for match in money_matches:
-                description_parts.append(body[previous_end:match.start()])
-                previous_end = match.end()
-            description_parts.append(body[previous_end:])
-            description = " ".join(" ".join(description_parts).split())
-            if not description or len(description) > 512:
-                ambiguous_lines.append(line_number)
-                continue
-            rows.append(
-                CsvSourceRow(
-                    line_number,
-                    {
-                        "Date": _iso_date(line_match.group("date")),
-                        "Description": description,
-                        "Amount": amount,
-                    },
-                )
-            )
-            if len(rows) > MAX_TRANSACTIONS:
-                raise TransactionStatementFormatError(
-                    "too_many_transactions",
-                    f"Transaction statements may contain at most {MAX_TRANSACTIONS} transactions.",
-                )
+        value = Decimal(normalized)
+    except InvalidOperation:
+        return None
 
-        if ambiguous_lines:
-            raise TransactionStatementFormatError(
-                "ambiguous_transaction_rows",
-                "Some dated statement rows do not identify exactly one debit or credit. "
-                "Use a statement whose transactions show a sign, parentheses, or a "
-                "debit/credit marker.",
-            )
-        if rows:
-            return CsvDocument(
-                headers=("Date", "Description", "Amount"),
-                rows=tuple(rows),
-                delimiter="pdf",
-            )
-    except TransactionStatementFormatError as exc:
-        # always propagate the transaction-limit error
-        if getattr(exc, "code", None) == "too_many_transactions":
-            raise
-        # decide whether to attempt permissive fallback based on heuristics
-        upper = text.upper()
-        date_lines = (1 for line in text.splitlines() if DATE_AT_START.match(" ".join(line.split())))
-        date_line_count = sum(date_lines)
-        looks_like_statement = (
-            date_line_count >= 3
-            or "TRANSACTION" in upper
-            or "BEGINNING BALANCE" in upper
-            or "ENDING BALANCE" in upper
-        )
-        if not looks_like_statement:
-            # preserve original strict behavior for short/ambiguous inputs
-            raise
+    explicit = _signed_amount(match)
+    has_direction = bool(match.group("direction_before") or match.group("direction_after"))
+    has_sign = accounting_negative or normalized.startswith(("+", "-"))
+    if value != 0 and (has_direction or has_sign):
+        if explicit is None:
+            return None
+        return Decimal(explicit)
+    return -abs(value) if accounting_negative else value
 
-    # Fallback parser: relaxed column-style inference
-    from decimal import Decimal, InvalidOperation
 
-    fallback_rows: list[CsvSourceRow] = []
-    previous_balance: Decimal | None = None
-    line_iter = list(enumerate(text.splitlines(), start=1))
-    for line_number, raw_line in line_iter:
-        line_text = " ".join(raw_line.split())
-        line_match = DATE_AT_START.match(line_text)
+def _strict_transaction_document(text: str) -> CsvDocument:
+    rows: list[CsvSourceRow] = []
+    ambiguous_lines: list[int] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line_match = DATE_AT_START.match(" ".join(raw_line.split()))
         if line_match is None:
             continue
         body = line_match.group("body")
         money_matches = tuple(MONEY_TOKEN.finditer(body))
         if not money_matches:
             continue
-        # collect numeric tokens (as strings)
-        monies = [m.group("amount") for m in money_matches]
-        # description: everything with money tokens removed
-        previous_end = 0
-        description_parts: list[str] = []
-        for m in money_matches:
-            description_parts.append(body[previous_end:m.start()])
-            previous_end = m.end()
-        description_parts.append(body[previous_end:])
-        description = " ".join(" ".join(description_parts).split())
+        directional = tuple(
+            amount for match in money_matches if (amount := _signed_amount(match)) is not None
+        )
+        if len(directional) != 1:
+            ambiguous_lines.append(line_number)
+            continue
+        description = _description_without_money(body, money_matches)
         if not description or len(description) > 512:
+            ambiguous_lines.append(line_number)
             continue
-        # attempt to parse balance (rightmost token) and amount (second-rightmost if present)
-        balance_str = monies[-1]
-        amount_str = monies[-2] if len(monies) >= 2 else None
-        try:
-            balance = Decimal(balance_str.replace("$", "").replace(",", "").strip("()"))
-        # parentheses indicate negative balance token (rare for balances);
-        # ignore sign for the parsed balance value
-        except InvalidOperation:
-            balance = None
-        parsed_amount: str | None = None
-        if amount_str is not None:
-            # if amount has explicit sign/parentheses, use it
-            raw_amt = amount_str.strip()
-            if raw_amt.startswith("(") and raw_amt.endswith(")"):
-                sign = -1
-                amt_val = Decimal(raw_amt.strip("()").replace("$", "").replace(",", ""))
-                parsed_amount = f"{(amt_val * sign):.2f}"
-            elif raw_amt.startswith("-") or raw_amt.startswith("+"):
-                try:
-                    parsed_amount = f"{Decimal(raw_amt.replace('$', '').replace(',', '')):.2f}"
-                except InvalidOperation:
-                    parsed_amount = None
-            else:
-                # unsigned amount token; try to infer sign from previous balance if available
-                if balance is not None and previous_balance is not None:
-                    try:
-                        amt_val = Decimal(amount_str.replace("$", "").replace(",", ""))
-                        inferred = balance - previous_balance
-                        # prefer inference where difference magnitude roughly equals token
-                        if abs(inferred) == amt_val:
-                            parsed_amount = f"{inferred:.2f}"
-                        else:
-                            # fall back to signed as positive
-                            parsed_amount = f"{amt_val:.2f}"
-                    except InvalidOperation:
-                        parsed_amount = None
-                else:
-                    # no previous balance to infer sign: accept as positive
-                    try:
-                        amt_val = Decimal(amount_str.replace("$", "").replace(",", ""))
-                        parsed_amount = f"{amt_val:.2f}"
-                    except InvalidOperation:
-                        parsed_amount = None
-        else:
-            # no explicit amount token - try to infer from balance delta
-            if balance is not None and previous_balance is not None:
-                inferred = balance - previous_balance
-                if inferred != 0:
-                    parsed_amount = f"{inferred:.2f}"
-        # update previous_balance if we successfully parsed a balance
-        if balance is not None:
-            previous_balance = balance
-        if parsed_amount is None:
-            # still ambiguous; skip this line
-            continue
-        fallback_rows.append(
+        rows.append(
             CsvSourceRow(
                 line_number,
                 {
                     "Date": _iso_date(line_match.group("date")),
                     "Description": description,
-                    "Amount": parsed_amount,
+                    "Amount": directional[0],
                 },
             )
         )
-        if len(fallback_rows) > MAX_TRANSACTIONS:
+        if len(rows) > MAX_TRANSACTIONS:
             raise TransactionStatementFormatError(
                 "too_many_transactions",
                 f"Transaction statements may contain at most {MAX_TRANSACTIONS} transactions.",
             )
 
-    if not fallback_rows:
+    if ambiguous_lines:
+        raise _ambiguous_transaction_rows()
+    if not rows:
         raise TransactionStatementFormatError(
             "transactions_missing",
             "No unambiguous transactions were found in this statement PDF.",
         )
+    return CsvDocument(headers=("Date", "Description", "Amount"), rows=tuple(rows), delimiter="pdf")
 
-    return CsvDocument(
-        headers=("Date", "Description", "Amount"),
-        rows=tuple(fallback_rows),
-        delimiter="pdf",
+
+def _statement_preamble(text: str) -> tuple[str, ...]:
+    preamble: list[str] = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.split())
+        if DATE_AT_START.match(line):
+            break
+        preamble.append(line)
+    return tuple(preamble)
+
+
+def _statement_orientation(preamble: tuple[str, ...]) -> int | None:
+    heading = " ".join(preamble)
+    asset = ASSET_STATEMENT_LABEL.search(heading) is not None
+    liability = LIABILITY_STATEMENT_LABEL.search(heading) is not None
+    if asset == liability:
+        return None
+    return 1 if asset else -1
+
+
+def _opening_balance(preamble: tuple[str, ...]) -> Decimal | None:
+    balances: list[Decimal] = []
+    for line in preamble:
+        if OPENING_BALANCE_LABEL.search(line) is None:
+            continue
+        money_matches = tuple(MONEY_TOKEN.finditer(line))
+        if not money_matches:
+            continue
+        balance = _money_value(money_matches[-1])
+        if balance is not None:
+            balances.append(balance)
+    return balances[0] if len(balances) == 1 else None
+
+
+def _looks_like_column_statement(text: str, preamble: tuple[str, ...]) -> bool:
+    date_line_count = sum(
+        DATE_AT_START.match(" ".join(line.split())) is not None for line in text.splitlines()
     )
+    heading = " ".join(preamble).upper()
+    return date_line_count >= 3 or any(
+        label in heading
+        for label in ("TRANSACTION", "BEGINNING BALANCE", "OPENING BALANCE", "ENDING BALANCE")
+    )
+
+
+def _column_transactions(text: str) -> tuple[_ColumnTransaction, ...]:
+    transactions: list[_ColumnTransaction] = []
+    ambiguous = False
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line_match = DATE_AT_START.match(" ".join(raw_line.split()))
+        if line_match is None:
+            continue
+        body = line_match.group("body")
+        money_matches = tuple(MONEY_TOKEN.finditer(body))
+        if not money_matches:
+            continue
+        if len(money_matches) < 2:
+            ambiguous = True
+            continue
+
+        amount_match, balance_match = money_matches[-2:]
+        amount_value = _money_value(amount_match)
+        balance = _money_value(balance_match)
+        description = _description_without_money(body, money_matches)
+        if (
+            amount_value is None
+            or amount_value == 0
+            or balance is None
+            or not description
+            or len(description) > 512
+        ):
+            ambiguous = True
+            continue
+        explicit = _signed_amount(amount_match)
+        transactions.append(
+            _ColumnTransaction(
+                line_number=line_number,
+                date=_iso_date(line_match.group("date")),
+                description=description,
+                amount_magnitude=abs(amount_value),
+                explicit_amount=Decimal(explicit) if explicit is not None else None,
+                balance=balance,
+            )
+        )
+        if len(transactions) > MAX_TRANSACTIONS:
+            raise TransactionStatementFormatError(
+                "too_many_transactions",
+                f"Transaction statements may contain at most {MAX_TRANSACTIONS} transactions.",
+            )
+
+    if ambiguous:
+        raise _ambiguous_transaction_rows()
+    if not transactions:
+        raise TransactionStatementFormatError(
+            "transactions_missing",
+            "No unambiguous transactions were found in this statement PDF.",
+        )
+    return tuple(transactions)
+
+
+def _observed_orientation(
+    transactions: tuple[_ColumnTransaction, ...], opening_balance: Decimal | None
+) -> int | None:
+    observed: set[int] = set()
+    previous_balance = opening_balance
+    for transaction in transactions:
+        if previous_balance is not None and transaction.explicit_amount is not None:
+            delta = transaction.balance - previous_balance
+            if abs(delta) != transaction.amount_magnitude:
+                raise _ambiguous_transaction_rows()
+            observed.add(1 if delta == transaction.explicit_amount else -1)
+        previous_balance = transaction.balance
+    if len(observed) > 1:
+        raise _ambiguous_transaction_rows()
+    return next(iter(observed), None)
+
+
+def _column_transaction_document(text: str, preamble: tuple[str, ...]) -> CsvDocument:
+    transactions = _column_transactions(text)
+    opening_balance = _opening_balance(preamble)
+    heading_orientation = _statement_orientation(preamble)
+    observed_orientation = _observed_orientation(transactions, opening_balance)
+    if (
+        heading_orientation is not None
+        and observed_orientation is not None
+        and heading_orientation != observed_orientation
+    ):
+        raise _ambiguous_transaction_rows()
+    orientation = heading_orientation or observed_orientation
+
+    rows: list[CsvSourceRow] = []
+    previous_balance = opening_balance
+    for transaction in transactions:
+        if previous_balance is None:
+            if transaction.explicit_amount is None:
+                raise _ambiguous_transaction_rows()
+            amount = transaction.explicit_amount
+        else:
+            delta = transaction.balance - previous_balance
+            if abs(delta) != transaction.amount_magnitude:
+                raise _ambiguous_transaction_rows()
+            if orientation is None:
+                if transaction.explicit_amount is None:
+                    raise _ambiguous_transaction_rows()
+                amount = transaction.explicit_amount
+            else:
+                amount = delta * orientation
+                if (
+                    transaction.explicit_amount is not None
+                    and transaction.explicit_amount != amount
+                ):
+                    raise _ambiguous_transaction_rows()
+        rows.append(
+            CsvSourceRow(
+                transaction.line_number,
+                {
+                    "Date": transaction.date,
+                    "Description": transaction.description,
+                    "Amount": f"{amount:.2f}",
+                },
+            )
+        )
+        previous_balance = transaction.balance
+
+    return CsvDocument(headers=("Date", "Description", "Amount"), rows=tuple(rows), delimiter="pdf")
+
+
+def parse_transaction_statement_text(text: str) -> CsvDocument:
+    """Extract transactions without guessing whether money is a debit or credit.
+
+    Explicit signs and debit/credit markers take precedence. A column-style
+    fallback is allowed only when account type and exact running-balance changes
+    prove the direction of every otherwise unsigned transaction.
+    """
+    try:
+        return _strict_transaction_document(text)
+    except TransactionStatementFormatError as exc:
+        preamble = _statement_preamble(text)
+        if exc.code != "ambiguous_transaction_rows" or not _looks_like_column_statement(
+            text, preamble
+        ):
+            raise
+    return _column_transaction_document(text, preamble)
