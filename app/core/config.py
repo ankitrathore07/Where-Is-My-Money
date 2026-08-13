@@ -11,6 +11,7 @@ pydantic-settings. No secret is ever committed to source control.
 import logging
 import secrets
 from pathlib import Path
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    app_env: str = "development"
+    app_env: Literal["development", "test", "production"] = "development"
     secret_key: str | None = None
     database_url: str = "sqlite:///data/where-is-my-money.db"
     google_client_id: str = ""
@@ -41,6 +42,7 @@ class Settings(BaseSettings):
     max_csv_upload_bytes: int = 5 * 1024 * 1024
     max_payslip_upload_bytes: int = 10 * 1024 * 1024
     max_statement_upload_bytes: int = 10 * 1024 * 1024
+    trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
 
     @property
     def is_production(self) -> bool:
@@ -67,6 +69,8 @@ class Settings(BaseSettings):
                 "Generated an ephemeral SECRET_KEY for development; browser sessions "
                 "will reset when the process restarts"
             )
+        if not self.trusted_hosts or any(host.strip() in {"", "*"} for host in self.trusted_hosts):
+            raise ValueError("TRUSTED_HOSTS must contain explicit hostnames")
         return self
 
 

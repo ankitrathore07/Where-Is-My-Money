@@ -1000,6 +1000,25 @@ select:focus-visible {
   color: #92351d;
 }
 
+.error-page {
+  margin: 4rem auto;
+  max-width: 40rem;
+  text-align: center;
+}
+
+.error-code {
+  color: #667268;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.request-reference {
+  color: #667268;
+  font-size: 0.85rem;
+  margin-top: 2rem;
+}
+
 @media (max-width: 42rem) {
   .site-header,
   .site-nav {

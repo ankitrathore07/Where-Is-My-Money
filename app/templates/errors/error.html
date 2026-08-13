@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Request could not be completed · Where Is My Money?{% endblock %}
+{% block content %}
+<section class="error-page" aria-labelledby="error-title">
+  <p class="error-code">{{ status_code }}</p>
+  <h1 id="error-title">The request could not be completed.</h1>
+  <p>Check the address and your access, then try again.</p>
+  <a class="button-link" href="/">Return home</a>
+  <p class="request-reference">Request reference: <code>{{ request_id }}</code></p>
+</section>
+{% endblock %}

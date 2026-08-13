@@ -4,17 +4,24 @@ services:
   web:
     build:
       context: .
-      target: runtime
+      target: dev
     environment:
       APP_ENV: ${APP_ENV:-development}
       SECRET_KEY: ${SECRET_KEY:-dev-only-ephemeral-key-do-not-use-in-production}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///data/where-is-my-money.db}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      TRUSTED_HOSTS: '${TRUSTED_HOSTS:-["localhost","127.0.0.1","testserver"]}'
     ports:
       - "8000:8000"
     volumes:
       - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   browser-tests:
     profiles: ["test"]
@@ -25,6 +32,7 @@ services:
       APP_ENV: test
       SECRET_KEY: browser-test-secret-key-with-at-least-32-characters
       DATABASE_URL: sqlite:///data/where-is-my-money-test.db
+      TRUSTED_HOSTS: '["localhost","127.0.0.1","testserver"]'
     shm_size: "1gb"
 
 volumes:

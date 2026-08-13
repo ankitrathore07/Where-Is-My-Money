@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.accounts.routes import router as account_router
 from app.auth.dependencies import get_optional_current_user
@@ -17,7 +19,12 @@ from app.auth.routes import router as auth_router
 from app.categories.routes import router as category_router
 from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
-from app.core.middleware import CSRFMiddleware, UploadBodyLimitMiddleware
+from app.core.middleware import (
+    CSRFMiddleware,
+    RequestContextMiddleware,
+    UploadBodyLimitMiddleware,
+    safe_request_path,
+)
 from app.core.security import SlidingWindowRateLimiter
 from app.dashboard.routes import router as dashboard_router
 from app.db.models import User
@@ -50,7 +57,7 @@ def create_app(
     async def lifespan(application: FastAPI):
         """Apply development migrations and manage the database engine."""
         configure_logging()
-        logger.info("Starting Where Is My Money (%s)", configured.app_env)
+        logger.info("application.starting", extra={"app_env": configured.app_env})
 
         if configured.app_env.casefold() == "development":
             try:
@@ -60,9 +67,13 @@ def create_app(
                 alembic_cfg = Config(str(APP_DIRECTORY.parent / "alembic.ini"))
                 alembic_cfg.set_main_option("sqlalchemy.url", configured.database_url)
                 command.upgrade(alembic_cfg, "head")
-                logger.info("Applied Alembic migrations to head")
+                logger.info("migration.completed", extra={"state": "head"})
             except Exception as exc:  # pragma: no cover - environment-specific
-                logger.warning("Could not apply Alembic migrations: %s", exc)
+                logger.warning(
+                    "migration.failed",
+                    extra={"error_code": "alembic_upgrade_failed"},
+                    exc_info=exc,
+                )
 
         from app.db.session import init_engine
 
@@ -72,7 +83,7 @@ def create_app(
         from app.db.session import dispose_engine
 
         dispose_engine()
-        logger.info("Shutting down application")
+        logger.info("application.stopped")
 
     application = FastAPI(
         title="Where Is My Money",
@@ -102,6 +113,8 @@ def create_app(
         DocumentExtractor(TesseractOcrEngine())
     )
 
+    application.add_middleware(TrustedHostMiddleware, allowed_hosts=configured.trusted_hosts)
+
     application.add_middleware(
         SessionMiddleware,
         secret_key=configured.secret_key or "",
@@ -123,6 +136,7 @@ def create_app(
         StatementUploadBodyLimitMiddleware,
         max_file_bytes=configured.max_statement_upload_bytes,
     )
+    application.add_middleware(RequestContextMiddleware)
     application.mount("/static", StaticFiles(directory=APP_DIRECTORY / "static"), name="static")
     application.include_router(auth_router)
     application.include_router(workspace_router)
@@ -137,6 +151,87 @@ def create_app(
     application.include_router(transaction_router)
 
     templates = Jinja2Templates(directory=APP_DIRECTORY / "templates")
+
+    def error_context(request: Request, status_code: int) -> dict[str, object]:
+        return {
+            "request": request,
+            "current_user": None,
+            "csrf_token": getattr(request.state, "csrf_token", ""),
+            "status_code": status_code,
+            "request_id": getattr(request.state, "request_id", "unavailable"),
+        }
+
+    def error_headers(request: Request, existing: dict[str, str] | None = None) -> dict[str, str]:
+        headers = dict(existing or {})
+        headers.update(
+            {
+                "X-Request-ID": getattr(request.state, "request_id", "unavailable"),
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Referrer-Policy": "no-referrer",
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+            }
+        )
+        return headers
+
+    def wants_html(request: Request) -> bool:
+        return "text/html" in request.headers.get("accept", "").casefold()
+
+    @application.exception_handler(StarletteHTTPException)
+    async def http_error_page(request: Request, exc: StarletteHTTPException) -> Response:
+        """Render a useful HTML page for browser-facing HTTP errors."""
+        if exc.status_code < 400:
+            return Response(status_code=exc.status_code, headers=exc.headers)
+        if not wants_html(request):
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers=exc.headers,
+            )
+        if exc.status_code == 404:
+            return templates.TemplateResponse(
+                request=request,
+                name="errors/404.html",
+                context=error_context(request, 404),
+                status_code=404,
+                headers=error_headers(request, exc.headers),
+            )
+        return templates.TemplateResponse(
+            request=request,
+            name="errors/error.html",
+            context=error_context(request, exc.status_code),
+            status_code=exc.status_code,
+            headers=error_headers(request, exc.headers),
+        )
+
+    @application.exception_handler(Exception)
+    async def unhandled_error_page(request: Request, exc: Exception) -> Response:
+        """Log a correlation-safe event and hide exception details from the browser."""
+        logger.error(
+            "request.failed",
+            extra={
+                "request_id": getattr(request.state, "request_id", "unavailable"),
+                "path": safe_request_path(request),
+                "error_code": "unhandled_exception",
+            },
+            exc_info=exc,
+        )
+        if not wants_html(request):
+            return JSONResponse(
+                {
+                    "detail": "Internal Server Error",
+                    "request_id": getattr(request.state, "request_id", "unavailable"),
+                },
+                status_code=500,
+                headers=error_headers(request),
+            )
+        return templates.TemplateResponse(
+            request=request,
+            name="errors/500.html",
+            context=error_context(request, 500),
+            status_code=500,
+            headers=error_headers(request),
+        )
 
     @application.get("/", response_class=HTMLResponse)
     async def home(

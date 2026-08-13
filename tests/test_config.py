@@ -56,3 +56,19 @@ def test_statement_upload_limit_is_independent_from_payslip_limit() -> None:
     )
 
     assert configured.max_statement_upload_bytes == 10 * 1024 * 1024
+
+
+def test_environment_name_is_restricted_to_known_modes() -> None:
+    with pytest.raises(ValidationError, match="development.*test.*production"):
+        Settings(_env_file=None, app_env="prod", secret_key="test-secret")
+
+
+@pytest.mark.parametrize("trusted_hosts", [(), ("*",), ("",)])
+def test_trusted_hosts_must_be_explicit(trusted_hosts: tuple[str, ...]) -> None:
+    with pytest.raises(ValidationError, match="TRUSTED_HOSTS"):
+        Settings(
+            _env_file=None,
+            app_env="development",
+            secret_key="test-secret",
+            trusted_hosts=trusted_hosts,
+        )
