@@ -146,7 +146,12 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
             raise
         # decide whether to attempt permissive fallback based on heuristics
         upper = text.upper()
-        date_line_count = sum(1 for line in text.splitlines() if DATE_AT_START.match(" ".join(line.split())))
+        date_lines = (
+            1
+            for line in text.splitlines()
+            if DATE_AT_START.match(" ".join(line.split()))
+        )
+        date_line_count = sum(date_lines)
         looks_like_statement = (
             date_line_count >= 3
             or "TRANSACTION" in upper
@@ -188,8 +193,11 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
         balance_str = monies[-1]
         amount_str = monies[-2] if len(monies) >= 2 else None
         try:
-            balance = Decimal(balance_str.replace("$", "").replace(",", "").strip("()"))
-            # parentheses indicate negative balance token (rare for balances) - ignore sign for balance
+            balance = Decimal(
+                balance_str.replace("$", "").replace(",", "").strip("()")
+            )
+        # parentheses indicate negative balance token (rare for balances);
+        # ignore sign for the parsed balance value
         except InvalidOperation:
             balance = None
         parsed_amount: str | None = None
@@ -259,4 +267,9 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
             "transactions_missing",
             "No unambiguous transactions were found in this statement PDF.",
         )
-    return CsvDocument(headers=("Date", "Description", "Amount"), rows=tuple(fallback_rows), delimiter="pdf")
+
+    return CsvDocument(
+        headers=("Date", "Description", "Amount"),
+        rows=tuple(fallback_rows),
+        delimiter="pdf",
+    )
