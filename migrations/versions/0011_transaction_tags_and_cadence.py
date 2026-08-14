@@ -8,13 +8,19 @@ Create Date: 2026-08-13 00:00:00.000000
 import sqlalchemy as sa
 from alembic import op
 
-from app.tags.catalog import BUILTIN_TAG_NAMES
-
 revision = "0011_transaction_tags_and_cadence"
 down_revision = "0010_provider_aware_transaction_imports"
 branch_labels = None
 depends_on = None
 
+BUILTIN_TAG_NAMES = (
+    "Subscription",
+    "Household Expenditure",
+    "Vehicle",
+    "Essential",
+    "Family Support",
+    "Insurance",
+)
 BILLING_PERIOD_CHECK = (
     "billing_period_months IS NULL OR (billing_period_months >= 1 AND billing_period_months <= 120)"
 )
