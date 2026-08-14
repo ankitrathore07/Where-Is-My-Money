@@ -6,7 +6,16 @@ from sqlalchemy import func, select
 
 from app.categorization.ai_graph import build_categorization_graph
 from app.categorization.ai_types import ClassifierResult
-from app.db.models import Category, ImportJob, Tag, Transaction, UploadedFile, User, Workspace
+from app.db.models import (
+    Account,
+    Category,
+    ImportJob,
+    Tag,
+    Transaction,
+    UploadedFile,
+    User,
+    Workspace,
+)
 from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
@@ -43,6 +52,140 @@ async def test_new_import_requires_authentication(tmp_path: Path) -> None:
 
     assert response.status_code == 303
     assert response.headers["location"] == "/"
+
+
+@pytest.mark.anyio
+async def test_import_form_lists_workspace_transaction_accounts(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                assert workspace is not None
+                checking = Account(
+                    workspace_id=workspace.id,
+                    name="Chase Checking",
+                    account_type="checking",
+                    institution_key="chase",
+                    institution="Chase",
+                    is_liability=False,
+                )
+                mortgage = Account(
+                    workspace_id=workspace.id,
+                    name="Mortgage",
+                    account_type="mortgage",
+                    institution_key="other",
+                    institution="Other",
+                    is_liability=True,
+                )
+                session.add_all((checking, mortgage))
+                session.commit()
+                workspace_id = workspace.id
+                checking_id = checking.id
+            response = await client.get(f"/workspaces/{workspace_id}/imports/new")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert 'name="account_id"' in response.text
+    assert f'value="{checking_id}"' in response.text
+    assert "Chase Checking" in response.text
+    assert "Mortgage" not in response.text
+    assert "required" in response.text
+
+
+@pytest.mark.anyio
+async def test_direct_import_links_the_selected_workspace_account(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                assert workspace is not None
+                account = Account(
+                    workspace_id=workspace.id,
+                    name="Chase Checking",
+                    account_type="checking",
+                    institution_key="chase",
+                    institution="Chase",
+                    is_liability=False,
+                )
+                session.add(account)
+                session.commit()
+                workspace_id = workspace.id
+                account_id = account.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                    "account_id": str(account_id),
+                },
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+        with factory() as session:
+            job = session.scalar(select(ImportJob))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 303
+    assert job is not None and job.account_id == account_id
+
+
+@pytest.mark.anyio
+async def test_direct_import_rejects_an_incompatible_account_before_storing_file(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                assert workspace is not None
+                mortgage = Account(
+                    workspace_id=workspace.id,
+                    name="Mortgage",
+                    account_type="mortgage",
+                    institution_key="other",
+                    institution="Other",
+                    is_liability=True,
+                )
+                session.add(mortgage)
+                session.commit()
+                workspace_id = workspace.id
+                account_id = mortgage.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                    "account_id": str(account_id),
+                },
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+            )
+        with factory() as session:
+            job_count = session.scalar(select(func.count()).select_from(ImportJob))
+            upload_count = session.scalar(select(func.count()).select_from(UploadedFile))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 400
+    assert "Choose a checking, savings, or credit-card account." in response.text
+    assert job_count == 0
+    assert upload_count == 0
+    assert list(tmp_path.rglob("*.csv")) == []
 
 
 @pytest.mark.anyio

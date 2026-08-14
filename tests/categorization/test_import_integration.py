@@ -14,6 +14,7 @@ from app.imports.service import (
     build_review,
     commit_import,
     create_csv_import,
+    create_transaction_import,
     save_mapping,
 )
 from app.imports.storage import LocalUploadStore
@@ -23,6 +24,7 @@ from app.tags.catalog import BUILTIN_TAG_NAMES
 CSV = b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n"
 CHASE_HEADER = b"Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n"
 CHASE_COMPACT_HEADER = b"Date,Description,Amount\n"
+PDF_BYTES = b"%PDF-synthetic-provider-parity"
 
 
 class RecordingClassifier:
@@ -35,6 +37,16 @@ class RecordingClassifier:
     ) -> ClassifierResult | None:
         self.calls.append((description, allowed_categories))
         return self.result
+
+
+class PdfTextExtractor:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def extract(self, data: bytes, suffix: str):
+        assert data == PDF_BYTES
+        assert suffix == ".pdf"
+        return type("Extracted", (), {"text": self.text})()
 
 
 def _seed_builtins(session: Session) -> dict[str, Category]:
@@ -174,6 +186,110 @@ def test_confirmed_chase_rules_carry_tags_and_cadence_into_review(
     assert klarna.category_name == "Education"
     assert [session.get(Tag, tag_id).name for tag_id in klarna.tag_ids] == ["Installment Plan"]
     assert klarna.billing_period_months == 1
+
+
+def test_chase_pdf_and_csv_apply_the_same_provider_categorization(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    _seed_builtins(session)
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+    store = LocalUploadStore(tmp_path)
+    description = "Remitly United S PAYMENTS 440753768551227"
+    csv_job = create_csv_import(
+        session,
+        store,
+        workspace,
+        BytesIO(CHASE_COMPACT_HEADER + f"01/15/2026,{description},-250.00\n".encode()),
+        "retain",
+        account=account,
+    ).job
+    pdf_job = create_transaction_import(
+        session,
+        store,
+        PdfTextExtractor(
+            "JPMorgan Chase Bank, N.A.\n"
+            "Chase Checking Account Statement\n"
+            "January 1, 2026 through January 31, 2026\n"
+            f"01/15 {description} -$250.00\n"
+        ),
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+        account=account,
+    ).job
+
+    csv_row = build_review(session, store, csv_job).rows[0]
+    pdf_row = build_review(
+        session,
+        store,
+        pdf_job,
+        PdfTextExtractor(
+            "JPMorgan Chase Bank, N.A.\n"
+            "Chase Checking Account Statement\n"
+            "January 1, 2026 through January 31, 2026\n"
+            f"01/15 {description} -$250.00\n"
+        ),
+    ).rows[0]
+
+    assert (
+        pdf_row.normalized_merchant,
+        pdf_row.category_name,
+        pdf_row.categorization_source,
+        pdf_row.tag_ids,
+    ) == (
+        csv_row.normalized_merchant,
+        csv_row.category_name,
+        csv_row.categorization_source,
+        csv_row.tag_ids,
+    )
+
+
+def test_chase_account_with_unsigned_pdf_header_uses_generic_categorization(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    _seed_builtins(session)
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+    store = LocalUploadStore(tmp_path)
+    extractor = PdfTextExtractor(
+        "Checking Account Statement\n"
+        "2026-01-15 Remitly United S PAYMENTS 440753768551227 -$250.00\n"
+    )
+    job = create_transaction_import(
+        session,
+        store,
+        extractor,
+        workspace,
+        "checking.pdf",
+        "application/pdf",
+        BytesIO(PDF_BYTES),
+        "retain",
+        account=account,
+    ).job
+
+    row = build_review(session, store, job, extractor).rows[0]
+
+    assert row.category_name == "Uncategorized"
+    assert row.categorization_source == "uncategorized"
 
 
 def test_chase_provider_rule_is_visible_without_ai(

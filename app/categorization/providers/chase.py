@@ -85,7 +85,7 @@ CHASE_BANK_RULES = (
     ),
 )
 
-CHASE_BANK_PROFILE_KEYS = frozenset({"chase_bank_csv", "chase_bank_compact_csv"})
+CHASE_BANK_PROFILE_KEYS = frozenset({"chase_bank_csv", "chase_bank_compact_csv", "chase_bank_pdf"})
 
 
 def _direction_matches(rule: ProviderMerchantRule, amount_cents: int) -> bool:

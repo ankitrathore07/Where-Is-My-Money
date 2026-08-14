@@ -12,14 +12,27 @@
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
   <form action="/workspaces/{{ workspace.id }}/imports" method="post" enctype="multipart/form-data" class="stacked-form panel">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if accounts %}
+      <label for="account_id">Account</label>
+      <select id="account_id" name="account_id" required>
+        <option value="">Choose the account for this statement</option>
+        {% for account in accounts %}
+          <option value="{{ account.id }}"{% if selected_account_id == account.id %} selected{% endif %}>{{ account.name }} · {{ account.institution or "Institution not set" }}</option>
+        {% endfor %}
+      </select>
+      <p class="muted">The institution and account type select the tested statement parser before the strict generic fallback.</p>
+    {% else %}
+      <p class="alert" role="alert">Create a checking, savings, or credit-card account before importing a statement.</p>
+      <a class="button button-secondary" href="/workspaces/{{ workspace.id }}/accounts/new">Create account</a>
+    {% endif %}
     <label for="statement">CSV or PDF statement</label>
-    <input id="statement" name="statement" type="file" accept=".csv,.pdf,text/csv,application/pdf" required>
+    <input id="statement" name="statement" type="file" accept=".csv,.pdf,text/csv,application/pdf" required{% if not accounts %} disabled{% endif %}>
     <p class="muted">PDF extraction stays local. Every transaction must show an explicit sign, parentheses, or debit/credit marker; ambiguous PDFs are rejected instead of guessed.</p>
     <fieldset>
       <legend>After a successful import</legend>
       <label><input type="radio" name="retention_choice" value="delete_after_import" checked> Delete the raw statement</label>
       <label><input type="radio" name="retention_choice" value="retain"> Retain the raw statement privately</label>
     </fieldset>
-    <button class="button" type="submit">Upload for review</button>
+    <button class="button" type="submit"{% if not accounts %} disabled{% endif %}>Upload for review</button>
   </form>
 {% endblock %}

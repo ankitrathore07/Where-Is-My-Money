@@ -1,6 +1,9 @@
-"""Tested Chase CSV statement profiles."""
+"""Tested Chase transaction-statement profiles."""
 
-from app.imports.providers.types import ProviderProfile
+import re
+
+from app.imports.document_parser import parse_transaction_statement_text
+from app.imports.providers.types import ProviderPdfProfile, ProviderProfile
 from app.imports.types import ColumnMapping
 
 CHASE_BANK_HEADERS = frozenset(
@@ -78,5 +81,34 @@ CHASE_PROVIDER_PROFILES = (
             date_format="mdy",
             amount_sign="as_is",
         ),
+    ),
+)
+
+_TRANSACTION_DATE_LINE = re.compile(r"^\s*(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{2}-\d{2})\b")
+_CHASE_BANK_NAME = re.compile(r"\b(?:JPMORGAN\s+CHASE\s+BANK|CHASE)\b", re.IGNORECASE)
+_BANK_STATEMENT = re.compile(r"\b(?:CHECKING|SAVINGS)(?:\s+ACCOUNT)?\s+STATEMENT\b", re.IGNORECASE)
+
+
+def _chase_pdf_preamble(text: str) -> str:
+    lines: list[str] = []
+    for line in text.splitlines():
+        if _TRANSACTION_DATE_LINE.match(line):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _matches_chase_bank_pdf(text: str) -> bool:
+    preamble = _chase_pdf_preamble(text)
+    return bool(_CHASE_BANK_NAME.search(preamble) and _BANK_STATEMENT.search(preamble))
+
+
+CHASE_PDF_PROFILES = (
+    ProviderPdfProfile(
+        key="chase_bank_pdf",
+        institution_key="chase",
+        account_types=frozenset({"checking", "savings"}),
+        matches=_matches_chase_bank_pdf,
+        parse=parse_transaction_statement_text,
     ),
 )

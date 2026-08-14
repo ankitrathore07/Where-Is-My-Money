@@ -1,4 +1,4 @@
-from app.imports.providers.registry import resolve_provider_profile
+from app.imports.providers.registry import parse_provider_pdf, resolve_provider_profile
 from app.imports.types import ColumnMapping
 
 
@@ -99,3 +99,37 @@ def test_header_order_and_bom_whitespace_do_not_break_profile_recognition() -> N
 
     assert result.profile_key == "chase_bank_csv"
     assert result.mapping is not None
+
+
+CHASE_PDF_TEXT = (
+    "JPMorgan Chase Bank, N.A.\n"
+    "Chase Checking Account Statement\n"
+    "January 1, 2026 through January 31, 2026\n"
+    "01/15 Remitly United S PAYMENTS 440753768551227 -$250.00\n"
+)
+
+
+def test_selected_chase_account_and_signed_pdf_header_use_chase_parser() -> None:
+    result = parse_provider_pdf("chase", "checking", CHASE_PDF_TEXT)
+
+    assert result is not None
+    assert result.profile_key == "chase_bank_pdf"
+    assert result.document.headers == ("Date", "Description", "Amount")
+    assert result.document.rows[0].values == {
+        "Date": "2026-01-15",
+        "Description": "Remitly United S PAYMENTS 440753768551227",
+        "Amount": "-250.00",
+    }
+
+
+def test_pdf_provider_resolution_requires_account_and_statement_signatures() -> None:
+    assert parse_provider_pdf("citi", "checking", CHASE_PDF_TEXT) is None
+    assert parse_provider_pdf("chase", "credit_card", CHASE_PDF_TEXT) is None
+    assert (
+        parse_provider_pdf(
+            "chase",
+            "checking",
+            "Checking Account Statement\n01/15 Example Market -$10.00",
+        )
+        is None
+    )
