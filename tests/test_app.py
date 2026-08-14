@@ -13,6 +13,28 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+def test_ai_graph_is_absent_when_feature_is_disabled() -> None:
+    application = create_app(
+        Settings(_env_file=None, app_env="test", secret_key="test-secret")
+    )
+
+    assert application.state.categorization_graph is None
+
+
+def test_ai_graph_is_built_only_when_enabled_with_a_key() -> None:
+    application = create_app(
+        Settings(
+            _env_file=None,
+            app_env="test",
+            secret_key="test-secret",
+            openai_api_key="synthetic-key",
+            openai_categorization_enabled=True,
+        )
+    )
+
+    assert application.state.categorization_graph is not None
+
+
 @pytest.mark.anyio
 async def test_health_check_returns_ok() -> None:
     async with AsyncClient(
