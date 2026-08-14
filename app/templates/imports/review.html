@@ -3,63 +3,118 @@
 {% block title %}Review import · {{ workspace.name }}{% endblock %}
 
 {% block content %}
-  <section class="page-heading">
-    <p class="eyebrow">Step 3 of 3 · {{ workspace.name }}</p>
-    <h1>Review transactions</h1>
-    <p>{{ review.valid_rows }} valid, {{ review.invalid_rows }} invalid, and {{ review.duplicate_rows }} already imported.</p>
+  <section class="import-review" data-page-size="50" data-inline-tag-url="/workspaces/{{ workspace.id }}/tags/inline" data-csrf-token="{{ csrf_token }}">
+    <section class="page-heading import-review-heading">
+      <p class="eyebrow">Step 3 of 3 · {{ workspace.name }}</p>
+      <h1>Review transactions</h1>
+      <p>{{ review.valid_rows }} valid, {{ review.invalid_rows }} invalid, and {{ review.duplicate_rows }} already imported.</p>
+    </section>
+    {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+    <form class="import-review-form" action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/commit" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="review-toolbar panel" aria-label="Bulk review controls">
+        <div class="review-toolbar-group">
+          <strong><span data-selected-count>0</span> selected</strong>
+          <button class="button button-compact" type="button" data-select-page>Select page</button>
+          <button class="button button-compact button-secondary" type="button" data-select-matching>Select matching counterparty</button>
+          <button class="link-button review-link-button" type="button" data-clear-selection>Clear</button>
+        </div>
+        <div class="review-toolbar-group">
+          <label>Category
+            <select data-bulk-category>
+              <option value="">No category change</option>
+              <optgroup label="Workspace categories">{% for category in category_choices.workspace %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</optgroup>
+              <optgroup label="Built-in categories">{% for category in category_choices.builtin %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</optgroup>
+            </select>
+          </label>
+          <label>Tags
+            <select data-bulk-tags multiple>
+              <optgroup label="Workspace tags">{% for tag in tag_choices.workspace %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</optgroup>
+              <optgroup label="Built-in tags">{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endif %}{% endfor %}</optgroup>
+            </select>
+          </label>
+          <button class="button button-compact" type="button" data-apply-bulk>Apply to selected</button>
+        </div>
+        <p class="muted review-toolbar-message" data-review-message aria-live="polite">Zelle stays uncategorized until you choose its purpose. Matching selection uses counterparty and direction.</p>
+      </div>
+      <div class="table-wrap panel import-review-table-wrap">
+        <table class="import-review-table">
+          <thead><tr><th>Actions</th><th>Date</th><th>Description / status</th><th>Merchant</th><th>Category</th><th>Tags</th><th>Recurring</th><th>Amount</th></tr></thead>
+          <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr data-review-row data-review-group="{{ review_group_keys[row.row_number] }}">
+            <td class="review-actions-cell">
+              <label class="compact-check"><input type="checkbox" data-row-select aria-label="Select row {{ row.row_number }} for bulk editing"> Bulk</label>
+              <label class="compact-check"><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}> Include</label>
+              <input type="hidden" name="row_numbers" value="{{ row.row_number }}">
+              <input type="hidden" name="review_token_{{ row.row_number }}" value="{{ review_tokens[row.row_number] }}">
+            </td>
+            <td><input class="review-date" name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
+            <td class="review-description-cell">
+              <input name="description_{{ row.row_number }}" value="{{ edit.description_value if edit else row.description_value }}">
+              <div class="review-badges">
+                {% if zelle_review_labels.get(row.row_number) %}<span class="badge badge-attention">{{ zelle_review_labels[row.row_number] }}</span>{% endif %}
+                <span class="badge">{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}</span>
+                {% if row.categorization_source %}<span class="badge">{{ categorization_source_labels.get(row.categorization_source, "Uncategorized") }}</span>{% endif %}
+              </div>
+              {% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}
+              {% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}
+            </td>
+            <td><input class="review-merchant" name="normalized_merchant_{{ row.row_number }}" maxlength="255" value="{{ edit.normalized_merchant if edit and edit.normalized_merchant is not none else row.normalized_merchant or row.description_value }}"></td>
+            <td>
+              {% set chosen_category = edit.category_id if edit and edit.category_id is not none else row.category_id %}
+              <select name="category_{{ row.row_number }}" data-row-category>
+                <option value="">Automatic</option>
+                <optgroup label="Workspace categories">{% for category in category_choices.workspace %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+                <optgroup label="Built-in categories">{% for category in category_choices.builtin %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
+              </select>
+              {% if row.category_name %}<span class="badge">{{ row.category_name }}</span>{% endif %}
+            </td>
+            <td>
+              {% set chosen_tags = edit.tag_ids if edit and edit.tag_ids is not none else row.tag_ids %}
+              <div class="tag-editor" data-tag-editor>
+                <select class="tag-native" name="tag_ids_{{ row.row_number }}" multiple data-row-tags aria-label="Tags for row {{ row.row_number }}">
+                  <optgroup label="Workspace tags">{% for tag in tag_choices.workspace %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endfor %}</optgroup>
+                  <optgroup label="Built-in tags">{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endif %}{% endfor %}</optgroup>
+                </select>
+                <div class="tag-chips" data-tag-chips></div>
+                <div class="tag-entry">
+                  <input type="text" data-tag-input list="tag-options-{{ row.row_number }}" placeholder="Find or add tag" aria-label="Find or add a tag for row {{ row.row_number }}">
+                  <datalist id="tag-options-{{ row.row_number }}">{% for tag in tag_choices.workspace %}<option value="{{ tag.name }}"></option>{% endfor %}{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.name }}"></option>{% endif %}{% endfor %}</datalist>
+                  <button class="button button-compact button-secondary" type="button" data-add-tag>Add</button>
+                  <button class="link-button review-link-button" type="button" data-create-tag>Create new</button>
+                </div>
+                <span class="field-error" data-tag-error role="alert"></span>
+              </div>
+            </td>
+            <td>
+              {% set chosen_subscription = edit.is_subscription if edit and edit.is_subscription is not none else row.is_subscription %}
+              <label class="compact-check"><input type="checkbox" name="is_subscription_{{ row.row_number }}" {% if chosen_subscription %}checked{% endif %}> Subscription</label>
+              {% set chosen_billing = edit.billing_period_months if edit and edit.billing_period_submitted else row.billing_period_months %}
+              <select name="billing_period_months_{{ row.row_number }}">
+                <option value="">Not recurring</option>
+                <option value="1" {% if chosen_billing == 1 %}selected{% endif %}>Monthly</option>
+                <option value="3" {% if chosen_billing == 3 %}selected{% endif %}>Quarterly</option>
+                <option value="6" {% if chosen_billing == 6 %}selected{% endif %}>Every 6 months</option>
+                <option value="12" {% if chosen_billing == 12 %}selected{% endif %}>Yearly</option>
+              </select>
+            </td>
+            <td><input class="review-amount" name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
+          </tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      <div class="review-commit-bar">
+        <nav class="review-pagination" aria-label="Transaction review pages">
+          <button class="button button-compact button-secondary" type="button" data-page-previous>Previous</button>
+          <span data-page-label>Page 1</span>
+          <button class="button button-compact button-secondary" type="button" data-page-next>Next</button>
+        </nav>
+        <button class="button" type="submit">Commit selected transactions</button>
+      </div>
+    </form>
+    <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/cancel" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="link-button review-cancel" type="submit">Cancel import and delete source</button>
+    </form>
   </section>
-  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
-  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/commit" method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="table-wrap panel"><table>
-      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Merchant</th><th>Category</th><th>Subscription</th><th>Tags</th><th>Billing cadence</th><th>Amount</th><th>Status</th></tr></thead>
-      <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr>
-        <td><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"><input type="hidden" name="review_token_{{ row.row_number }}" value="{{ review_tokens[row.row_number] }}"></td>
-        <td><input name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
-        <td><input name="description_{{ row.row_number }}" value="{{ edit.description_value if edit else row.description_value }}"></td>
-        <td>
-          <input name="normalized_merchant_{{ row.row_number }}" maxlength="255" value="{{ edit.normalized_merchant if edit and edit.normalized_merchant is not none else row.normalized_merchant or row.description_value }}">
-        </td>
-        <td>
-          {% set chosen_category = edit.category_id if edit and edit.category_id is not none else row.category_id %}
-          <select name="category_{{ row.row_number }}">
-            <option value="">Automatic</option>
-            <optgroup label="Workspace categories">{% for category in category_choices.workspace %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
-            <optgroup label="Built-in categories">{% for category in category_choices.builtin %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
-          </select>
-          {% if row.category_name %}<span class="badge">{{ row.category_name }}</span>{% endif %}
-          {% if row.categorization_source %}<span class="badge">{{ categorization_source_labels.get(row.categorization_source, "Uncategorized") }}</span>{% endif %}
-        </td>
-        <td>
-          {% set chosen_subscription = edit.is_subscription if edit and edit.is_subscription is not none else row.is_subscription %}
-          <input type="checkbox" name="is_subscription_{{ row.row_number }}" {% if chosen_subscription %}checked{% endif %}>
-          {% if row.is_subscription %}<span class="badge">Subscription</span>{% endif %}
-        </td>
-        <td>
-          {% set chosen_tags = edit.tag_ids if edit and edit.tag_ids is not none else row.tag_ids %}
-          <select name="tag_ids_{{ row.row_number }}" multiple>
-            <optgroup label="Workspace tags">{% for tag in tag_choices.workspace %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endfor %}</optgroup>
-            <optgroup label="Built-in tags">{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endif %}{% endfor %}</optgroup>
-          </select>
-        </td>
-        <td>
-          {% set chosen_billing = edit.billing_period_months if edit and edit.billing_period_submitted else row.billing_period_months %}
-          <select name="billing_period_months_{{ row.row_number }}">
-            <option value="">Not recurring</option>
-            <option value="1" {% if chosen_billing == 1 %}selected{% endif %}>Monthly</option>
-            <option value="3" {% if chosen_billing == 3 %}selected{% endif %}>Quarterly</option>
-            <option value="6" {% if chosen_billing == 6 %}selected{% endif %}>Every 6 months</option>
-            <option value="12" {% if chosen_billing == 12 %}selected{% endif %}>Yearly</option>
-          </select>
-        </td>
-        <td><input name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
-        <td>{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
-      </tr>{% endfor %}</tbody>
-    </table></div>
-    <button class="button" type="submit">Commit selected transactions</button>
-  </form>
-  <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/cancel" method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button class="link-button" type="submit">Cancel import and delete source</button>
-  </form>
 {% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', path='/import-review.js') }}" defer></script>{% endblock %}

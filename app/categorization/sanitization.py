@@ -1,5 +1,6 @@
 """Privacy-preserving transaction description sanitization."""
 
+import hashlib
 import re
 import unicodedata
 
@@ -12,6 +13,39 @@ _ZELLE_FROM = re.compile(r"^ZELLE PAYMENT FROM\s+.+$")
 
 
 def _canonical_chase_description(description: str) -> str | None:
+    if (
+        re.fullmatch(r"REMITLY UNITED S PAYMENTS \d+", description)
+        or re.fullmatch(r"REMITLY INC REMITTANCE [A-Z0-9]+", description)
+        or re.fullmatch(r"RMTLY\* [A-Z0-9]+ REMITLY\.COM [A-Z]{2} \d{2}/\d{2}", description)
+    ):
+        return "REMITLY"
+    if re.fullmatch(r"PAYMENT TO CHASE CARD ENDING IN \d{4} \d{2}/\d{2}", description):
+        return "PAYMENT TO CHASE CARD"
+    if "WEALTHFRONT BROKERAGE LLC" in description and description.startswith(
+        "REAL TIME PAYMENT CREDIT RECD"
+    ):
+        return "WEALTHFRONT TRANSFER"
+    if re.fullmatch(r"WEALTHFRONT EDI PYMNTS [A-Z0-9]+", description):
+        return "WEALTHFRONT TRANSFER"
+    if re.fullmatch(r"COMENITY PAY IO WEB PYMT [A-Z0-9]+", description) or re.fullmatch(
+        r"COMN CAP APY F1 AUTO PAY [A-Z0-9]+", description
+    ):
+        return "COMENITY CARD PAYMENT"
+    if re.fullmatch(r"ROBINHOOD DEBITS \d+", description) or description.startswith(
+        "ONLINE REALTIME PAYMENT TO ROBINHOOD SECURITIES"
+    ):
+        return "ROBINHOOD TRANSFER"
+    if re.fullmatch(r"BARCLAYCARD US CREDITCARD \d+", description):
+        return "BARCLAYCARD PAYMENT"
+    if description in {"DOMESTIC WIRE FEE", "OFFICIAL CHECKS CHARGE", "IRS TREAS 310 TAX REF"}:
+        return description
+    if re.fullmatch(
+        r"KLARNA\*? ?INTERVIEW KIC"
+        r"(?: (?:WWW\.KLARNA\.CO|KLARNA\.COM|COLUMBUS|\d{3}-\d+) [A-Z]{2})?"
+        r" \d{2}/\d{2}",
+        description,
+    ):
+        return "KLARNA INTERVIEW KICKSTART"
     if re.fullmatch(r"CAPITAL ONE MOBILE PMT(?: [A-Z0-9]+)?", description):
         return "CAPITAL ONE MOBILE PMT"
     if re.fullmatch(r"CITI CARD ONLINE PAYMENT(?: [A-Z0-9]+)?", description):
@@ -61,3 +95,22 @@ def sanitize_transaction_description(description: str) -> str:
         return canonical
     redacted = _LONG_IDENTIFIER.sub("<ID>", without_terminal_reference)
     return redacted[:MAX_AI_DESCRIPTION_LENGTH].strip()
+
+
+def review_group_key(description: str, amount_cents: int) -> str:
+    """Return an opaque, direction-aware key for selecting matching review rows."""
+    compact = " ".join(unicodedata.normalize("NFKC", description).upper().split())
+    match = re.fullmatch(r"ZELLE PAYMENT (TO|FROM) (.+)", compact)
+    if match:
+        party_tokens = match.group(2).split()
+        if (
+            party_tokens
+            and len(party_tokens[-1]) >= 8
+            and any(character.isdigit() for character in party_tokens[-1])
+        ):
+            party_tokens.pop()
+        grouping_text = f"ZELLE|{match.group(1)}|{' '.join(party_tokens)}"
+    else:
+        grouping_text = sanitize_transaction_description(description)
+    direction = "income" if amount_cents > 0 else "expense" if amount_cents < 0 else "zero"
+    return hashlib.sha256(f"{direction}|{grouping_text}".encode()).hexdigest()[:20]

@@ -52,6 +52,13 @@ def test_custom_tags_can_be_created_and_renamed_with_normalized_uniqueness(
         rename_custom_tag(session, workspace.id, tag.id, " EXISTING ")
 
 
+def test_custom_tag_cannot_shadow_a_builtin_tag(session: Session, workspace: Workspace) -> None:
+    _tag(session, "Family Support")
+
+    with pytest.raises(DuplicateTagNameError):
+        create_custom_tag(session, workspace.id, " family support ")
+
+
 def test_builtin_and_foreign_tags_cannot_be_mutated(
     session: Session, workspace: Workspace, other_workspace: Workspace
 ) -> None:

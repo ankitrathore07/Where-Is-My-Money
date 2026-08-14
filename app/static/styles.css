@@ -209,6 +209,181 @@ button.button {
   overflow-x: auto;
 }
 
+.import-review {
+  margin-inline: calc(50% - 50vw + 1rem);
+  width: calc(100vw - 2rem);
+}
+
+.import-review-heading h1 {
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  margin-bottom: 0.75rem;
+}
+
+.review-toolbar {
+  background: #f8fbf9;
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.review-toolbar-group,
+.review-commit-bar,
+.review-pagination,
+.tag-entry,
+.tag-chips,
+.review-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.review-toolbar-group label {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.review-toolbar select,
+.import-review-table input,
+.import-review-table select,
+.tag-entry input {
+  border: 1px solid #aebbad;
+  border-radius: 0.35rem;
+  min-width: 0;
+  padding: 0.4rem;
+}
+
+.review-toolbar select[multiple] {
+  height: 2.5rem;
+  min-width: 10rem;
+}
+
+.review-toolbar-message {
+  margin: 0;
+}
+
+.import-review-table-wrap {
+  max-height: calc(100vh - 14rem);
+  overflow: auto;
+  padding: 0;
+}
+
+.import-review-table {
+  font-size: 0.78rem;
+  table-layout: fixed;
+}
+
+.import-review-table thead {
+  background: #ffffff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.import-review-table th,
+.import-review-table td {
+  overflow-wrap: anywhere;
+  padding: 0.45rem;
+}
+
+.import-review-table th:nth-child(1) { width: 5.5rem; }
+.import-review-table th:nth-child(2) { width: 7rem; }
+.import-review-table th:nth-child(3) { width: 18%; }
+.import-review-table th:nth-child(4) { width: 12%; }
+.import-review-table th:nth-child(5) { width: 11%; }
+.import-review-table th:nth-child(6) { width: 23%; }
+.import-review-table th:nth-child(7) { width: 9rem; }
+.import-review-table th:nth-child(8) { width: 7rem; }
+
+.import-review-table input:not([type="checkbox"]),
+.import-review-table select {
+  width: 100%;
+}
+
+.review-actions-cell,
+.tag-editor,
+.review-description-cell {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.compact-check {
+  align-items: center;
+  display: flex;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+.tag-editor-enhanced .tag-native {
+  display: none;
+}
+
+.tag-chip {
+  background: #e2f2e5;
+  border: 1px solid #b9d9c1;
+  border-radius: 99px;
+  color: #173f2b;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.tag-entry input {
+  flex: 1 1 7rem;
+}
+
+.button-compact {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+}
+
+.button-secondary {
+  background: #e4eee8;
+  color: #173f2b;
+}
+
+.button-secondary:hover,
+.button-secondary:focus-visible {
+  background: #d2e4d9;
+}
+
+.review-link-button {
+  color: #173f2b;
+}
+
+.badge-attention {
+  background: #fff0c9;
+  color: #704c00;
+}
+
+.review-commit-bar {
+  background: #f6f7f2;
+  border-top: 1px solid #dbe3d7;
+  bottom: 0;
+  justify-content: space-between;
+  padding: 0.75rem 0;
+  position: sticky;
+  z-index: 3;
+}
+
+.review-commit-bar .button {
+  margin: 0;
+}
+
+.review-cancel {
+  color: #173f2b;
+  margin-top: 0.5rem;
+}
+
+[data-review-row][hidden] {
+  display: none;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

@@ -83,3 +83,34 @@ async def test_builtin_and_foreign_tags_cannot_be_changed(tmp_path: Path) -> Non
 
     assert response.status_code == 422
     assert "Built-in tags cannot be changed" in response.text
+
+
+@pytest.mark.anyio
+async def test_user_can_create_a_tag_inline_for_import_review(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            response = await client.post(
+                f"/workspaces/{workspace_id}/tags/inline",
+                data={"name": " Split Bill "},
+                headers={"X-CSRF-Token": client.cookies["wimm_csrf"]},
+            )
+            duplicate = await client.post(
+                f"/workspaces/{workspace_id}/tags/inline",
+                data={"name": "split bill"},
+                headers={"X-CSRF-Token": client.cookies["wimm_csrf"]},
+            )
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["name"] == "Split Bill"
+    assert isinstance(payload["id"], int)
+    assert duplicate.status_code == 409

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_current_user
 from app.categories.service import list_accessible_categories
+from app.categorization.sanitization import review_group_key
 from app.core.middleware import require_csrf
 from app.db.models import ImportJob, User, Workspace
 from app.db.session import get_db
@@ -174,6 +175,20 @@ def _review_page(
             categorization_source_labels=CATEGORIZATION_SOURCE_LABELS,
             review_tokens={
                 row.row_number: create_review_token(secret_key, job.id, row) for row in review.rows
+            },
+            review_group_keys={
+                row.row_number: review_group_key(
+                    row.description_value,
+                    row.normalized.amount_cents if row.normalized is not None else 0,
+                )
+                for row in review.rows
+            },
+            zelle_review_labels={
+                row.row_number: "Outgoing payment · choose expense purpose"
+                for row in review.rows
+                if row.normalized is not None
+                and row.normalized.amount_cents < 0
+                and row.description_value.upper().startswith("ZELLE PAYMENT TO ")
             },
         ),
         status_code=status_code,

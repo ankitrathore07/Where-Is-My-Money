@@ -9,6 +9,8 @@ BUILTIN_TAG_NAMES: Final = (
     "Essential",
     "Family Support",
     "Insurance",
+    "Tax Refund",
+    "Installment Plan",
 )
 
 BUILTIN_TAG_KEYS: Final = {" ".join(name.split()).casefold(): name for name in BUILTIN_TAG_NAMES}

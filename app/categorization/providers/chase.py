@@ -16,6 +16,7 @@ class ProviderMerchantRule:
     is_subscription: bool = False
     amount_direction: AmountDirection = "expense"
     tag_names: tuple[str, ...] = ()
+    billing_period_months: int | None = None
 
 
 CHASE_BANK_RULES = (
@@ -49,6 +50,38 @@ CHASE_BANK_RULES = (
         "Remote Online Deposit",
         "Income",
         amount_direction="income",
+    ),
+    ProviderMerchantRule(
+        "REMITLY",
+        "Remitly",
+        "Gifts & Donations",
+        tag_names=("Family Support",),
+    ),
+    ProviderMerchantRule("PAYMENT TO CHASE CARD", "Chase Card Payment", "Transfers"),
+    ProviderMerchantRule(
+        "WEALTHFRONT TRANSFER",
+        "Wealthfront Savings Transfer",
+        "Transfers",
+        amount_direction="either",
+    ),
+    ProviderMerchantRule("COMENITY CARD PAYMENT", "Comenity Card Payment", "Transfers"),
+    ProviderMerchantRule("ROBINHOOD TRANSFER", "Robinhood Transfer", "Transfers"),
+    ProviderMerchantRule("BARCLAYCARD PAYMENT", "Barclaycard Payment", "Transfers"),
+    ProviderMerchantRule("DOMESTIC WIRE FEE", "Domestic Wire Fee", "Taxes & Fees"),
+    ProviderMerchantRule("OFFICIAL CHECKS CHARGE", "Official Check Fee", "Taxes & Fees"),
+    ProviderMerchantRule(
+        "IRS TREAS 310 TAX REF",
+        "IRS Tax Refund",
+        "Income",
+        amount_direction="income",
+        tag_names=("Tax Refund",),
+    ),
+    ProviderMerchantRule(
+        "KLARNA INTERVIEW KICKSTART",
+        "Interview Kickstart",
+        "Education",
+        tag_names=("Installment Plan",),
+        billing_period_months=1,
     ),
 )
 
