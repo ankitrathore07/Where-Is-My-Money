@@ -21,6 +21,7 @@ CHASE_BANK_RULES = (
     ProviderMerchantRule("CITI CARD ONLINE PAYMENT", "Citi Card Payment", "Transfers"),
     ProviderMerchantRule("CAPITAL ONE MOBILE PMT", "Capital One Payment", "Transfers"),
     ProviderMerchantRule("BEST BUY AUTO PYMT", "Best Buy Card Payment", "Transfers"),
+    ProviderMerchantRule("BEST BUY AUTO PAYMENT", "Best Buy Card Payment", "Transfers"),
     ProviderMerchantRule("NEWREZ-SHELLPOINT ACH PMT", "Newrez Mortgage", "Housing"),
     ProviderMerchantRule(
         "ZELLE PAYMENT TO <PAYEE>",

@@ -9,6 +9,7 @@ from app.categorization.providers.chase import find_provider_rule
         ("CITI CARD ONLINE PAYMENT 240812 123456789", -10000, "Citi Card Payment", "Transfers"),
         ("CAPITAL ONE MOBILE PMT 240812 123456789", -10000, "Capital One Payment", "Transfers"),
         ("BEST BUY AUTO PYMT 240812 123456789", -2999, "Best Buy Card Payment", "Transfers"),
+        ("BEST BUY AUTO PAYMENT 240812 123456789", -2999, "Best Buy Card Payment", "Transfers"),
         ("NEWREZ-SHELLPOINT ACH PMT 240812 123456789", -476114, "Newrez Mortgage", "Housing"),
         ("ZELLE PAYMENT TO JANE SAMPLE 123456789", -5000, "Zelle Transfer", "Transfers"),
         ("ZELLE PAYMENT FROM JOHN SAMPLE 987654321", 5000, "Zelle Transfer", "Transfers"),
