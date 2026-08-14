@@ -5,12 +5,15 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Column,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
+    Table,
     UniqueConstraint,
     false,
     func,
@@ -27,6 +30,30 @@ def _default_category_name_key(context: Any) -> str:
     """Derive a stable key for legacy constructors; services still validate explicit input."""
     name = str(context.get_current_parameters()["name"])
     return " ".join(name.split()).casefold()
+
+
+transaction_tags = Table(
+    "transaction_tags",
+    Base.metadata,
+    Column(
+        "transaction_id",
+        ForeignKey("transactions.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+merchant_rule_tags = Table(
+    "merchant_rule_tags",
+    Base.metadata,
+    Column(
+        "merchant_rule_id",
+        ForeignKey("merchant_rules.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class User(Base):
@@ -63,6 +90,7 @@ class Workspace(Base):
     uploaded_files: Mapped[list["UploadedFile"]] = relationship(back_populates="workspace")
     import_jobs: Mapped[list["ImportJob"]] = relationship(back_populates="workspace")
     categories: Mapped[list["Category"]] = relationship(back_populates="workspace")
+    tags: Mapped[list["Tag"]] = relationship(back_populates="workspace")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="workspace")
     merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="workspace")
     payslips: Mapped[list["Payslip"]] = relationship(back_populates="workspace")
@@ -288,6 +316,43 @@ class Category(Base):
     budgets: Mapped[list["Budget"]] = relationship(back_populates="category")
 
 
+class Tag(Base):
+    __tablename__ = "tags"
+    __table_args__ = (
+        Index(
+            "uix_custom_tag_name_key",
+            "workspace_id",
+            "name_key",
+            unique=True,
+            sqlite_where=text("workspace_id IS NOT NULL"),
+            postgresql_where=text("workspace_id IS NOT NULL"),
+        ),
+        Index(
+            "uix_builtin_tag_name_key",
+            "name_key",
+            unique=True,
+            sqlite_where=text("workspace_id IS NULL"),
+            postgresql_where=text("workspace_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    name_key: Mapped[str] = mapped_column(String(100), default=_default_category_name_key)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace | None"] = relationship(back_populates="tags")
+    transactions: Mapped[list["Transaction"]] = relationship(
+        secondary=transaction_tags,
+        back_populates="tags",
+    )
+    merchant_rules: Mapped[list["MerchantRule"]] = relationship(
+        secondary=merchant_rule_tags,
+        back_populates="tags",
+    )
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
@@ -297,6 +362,11 @@ class Transaction(Base):
         Index("ix_workspace_transaction_date", "workspace_id", "date"),
         Index("ix_workspace_transaction_category", "workspace_id", "category_id"),
         Index("ix_workspace_normalized_merchant", "workspace_id", "normalized_merchant"),
+        CheckConstraint(
+            "billing_period_months IS NULL OR "
+            "(billing_period_months >= 1 AND billing_period_months <= 120)",
+            name="ck_transactions_billing_period_months",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -308,6 +378,7 @@ class Transaction(Base):
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
     categorization_source: Mapped[str] = mapped_column(String(50), default="uncategorized")
     is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    billing_period_months: Mapped[int | None] = mapped_column(Integer)
     duplicate_fingerprint: Mapped[str | None] = mapped_column(String(64))
     import_job_id: Mapped[int | None] = mapped_column(ForeignKey("import_jobs.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -315,12 +386,22 @@ class Transaction(Base):
     workspace: Mapped["Workspace"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
     import_job: Mapped["ImportJob | None"] = relationship(back_populates="transactions")
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=transaction_tags,
+        back_populates="transactions",
+        order_by="Tag.name_key",
+    )
 
 
 class MerchantRule(Base):
     __tablename__ = "merchant_rules"
     __table_args__ = (
         UniqueConstraint("workspace_id", "merchant_pattern", name="uix_workspace_merchant_pattern"),
+        CheckConstraint(
+            "billing_period_months IS NULL OR "
+            "(billing_period_months >= 1 AND billing_period_months <= 120)",
+            name="ck_merchant_rules_billing_period_months",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -329,6 +410,7 @@ class MerchantRule(Base):
     normalized_merchant: Mapped[str | None] = mapped_column(String(255))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
     is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    billing_period_months: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -336,6 +418,11 @@ class MerchantRule(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="merchant_rules")
     category: Mapped["Category | None"] = relationship(back_populates="merchant_rules")
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=merchant_rule_tags,
+        back_populates="merchant_rules",
+        order_by="Tag.name_key",
+    )
 
 
 class Payslip(Base):
