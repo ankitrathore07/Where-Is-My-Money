@@ -26,6 +26,16 @@
         <optgroup label="Built-in categories">{% for category in choices.builtin %}<option value="{{ category.id }}" {% if category_value == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
       </select>
       <label><input name="is_subscription" type="checkbox" {% if subscription_value %}checked{% endif %}> Subscription</label>
+      <label for="tag_ids">Tags</label>
+      <select id="tag_ids" name="tag_ids" multiple size="6">
+        <optgroup label="Workspace tags">{% for tag in tag_choices.workspace %}<option value="{{ tag.id }}" {% if tag.id in tag_values %}selected{% endif %}>{{ tag.name }}</option>{% endfor %}</optgroup>
+        <optgroup label="Built-in tags">{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.id }}" {% if tag.id in tag_values %}selected{% endif %}>{{ tag.name }}</option>{% endif %}{% endfor %}</optgroup>
+      </select>
+      <label for="billing_period_months">Billing cadence</label>
+      <select id="billing_period_months" name="billing_period_months">
+        <option value="">Not specified</option>
+        {% for months, label in [(1, "Monthly"), (3, "Quarterly"), (6, "Every 6 months"), (12, "Annual")] %}<option value="{{ months }}" {% if billing_period_value == months %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
       <label><input name="save_for_future" type="checkbox" {% if save_for_future_value %}checked{% endif %}> Use for matching future transactions</label>
       <button class="button" type="submit">Save categorization</button>
       <a href="/workspaces/{{ workspace.id }}/transactions">Cancel</a>

@@ -41,6 +41,7 @@ from app.statement_imports.body_limit import StatementUploadBodyLimitMiddleware
 from app.statement_imports.extraction import StatementDocumentExtractor
 from app.statement_imports.routes import router as statement_import_router
 from app.statement_imports.storage import StatementUploadStore
+from app.tags.routes import router as tag_router
 from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
@@ -154,6 +155,7 @@ def create_app(
     application.include_router(dashboard_router)
     application.include_router(account_router)
     application.include_router(category_router)
+    application.include_router(tag_router)
     application.include_router(planning_router)
     application.include_router(document_router)
     application.include_router(import_router)

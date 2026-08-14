@@ -141,6 +141,27 @@ def accessible_tags_by_id(
     return tags
 
 
+def tag_ids_with_subscription(
+    session: Session,
+    tag_ids: tuple[int, ...],
+    is_subscription: bool,
+) -> tuple[int, ...]:
+    """Keep the legacy subscription field synchronized with its built-in tag."""
+    subscription_id = session.scalar(
+        select(Tag.id).where(
+            Tag.workspace_id.is_(None),
+            Tag.name_key == "subscription",
+        )
+    )
+    selected = set(tag_ids)
+    if subscription_id is not None:
+        if is_subscription:
+            selected.add(subscription_id)
+        else:
+            selected.discard(subscription_id)
+    return tuple(selected)
+
+
 def replace_transaction_tags(
     session: Session,
     workspace_id: int,

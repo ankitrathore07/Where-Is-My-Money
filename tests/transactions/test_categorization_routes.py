@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models import Category, MerchantRule, Transaction, User, Workspace
+from app.db.models import Category, MerchantRule, Tag, Transaction, User, Workspace
 from tests.route_helpers import build_route_test_app, complete_sign_in
 
 
@@ -66,6 +66,14 @@ async def test_owner_can_open_and_submit_manual_categorization(tmp_path: Path) -
         ) as client:
             await complete_sign_in(client)
             workspace_id, category_id, transaction_id = _seed_transaction(factory)
+            with factory() as session:
+                household = Tag(workspace_id=workspace_id, name="Household Expenditure")
+                vehicle = Tag(workspace_id=None, name="Vehicle")
+                subscription = Tag(workspace_id=None, name="Subscription")
+                session.add_all((household, vehicle, subscription))
+                session.commit()
+                household_id = household.id
+                vehicle_id = vehicle.id
             transaction_list = await client.get(f"/workspaces/{workspace_id}/transactions")
             page = await client.get(
                 f"/workspaces/{workspace_id}/transactions/{transaction_id}/categorization"
@@ -77,6 +85,8 @@ async def test_owner_can_open_and_submit_manual_categorization(tmp_path: Path) -
                     "normalized_merchant": "Neighborhood Cafe",
                     "category_id": str(category_id),
                     "is_subscription": "on",
+                    "tag_ids": [str(household_id), str(vehicle_id)],
+                    "billing_period_months": "6",
                     "save_for_future": "on",
                 },
                 follow_redirects=False,
@@ -86,6 +96,10 @@ async def test_owner_can_open_and_submit_manual_categorization(tmp_path: Path) -
                 rule = session.scalar(
                     select(MerchantRule).where(MerchantRule.workspace_id == workspace_id)
                 )
+                transaction_tag_names = (
+                    [tag.name for tag in transaction.tags] if transaction else []
+                )
+                rule_tag_names = [tag.name for tag in rule.tags] if rule else []
     finally:
         engine.dispose()
 
@@ -107,6 +121,20 @@ async def test_owner_can_open_and_submit_manual_categorization(tmp_path: Path) -
     assert transaction.categorization_source == "manual"
     assert rule.merchant_pattern == "LOCAL CAFE 123"
     assert rule.is_subscription is True
+    assert transaction_tag_names == [
+        "Household Expenditure",
+        "Subscription",
+        "Vehicle",
+    ]
+    assert transaction.billing_period_months == 6
+    assert rule_tag_names == [
+        "Household Expenditure",
+        "Subscription",
+        "Vehicle",
+    ]
+    assert rule.billing_period_months == 6
+    assert "Household Expenditure" in page.text
+    assert "Billing cadence" in page.text
 
 
 @pytest.mark.anyio

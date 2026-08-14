@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 from app.categorization.normalization import MAX_MERCHANT_LENGTH, merchant_key
 from app.categorization.types import CategorizationSource
 from app.db.models import Category, MerchantRule, Transaction
+from app.tags.service import (
+    replace_rule_tags,
+    replace_transaction_tags,
+    tag_ids_with_subscription,
+)
 
 
 class TransactionNotFoundError(LookupError):
@@ -36,6 +41,8 @@ class ManualCategorizationInput:
     category_id: int
     is_subscription: bool
     save_for_future: bool
+    tag_ids: tuple[int, ...] = ()
+    billing_period_months: int | None = None
 
 
 def get_transaction_for_categorization(
@@ -57,7 +64,9 @@ def _merchant_display(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split())
 
 
-def _validated_values(values: ManualCategorizationInput) -> tuple[str, bool, bool]:
+def _validated_values(
+    values: ManualCategorizationInput,
+) -> tuple[str, bool, bool, tuple[int, ...], int | None]:
     normalized_merchant = _merchant_display(values.normalized_merchant)
     if not normalized_merchant:
         raise ManualCategorizationValidationError(
@@ -75,7 +84,25 @@ def _validated_values(values: ManualCategorizationInput) -> tuple[str, bool, boo
         raise ManualCategorizationValidationError(
             "save_for_future", "Save for future must be a boolean."
         )
-    return normalized_merchant, values.is_subscription, values.save_for_future
+    if any(type(tag_id) is not int or tag_id <= 0 for tag_id in values.tag_ids):
+        raise ManualCategorizationValidationError("tags", "Choose valid tags.")
+    billing_period_months = values.billing_period_months
+    if billing_period_months is not None and (
+        type(billing_period_months) is not int
+        or billing_period_months < 1
+        or billing_period_months > 120
+    ):
+        raise ManualCategorizationValidationError(
+            "billing_period_months",
+            "Choose a billing cadence between 1 and 120 months.",
+        )
+    return (
+        normalized_merchant,
+        values.is_subscription,
+        values.save_for_future,
+        values.tag_ids,
+        billing_period_months,
+    )
 
 
 def upsert_workspace_rule(
@@ -85,6 +112,9 @@ def upsert_workspace_rule(
     normalized_merchant: str,
     category_id: int,
     is_subscription: bool,
+    *,
+    tag_ids: tuple[int, ...] = (),
+    billing_period_months: int | None = None,
 ) -> MerchantRule:
     """Create or replace one exact merchant rule inside the active workspace."""
     rule = session.scalar(
@@ -100,13 +130,21 @@ def upsert_workspace_rule(
             normalized_merchant=normalized_merchant,
             category_id=category_id,
             is_subscription=is_subscription,
+            billing_period_months=billing_period_months,
         )
         session.add(rule)
     else:
         rule.normalized_merchant = normalized_merchant
         rule.category_id = category_id
         rule.is_subscription = is_subscription
+        rule.billing_period_months = billing_period_months
     session.flush()
+    replace_rule_tags(
+        session,
+        workspace_id,
+        rule,
+        tag_ids_with_subscription(session, tag_ids, is_subscription),
+    )
     return rule
 
 
@@ -128,7 +166,13 @@ def manually_categorize_transaction(
     if category is None:
         raise CategoryNotAccessibleError("Category not found")
 
-    normalized_merchant, is_subscription, save_for_future = _validated_values(values)
+    (
+        normalized_merchant,
+        is_subscription,
+        save_for_future,
+        tag_ids,
+        billing_period_months,
+    ) = _validated_values(values)
     key = merchant_key(transaction.description)
     if save_for_future and not key:
         raise MerchantRuleKeyError("Transaction description has no usable merchant key")
@@ -138,7 +182,14 @@ def manually_categorize_transaction(
     transaction.normalized_merchant = normalized_merchant
     transaction.category_id = category.id
     transaction.is_subscription = is_subscription
+    transaction.billing_period_months = billing_period_months
     transaction.categorization_source = CategorizationSource.MANUAL.value
+    replace_transaction_tags(
+        session,
+        workspace_id,
+        transaction,
+        tag_ids_with_subscription(session, tag_ids, is_subscription),
+    )
 
     if save_for_future:
         upsert_workspace_rule(
@@ -148,6 +199,8 @@ def manually_categorize_transaction(
             normalized_merchant,
             category.id,
             is_subscription,
+            tag_ids=tag_ids,
+            billing_period_months=billing_period_months,
         )
     else:
         session.flush()

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import app.transactions.service as transaction_service
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationSource
-from app.db.models import Category, MerchantRule, Transaction, User, Workspace
+from app.db.models import Category, MerchantRule, Tag, Transaction, User, Workspace
 from app.imports.types import NormalizedTransaction
 from app.transactions.service import (
     CategoryNotAccessibleError,
@@ -307,3 +307,68 @@ def test_rule_failure_can_roll_back_transaction_and_rule_atomically(
     assert transaction.category_id == original_id
     assert transaction.is_subscription is False
     assert transaction.categorization_source == "uncategorized"
+
+
+def test_manual_edit_assigns_multiple_tags_and_cadence_to_transaction_and_rule(
+    session: Session, workspace: Workspace
+) -> None:
+    category = _category(session, workspace.id, "Insurance")
+    transaction = _transaction(session, workspace.id, category, description="VEHICLE POLICY")
+    household = Tag(workspace_id=workspace.id, name="Household Expenditure")
+    vehicle = Tag(workspace_id=None, name="Vehicle")
+    subscription = Tag(workspace_id=None, name="Subscription")
+    session.add_all((household, vehicle, subscription))
+    session.flush()
+
+    updated = manually_categorize_transaction(
+        session,
+        workspace.id,
+        transaction.id,
+        ManualCategorizationInput(
+            "Vehicle Insurance",
+            category.id,
+            True,
+            True,
+            tag_ids=(vehicle.id, household.id),
+            billing_period_months=6,
+        ),
+    )
+    rule = session.scalar(select(MerchantRule))
+
+    assert rule is not None
+    assert [tag.name for tag in updated.tags] == [
+        "Household Expenditure",
+        "Subscription",
+        "Vehicle",
+    ]
+    assert [tag.name for tag in rule.tags] == [
+        "Household Expenditure",
+        "Subscription",
+        "Vehicle",
+    ]
+    assert updated.billing_period_months == 6
+    assert rule.billing_period_months == 6
+
+
+@pytest.mark.parametrize("billing_period_months", [0, 121, True])
+def test_manual_edit_rejects_invalid_billing_period(
+    session: Session,
+    workspace: Workspace,
+    billing_period_months: int,
+) -> None:
+    category = _category(session, workspace.id)
+    transaction = _transaction(session, workspace.id, category)
+
+    with pytest.raises(ManualCategorizationValidationError, match="billing"):
+        manually_categorize_transaction(
+            session,
+            workspace.id,
+            transaction.id,
+            ManualCategorizationInput(
+                "Merchant",
+                category.id,
+                False,
+                False,
+                billing_period_months=billing_period_months,
+            ),
+        )
