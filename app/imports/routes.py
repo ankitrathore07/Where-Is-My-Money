@@ -36,6 +36,7 @@ from app.imports.service import (
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import RowEdit
 from app.payslips.extraction import DocumentExtractionError
+from app.tags.service import list_accessible_tags
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["imports"])
@@ -169,6 +170,7 @@ def _review_page(
             submitted=bool(submitted_edits is not None),
             submitted_by_row={edit.row_number: edit for edit in submitted_edits or ()},
             category_choices=list_accessible_categories(session, workspace.id),
+            tag_choices=list_accessible_tags(session, workspace.id),
             categorization_source_labels=CATEGORIZATION_SOURCE_LABELS,
             review_tokens={
                 row.row_number: create_review_token(secret_key, job.id, row) for row in review.rows
@@ -371,10 +373,20 @@ async def commit_review(
                         else None
                     ),
                     categorization_source=baseline.categorization_source,
+                    tag_ids=tuple(
+                        _optional_form_int(value) or 0
+                        for value in form.getlist(f"tag_ids_{row_number}")
+                    ),
+                    billing_period_months=_optional_form_int(
+                        form.get(f"billing_period_months_{row_number}")
+                    ),
+                    billing_period_submitted=(form.get(f"category_{row_number}") is not None),
                     original_normalized_merchant=baseline.normalized_merchant,
                     original_category_id=baseline.category_id,
                     original_is_subscription=baseline.is_subscription,
                     original_categorization_source=baseline.categorization_source,
+                    original_tag_ids=baseline.tag_ids,
+                    original_billing_period_months=baseline.billing_period_months,
                 )
             )
     except ReviewTokenError as exc:

@@ -190,7 +190,7 @@ def test_unrecognized_chase_csv_keeps_manual_mapping(
         workspace,
         "checking.csv",
         "text/csv",
-        BytesIO(CSV_BYTES),
+        BytesIO(CSV_BYTES.replace(b"Description", b"Memo")),
         "retain",
         account=account,
     )

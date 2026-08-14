@@ -15,6 +15,7 @@ class ProviderMerchantRule:
     category_name: str
     is_subscription: bool = False
     amount_direction: AmountDirection = "expense"
+    tag_names: tuple[str, ...] = ()
 
 
 CHASE_BANK_RULES = (
@@ -37,7 +38,12 @@ CHASE_BANK_RULES = (
         "Income",
         amount_direction="income",
     ),
-    ProviderMerchantRule("XOOM DEBIT", "Xoom", "Gifts & Donations"),
+    ProviderMerchantRule(
+        "XOOM DEBIT",
+        "Xoom",
+        "Gifts & Donations",
+        tag_names=("Family Support",),
+    ),
     ProviderMerchantRule(
         "REMOTE ONLINE DEPOSIT",
         "Remote Online Deposit",

@@ -9,7 +9,7 @@ from app.categorization.service import (
     categorize_candidate,
 )
 from app.categorization.types import CategorizationSource
-from app.db.models import Category, MerchantRule, User, Workspace
+from app.db.models import Category, MerchantRule, Tag, User, Workspace
 from app.imports.types import NormalizedTransaction
 
 
@@ -48,6 +48,9 @@ def test_workspace_rule_beats_builtin_rule(session: Session, workspace: Workspac
     )
     session.add(custom)
     session.flush()
+    household = Tag(workspace_id=None, name="Household Expenditure")
+    session.add(household)
+    session.flush()
     session.add(
         MerchantRule(
             workspace_id=workspace.id,
@@ -55,6 +58,8 @@ def test_workspace_rule_beats_builtin_rule(session: Session, workspace: Workspac
             normalized_merchant="Streaming",
             category_id=custom.id,
             is_subscription=False,
+            billing_period_months=6,
+            tags=[household],
         )
     )
     session.commit()
@@ -65,6 +70,8 @@ def test_workspace_rule_beats_builtin_rule(session: Session, workspace: Workspac
     assert decision.category_id == custom.id
     assert decision.normalized_merchant == "Streaming"
     assert decision.is_subscription is False
+    assert decision.tag_ids == (household.id,)
+    assert decision.billing_period_months == 6
 
 
 def test_builtin_rule_beats_uncategorized(session: Session, workspace: Workspace) -> None:
@@ -92,6 +99,24 @@ def test_provider_rule_beats_builtin_fallback(session: Session, workspace: Works
     assert decision.category_id == categories["Transfers"].id
     assert decision.normalized_merchant == "Best Buy Card Payment"
     assert decision.is_subscription is False
+
+
+def test_xoom_provider_rule_adds_family_support_tag(session: Session, workspace: Workspace) -> None:
+    categories = _seed_builtin_categories(session)
+    family_support = Tag(workspace_id=None, name="Family Support")
+    session.add(family_support)
+    session.flush()
+
+    decision = categorize_candidate(
+        session,
+        workspace.id,
+        _candidate("XOOM DEBIT OID 30178544 WEB ID: 1770510487", -50000),
+        provider_key="chase_bank_compact_csv",
+    )
+
+    assert decision.source is CategorizationSource.PROVIDER_RULE
+    assert decision.category_id == categories["Gifts & Donations"].id
+    assert decision.tag_ids == (family_support.id,)
 
 
 def test_workspace_rule_beats_provider_rule(session: Session, workspace: Workspace) -> None:
@@ -134,7 +159,7 @@ def test_unconfirmed_chase_pattern_remains_uncategorized(
     decision = categorize_candidate(
         session,
         workspace.id,
-        _candidate("MICROSOFT EDIPAYMENT 123456789", 500000),
+        _candidate("UNCONFIRMED MICROSOFT BONUS 123456789", 500000),
         provider_key="chase_bank_csv",
     )
 

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.categorization.ai_graph import build_categorization_graph
 from app.categorization.ai_types import ClassifierResult
-from app.db.models import Category, ImportJob, Transaction, UploadedFile, User, Workspace
+from app.db.models import Category, ImportJob, Tag, Transaction, UploadedFile, User, Workspace
 from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
@@ -355,6 +355,16 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
             with factory() as session:
                 workspace_id = session.scalar(select(Workspace.id))
                 assert workspace_id is not None
+                household = Tag(
+                    workspace_id=workspace_id,
+                    name="Household Expenditure",
+                )
+                vehicle = Tag(workspace_id=None, name="Vehicle")
+                subscription = Tag(workspace_id=None, name="Subscription")
+                session.add_all((household, vehicle, subscription))
+                session.commit()
+                household_id = household.id
+                vehicle_id = vehicle.id
             uploaded = await client.post(
                 f"/workspaces/{workspace_id}/imports",
                 data={"retention_choice": "delete_after_import", "csrf_token": token},
@@ -375,6 +385,9 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                 },
             )
             review = await client.get(mapped.headers["location"])
+            assert 'name="tag_ids_2"' in review.text
+            assert "Household Expenditure" in review.text
+            assert 'name="billing_period_months_2"' in review.text
             with factory() as session:
                 category_id = session.scalar(select(Category.id))
                 assert category_id is not None
@@ -391,6 +404,8 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
                     "normalized_merchant_2": "Reviewed Market",
                     "category_2": str(category_id),
                     "is_subscription_2": "on",
+                    "tag_ids_2": [str(household_id), str(vehicle_id)],
+                    "billing_period_months_2": "6",
                     "categorization_source_2": "workspace_rule",
                     "original_normalized_merchant_2": "Reviewed Market",
                     "original_category_2": str(category_id),
@@ -408,6 +423,12 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
             assert transaction.amount_cents == -1234
             assert transaction.normalized_merchant == "Reviewed Market"
             assert transaction.is_subscription is True
+            assert [tag.name for tag in transaction.tags] == [
+                "Household Expenditure",
+                "Subscription",
+                "Vehicle",
+            ]
+            assert transaction.billing_period_months == 6
             assert transaction.categorization_source == "manual"
             assert job is not None and job.status == "committed"
             assert uploaded_file is not None and uploaded_file.deleted is True

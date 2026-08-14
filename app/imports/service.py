@@ -33,6 +33,11 @@ from app.imports.types import (
     ReviewRow,
     RowEdit,
 )
+from app.tags.service import (
+    TagNotFoundError,
+    accessible_tags_by_id,
+    tag_ids_with_subscription,
+)
 
 ACTIVE_STATUSES = {"awaiting_mapping", "reviewing"}
 COMMITTED_STATUSES = {"committed", "committed_cleanup_failed"}
@@ -415,6 +420,8 @@ def _apply_ai_suggestion(
         category_id=category.id,
         is_subscription=suggestion.is_subscription,
         source=CategorizationSource.AI_SUGGESTION,
+        tag_ids=decision.tag_ids,
+        billing_period_months=decision.billing_period_months,
     )
 
 
@@ -495,6 +502,16 @@ def build_review(
                     category_name=category.name if category else None,
                     is_subscription=decision.is_subscription if decision else None,
                     categorization_source=decision.source.value if decision else None,
+                    tag_ids=(
+                        tag_ids_with_subscription(
+                            session,
+                            decision.tag_ids,
+                            decision.is_subscription,
+                        )
+                        if decision
+                        else ()
+                    ),
+                    billing_period_months=(decision.billing_period_months if decision else None),
                 )
             )
         else:
@@ -536,7 +553,7 @@ def _reviewed_fields(
     candidate: NormalizedTransaction,
     review_row: ReviewRow,
     edit: RowEdit,
-) -> tuple[str, int, bool, str]:
+) -> tuple[str, int, bool, str, tuple[int, ...], int | None]:
     if (
         review_row.category_id is None
         or review_row.normalized_merchant is None
@@ -548,11 +565,15 @@ def _reviewed_fields(
         fallback_category_id = decision.category_id
         fallback_subscription = decision.is_subscription
         fallback_source = decision.source.value
+        fallback_tag_ids = decision.tag_ids
+        fallback_billing_period_months = decision.billing_period_months
     else:
         fallback_merchant = review_row.normalized_merchant
         fallback_category_id = review_row.category_id
         fallback_subscription = review_row.is_subscription
         fallback_source = review_row.categorization_source
+        fallback_tag_ids = review_row.tag_ids
+        fallback_billing_period_months = review_row.billing_period_months
 
     merchant = (
         edit.normalized_merchant if edit.normalized_merchant is not None else fallback_merchant
@@ -571,6 +592,28 @@ def _reviewed_fields(
     source = edit.categorization_source or fallback_source
     if source not in {item.value for item in CategorizationSource}:
         raise ValueError("source")
+    selected_tag_ids = edit.tag_ids if edit.tag_ids is not None else fallback_tag_ids
+    try:
+        selected_tag_ids = tag_ids_with_subscription(
+            session,
+            selected_tag_ids,
+            subscription,
+        )
+        tags = accessible_tags_by_id(session, workspace_id, selected_tag_ids)
+    except TagNotFoundError as exc:
+        raise ValueError("tags") from exc
+    tag_ids = tuple(tag.id for tag in tags)
+    billing_period_months = (
+        edit.billing_period_months
+        if edit.billing_period_submitted or edit.billing_period_months is not None
+        else fallback_billing_period_months
+    )
+    if billing_period_months is not None and (
+        type(billing_period_months) is not int
+        or billing_period_months < 1
+        or billing_period_months > 120
+    ):
+        raise ValueError("billing_period_months")
 
     has_original = any(
         value is not None
@@ -579,7 +622,31 @@ def _reviewed_fields(
             edit.original_category_id,
             edit.original_is_subscription,
             edit.original_categorization_source,
+            edit.original_tag_ids,
+            edit.original_billing_period_months,
         )
+    )
+    original_subscription = (
+        edit.original_is_subscription
+        if edit.original_is_subscription is not None
+        else review_row.is_subscription
+    )
+    original_tag_ids = (
+        edit.original_tag_ids if edit.original_tag_ids is not None else review_row.tag_ids
+    )
+    try:
+        original_tag_ids = tag_ids_with_subscription(
+            session,
+            original_tag_ids,
+            bool(original_subscription),
+        )
+        original_tags = accessible_tags_by_id(session, workspace_id, original_tag_ids)
+    except TagNotFoundError as exc:
+        raise ValueError("tags") from exc
+    original_billing_period_months = (
+        edit.original_billing_period_months
+        if edit.original_tag_ids is not None
+        else review_row.billing_period_months
     )
     baseline = (
         (
@@ -587,6 +654,8 @@ def _reviewed_fields(
             edit.original_category_id,
             edit.original_is_subscription,
             edit.original_categorization_source,
+            tuple(sorted(tag.id for tag in original_tags)),
+            original_billing_period_months,
         )
         if has_original
         else (
@@ -594,10 +663,20 @@ def _reviewed_fields(
             review_row.category_id,
             review_row.is_subscription,
             review_row.categorization_source,
+            tuple(sorted(review_row.tag_ids)),
+            review_row.billing_period_months,
         )
     )
     changed = (
-        (merchant, category_id, subscription, source) != baseline
+        (
+            merchant,
+            category_id,
+            subscription,
+            source,
+            tuple(sorted(tag_ids)),
+            billing_period_months,
+        )
+        != baseline
         or edit.date_value != review_row.date_value
         or edit.description_value != review_row.description_value
         or edit.amount_value != review_row.amount_value
@@ -607,6 +686,8 @@ def _reviewed_fields(
         category_id,
         subscription,
         CategorizationSource.MANUAL.value if changed else source,
+        tag_ids,
+        billing_period_months,
     )
 
 
@@ -640,7 +721,7 @@ def commit_import(
         )
 
     normalized: list[NormalizedTransaction] = []
-    reviewed_fields: dict[int, tuple[str, int, bool, str]] = {}
+    reviewed_fields: dict[int, tuple[str, int, bool, str, tuple[int, ...], int | None]] = {}
     review_by_row = {row.row_number: row for row in review.rows}
     row_errors: dict[int, dict[str, str]] = {}
     for edit in edits:
@@ -691,21 +772,24 @@ def commit_import(
 
     for item in new_items:
         transaction = item.transaction
-        merchant, category_id, is_subscription, source = reviewed_fields[transaction.row_number]
-        session.add(
-            Transaction(
-                workspace_id=job.workspace_id,
-                date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
-                description=transaction.description,
-                normalized_merchant=merchant,
-                amount_cents=transaction.amount_cents,
-                category_id=category_id,
-                categorization_source=source,
-                is_subscription=is_subscription,
-                duplicate_fingerprint=item.fingerprint,
-                import_job_id=job.id,
-            )
+        merchant, category_id, is_subscription, source, tag_ids, billing_period_months = (
+            reviewed_fields[transaction.row_number]
         )
+        persisted = Transaction(
+            workspace_id=job.workspace_id,
+            date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
+            description=transaction.description,
+            normalized_merchant=merchant,
+            amount_cents=transaction.amount_cents,
+            category_id=category_id,
+            categorization_source=source,
+            is_subscription=is_subscription,
+            billing_period_months=billing_period_months,
+            duplicate_fingerprint=item.fingerprint,
+            import_job_id=job.id,
+        )
+        persisted.tags = list(accessible_tags_by_id(session, job.workspace_id, tag_ids))
+        session.add(persisted)
     job.status = "committed"
     job.validation_errors = None
     try:

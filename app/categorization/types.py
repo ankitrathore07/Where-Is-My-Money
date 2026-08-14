@@ -23,3 +23,5 @@ class CategorizationDecision:
     category_id: int
     is_subscription: bool
     source: CategorizationSource
+    tag_ids: tuple[int, ...] = ()
+    billing_period_months: int | None = None

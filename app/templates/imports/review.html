@@ -12,7 +12,7 @@
   <form action="/workspaces/{{ workspace.id }}/imports/{{ job.id }}/commit" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="table-wrap panel"><table>
-      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Merchant</th><th>Category</th><th>Subscription</th><th>Amount</th><th>Status</th></tr></thead>
+      <thead><tr><th>Include</th><th>Date</th><th>Description</th><th>Merchant</th><th>Category</th><th>Subscription</th><th>Tags</th><th>Billing cadence</th><th>Amount</th><th>Status</th></tr></thead>
       <tbody>{% for row in review.rows %}{% set edit = submitted_by_row.get(row.row_number) %}<tr>
         <td><input type="checkbox" name="include_{{ row.row_number }}" {% if (edit and edit.include) or (not submitted and row.included) %}checked{% endif %}><input type="hidden" name="row_numbers" value="{{ row.row_number }}"><input type="hidden" name="review_token_{{ row.row_number }}" value="{{ review_tokens[row.row_number] }}"></td>
         <td><input name="date_{{ row.row_number }}" value="{{ edit.date_value if edit else row.date_value }}"></td>
@@ -34,6 +34,23 @@
           {% set chosen_subscription = edit.is_subscription if edit and edit.is_subscription is not none else row.is_subscription %}
           <input type="checkbox" name="is_subscription_{{ row.row_number }}" {% if chosen_subscription %}checked{% endif %}>
           {% if row.is_subscription %}<span class="badge">Subscription</span>{% endif %}
+        </td>
+        <td>
+          {% set chosen_tags = edit.tag_ids if edit and edit.tag_ids is not none else row.tag_ids %}
+          <select name="tag_ids_{{ row.row_number }}" multiple>
+            <optgroup label="Workspace tags">{% for tag in tag_choices.workspace %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endfor %}</optgroup>
+            <optgroup label="Built-in tags">{% for tag in tag_choices.builtin %}{% if tag.name_key != "subscription" %}<option value="{{ tag.id }}" {% if tag.id in chosen_tags %}selected{% endif %}>{{ tag.name }}</option>{% endif %}{% endfor %}</optgroup>
+          </select>
+        </td>
+        <td>
+          {% set chosen_billing = edit.billing_period_months if edit and edit.billing_period_submitted else row.billing_period_months %}
+          <select name="billing_period_months_{{ row.row_number }}">
+            <option value="">Not recurring</option>
+            <option value="1" {% if chosen_billing == 1 %}selected{% endif %}>Monthly</option>
+            <option value="3" {% if chosen_billing == 3 %}selected{% endif %}>Quarterly</option>
+            <option value="6" {% if chosen_billing == 6 %}selected{% endif %}>Every 6 months</option>
+            <option value="12" {% if chosen_billing == 12 %}selected{% endif %}>Yearly</option>
+          </select>
         </td>
         <td><input name="amount_{{ row.row_number }}" value="{{ edit.amount_value if edit else row.amount_value }}"></td>
         <td>{% if row.duplicate %}Already imported{% elif row.field_errors or row_errors.get(row.row_number) %}Needs correction{% else %}Ready{% endif %}{% for message in row.field_errors.values() %}<span class="field-error">{{ message }}</span>{% endfor %}{% for message in row_errors.get(row.row_number, {}).values() %}<span class="field-error">{{ message }}</span>{% endfor %}</td>
