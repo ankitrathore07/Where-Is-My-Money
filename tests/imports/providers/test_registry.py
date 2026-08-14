@@ -108,6 +108,13 @@ CHASE_PDF_TEXT = (
     "01/15 Remitly United S PAYMENTS 440753768551227 -$250.00\n"
 )
 
+CHASE_TOTAL_CHECKING_PDF_TEXT = (
+    "JPMorgan Chase Bank, N.A.\n"
+    "Chase Total Checking\n"
+    "January 1, 2026 through January 31, 2026\n"
+    "01/15 Remitly United S PAYMENTS 440753768551227 -$250.00\n"
+)
+
 
 def test_selected_chase_account_and_signed_pdf_header_use_chase_parser() -> None:
     result = parse_provider_pdf("chase", "checking", CHASE_PDF_TEXT)
@@ -120,6 +127,13 @@ def test_selected_chase_account_and_signed_pdf_header_use_chase_parser() -> None
         "Description": "Remitly United S PAYMENTS 440753768551227",
         "Amount": "-250.00",
     }
+
+
+def test_real_chase_total_checking_heading_uses_chase_parser() -> None:
+    result = parse_provider_pdf("chase", "checking", CHASE_TOTAL_CHECKING_PDF_TEXT)
+
+    assert result is not None
+    assert result.profile_key == "chase_bank_pdf"
 
 
 def test_pdf_provider_resolution_requires_account_and_statement_signatures() -> None:
