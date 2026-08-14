@@ -78,6 +78,70 @@ def test_builtin_rule_beats_uncategorized(session: Session, workspace: Workspace
     assert decision.is_subscription is True
 
 
+def test_provider_rule_beats_builtin_fallback(session: Session, workspace: Workspace) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(
+        session,
+        workspace.id,
+        _candidate("BEST BUY AUTO PYMT 240812 123456789", -2999),
+        provider_key="chase_bank_csv",
+    )
+
+    assert decision.source is CategorizationSource.PROVIDER_RULE
+    assert decision.category_id == categories["Transfers"].id
+    assert decision.normalized_merchant == "Best Buy Card Payment"
+    assert decision.is_subscription is False
+
+
+def test_workspace_rule_beats_provider_rule(session: Session, workspace: Workspace) -> None:
+    _seed_builtin_categories(session)
+    custom = Category(
+        workspace_id=workspace.id,
+        name="Reviewed Payment",
+        name_key="reviewed payment",
+        kind="expense",
+    )
+    session.add(custom)
+    session.flush()
+    session.add(
+        MerchantRule(
+            workspace_id=workspace.id,
+            merchant_pattern="BEST BUY AUTO PYMT",
+            normalized_merchant="My Reviewed Payment",
+            category=custom,
+        )
+    )
+    session.commit()
+
+    decision = categorize_candidate(
+        session,
+        workspace.id,
+        _candidate("BEST BUY AUTO PYMT"),
+        provider_key="chase_bank_csv",
+    )
+
+    assert decision.source is CategorizationSource.WORKSPACE_RULE
+    assert decision.category_id == custom.id
+    assert decision.normalized_merchant == "My Reviewed Payment"
+
+
+def test_unconfirmed_chase_pattern_remains_uncategorized(
+    session: Session, workspace: Workspace
+) -> None:
+    categories = _seed_builtin_categories(session)
+
+    decision = categorize_candidate(
+        session,
+        workspace.id,
+        _candidate("MICROSOFT EDIPAYMENT 123456789", 500000),
+        provider_key="chase_bank_csv",
+    )
+
+    assert decision.source is CategorizationSource.UNCATEGORIZED
+    assert decision.category_id == categories["Uncategorized"].id
+
+
 def test_no_rule_uses_builtin_uncategorized(session: Session, workspace: Workspace) -> None:
     categories = _seed_builtin_categories(session)
 
