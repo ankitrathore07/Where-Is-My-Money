@@ -23,7 +23,7 @@ from app.imports.normalization import (
     normalize_source_row,
 )
 from app.imports.parser import parse_csv_bytes
-from app.imports.providers.registry import resolve_provider_profile
+from app.imports.providers.registry import parse_provider_pdf, resolve_provider_profile
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import (
     ColumnMapping,
@@ -64,6 +64,12 @@ class ImportStateError(ValueError):
 class UploadResult:
     kind: UploadResultKind
     job: ImportJob
+
+
+@dataclass(frozen=True)
+class ParsedSource:
+    document: CsvDocument
+    provider_key: str | None
 
 
 class ReviewValidationError(ValueError):
@@ -221,7 +227,7 @@ def create_transaction_import(
     saved = store.save(workspace.id, upload, suffix)
     try:
         extracted = extractor.extract(store.read(saved.storage_key), suffix)
-        parse_transaction_statement_text(extracted.text)
+        _parse_pdf_source(account, extracted.text)
         existing = _matching_import(
             session,
             workspace.id,
@@ -300,11 +306,24 @@ def cancel_import(session: Session, store: LocalUploadStore, job: ImportJob) -> 
     return job
 
 
-def load_source_document(
+def _parse_pdf_source(account: Account | None, text: str) -> ParsedSource:
+    provider = None
+    if account is not None:
+        provider = parse_provider_pdf(
+            account.institution_key,
+            account.account_type,
+            text,
+        )
+    if provider is not None:
+        return ParsedSource(provider.document, provider.profile_key)
+    return ParsedSource(parse_transaction_statement_text(text), None)
+
+
+def _load_source(
     store: LocalUploadStore,
     job: ImportJob,
     extractor: TransactionSourceExtractor | None = None,
-) -> CsvDocument:
+) -> ParsedSource:
     uploaded_file = job.uploaded_file
     if uploaded_file is None or uploaded_file.deleted:
         raise ImportStateError("source_missing", "The private source file is missing.")
@@ -314,10 +333,28 @@ def load_source_document(
         raise ImportStateError("source_missing", "The private source file is missing.") from exc
     suffix = Path(uploaded_file.storage_path).suffix.casefold()
     if suffix == ".csv":
-        return parse_csv_bytes(data)
+        document = parse_csv_bytes(data)
+        provider_key = None
+        if job.account is not None:
+            provider_key = resolve_provider_profile(
+                job.account.institution_key,
+                job.account.account_type,
+                suffix,
+                document.headers,
+            ).profile_key
+        return ParsedSource(document, provider_key)
     if suffix == ".pdf" and extractor is not None:
-        return parse_transaction_statement_text(extractor.extract(data, suffix).text)
+        return _parse_pdf_source(job.account, extractor.extract(data, suffix).text)
     raise ImportStateError("source_unreadable", "The private transaction statement cannot be read.")
+
+
+def load_source_document(
+    store: LocalUploadStore,
+    job: ImportJob,
+    extractor: TransactionSourceExtractor | None = None,
+) -> CsvDocument:
+    """Load a stored statement while preserving the public document-only contract."""
+    return _load_source(store, job, extractor).document
 
 
 def save_mapping(
@@ -356,20 +393,6 @@ def _raw_amount(row_values: Mapping[str, str], mapping: ColumnMapping) -> str:
     if debit and credit:
         return f"{debit} / {credit}"
     return f"-{debit}" if debit else credit
-
-
-def _provider_key(job: ImportJob, document: CsvDocument) -> str | None:
-    account = job.account
-    uploaded_file = job.uploaded_file
-    if account is None or uploaded_file is None:
-        return None
-    suffix = Path(uploaded_file.storage_path).suffix.casefold()
-    return resolve_provider_profile(
-        account.institution_key,
-        account.account_type,
-        suffix,
-        document.headers,
-    ).profile_key
 
 
 def _ai_categories(session: Session) -> tuple[Category, ...]:
@@ -438,13 +461,14 @@ def build_review(
         raise ImportStateError(
             "not_ready_for_review", "Prepare the transaction statement before reviewing it."
         )
-    document = load_source_document(store, job, extractor)
+    source = _load_source(store, job, extractor)
+    document = source.document
     if not isinstance(job.column_mapping, dict):
         raise ImportStateError(
             "mapping_missing", "Prepare the transaction statement before reviewing it."
         )
     mapping = mapping_from_json(document.headers, job.column_mapping)
-    provider_key = _provider_key(job, document)
+    provider_key = source.provider_key
     ai_categories = _ai_categories(session) if categorization_graph is not None else ()
     ai_categories_by_name = {category.name: category for category in ai_categories}
     suggestion_cache: dict[str, CategorySuggestion | None] = {}

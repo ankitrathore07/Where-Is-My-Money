@@ -8,11 +8,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.accounts.service import (
+    AccountNotFoundError,
+    get_workspace_account,
+    list_workspace_accounts,
+)
 from app.auth.dependencies import require_current_user
 from app.categories.service import list_accessible_categories
 from app.categorization.sanitization import review_group_key
 from app.core.middleware import require_csrf
-from app.db.models import ImportJob, User, Workspace
+from app.db.models import Account, ImportJob, User, Workspace
 from app.db.session import get_db
 from app.imports.document_parser import TransactionStatementFormatError
 from app.imports.mapping import MappingValidationError
@@ -59,6 +64,7 @@ CATEGORIZATION_SOURCE_LABELS = {
     "uncategorized": "Uncategorized",
     "manual": "Manual",
 }
+TRANSACTION_ACCOUNT_TYPES = frozenset({"checking", "savings", "credit_card"})
 
 
 def _context(
@@ -95,6 +101,39 @@ def _job_or_404(session: Session, workspace: Workspace, import_id: int) -> Impor
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return job
+
+
+def _transaction_accounts(session: Session, workspace_id: int) -> tuple[Account, ...]:
+    return tuple(
+        account
+        for account in list_workspace_accounts(session, workspace_id)
+        if account.account_type in TRANSACTION_ACCOUNT_TYPES
+    )
+
+
+def _upload_page(
+    request: Request,
+    user: User,
+    session: Session,
+    workspace: Workspace,
+    *,
+    error: str | None = None,
+    selected_account_id: int | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="imports/upload.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            accounts=_transaction_accounts(session, workspace.id),
+            error=error,
+            selected_account_id=selected_account_id,
+        ),
+        status_code=status_code,
+    )
 
 
 def _mapping_values(job: ImportJob) -> dict[str, object]:
@@ -199,14 +238,11 @@ def _review_page(
 async def new_import(
     request: Request,
     user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> HTMLResponse:
     """Show the private transaction-statement upload form."""
-    return templates.TemplateResponse(
-        request=request,
-        name="imports/upload.html",
-        context=_context(request, user, workspace),
-    )
+    return _upload_page(request, user, session, workspace)
 
 
 @router.post("/imports", dependencies=[Depends(require_csrf)])
@@ -217,6 +253,7 @@ async def upload_import(
     user: Annotated[User, Depends(require_current_user)],
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
+    account_id: Annotated[int | None, Form()] = None,
 ) -> HTMLResponse:
     """Validate and privately store one CSV/PDF, then start or resume review."""
     filename = statement.filename or ""
@@ -225,14 +262,39 @@ async def upload_import(
         statement.content_type
         and statement.content_type.casefold() not in ALLOWED_CONTENT_TYPES[suffix]
     ):
-        return templates.TemplateResponse(
-            request=request,
-            name="imports/upload.html",
-            context=_context(
-                request, user, workspace, error="Choose a CSV or PDF transaction statement."
-            ),
+        return _upload_page(
+            request,
+            user,
+            session,
+            workspace,
+            error="Choose a CSV or PDF transaction statement.",
+            selected_account_id=account_id,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
+
+    account = None
+    if account_id is not None:
+        try:
+            account = get_workspace_account(session, workspace.id, account_id)
+        except AccountNotFoundError:
+            return _upload_page(
+                request,
+                user,
+                session,
+                workspace,
+                error="Choose an account from this workspace.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if account.account_type not in TRANSACTION_ACCOUNT_TYPES:
+            return _upload_page(
+                request,
+                user,
+                session,
+                workspace,
+                error="Choose a checking, savings, or credit-card account.",
+                selected_account_id=account_id,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
     try:
         result = create_transaction_import(
@@ -244,6 +306,7 @@ async def upload_import(
             statement.content_type or "",
             statement.file,
             retention_choice,
+            account=account,
         )
     except (
         CsvValidationError,
@@ -252,10 +315,13 @@ async def upload_import(
         DocumentExtractionError,
         TransactionStatementFormatError,
     ) as exc:
-        return templates.TemplateResponse(
-            request=request,
-            name="imports/upload.html",
-            context=_context(request, user, workspace, error=str(exc)),
+        return _upload_page(
+            request,
+            user,
+            session,
+            workspace,
+            error=str(exc),
+            selected_account_id=account_id,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
