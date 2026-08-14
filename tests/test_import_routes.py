@@ -4,6 +4,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from app.categorization.ai_graph import build_categorization_graph
+from app.categorization.ai_types import ClassifierResult
 from app.db.models import Category, ImportJob, Transaction, UploadedFile, User, Workspace
 from tests.route_helpers import (
     build_route_test_app,
@@ -14,6 +16,13 @@ from tests.route_helpers import (
 )
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example Market,-12.34\n"
+
+
+class ShoppingClassifier:
+    def classify(self, description: str, allowed_categories: tuple[str, ...]) -> ClassifierResult:
+        assert description == "EXAMPLE MARKET"
+        assert allowed_categories == ("Shopping",)
+        return ClassifierResult("Shopping", False, False)
 
 
 @pytest.fixture
@@ -114,6 +123,50 @@ async def test_valid_upload_maps_and_previews_before_commit(tmp_path: Path) -> N
     assert 'name="category_2"' in review.text
     assert 'name="is_subscription_2"' in review.text
     assert 'name="review_token_2"' in review.text
+
+
+@pytest.mark.anyio
+async def test_review_labels_ai_preselection_as_a_suggestion(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    application.state.categorization_graph = build_categorization_graph(ShoppingClassifier())
+    try:
+        with factory() as session:
+            session.add(Category(workspace_id=None, name="Shopping", kind="expense"))
+            session.commit()
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            mapped = await client.post(
+                uploaded.headers["location"],
+                data={
+                    "csrf_token": token,
+                    "date_column": "Date",
+                    "description_column": "Description",
+                    "amount_mode": "single",
+                    "amount_column": "Amount",
+                    "date_format": "mdy",
+                    "amount_sign": "as_is",
+                },
+                follow_redirects=False,
+            )
+            review = await client.get(mapped.headers["location"])
+    finally:
+        engine.dispose()
+
+    assert review.status_code == 200
+    assert "Shopping" in review.text
+    assert "AI suggestion" in review.text
 
 
 @pytest.mark.anyio

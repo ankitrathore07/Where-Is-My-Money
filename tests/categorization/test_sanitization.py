@@ -26,4 +26,3 @@ def test_sanitizer_removes_controls_and_caps_network_text() -> None:
     assert sanitized.startswith("SHOP ")
     assert len(sanitized) == 160
     assert all(character.isprintable() for character in sanitized)
-

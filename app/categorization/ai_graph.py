@@ -90,4 +90,3 @@ def suggest_category(
     )
     suggestion = result.get("suggestion")
     return suggestion if isinstance(suggestion, CategorySuggestion) else None
-

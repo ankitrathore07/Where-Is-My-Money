@@ -28,4 +28,3 @@ def resolve_provider_profile(
         ):
             return ProviderResolution(profile.key, profile.mapping, True)
     return ProviderResolution("generic_csv", None, False)
-

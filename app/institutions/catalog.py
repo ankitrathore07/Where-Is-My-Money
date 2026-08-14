@@ -31,4 +31,3 @@ def get_institution(key: str) -> InstitutionDefinition | None:
 def institution_options() -> tuple[InstitutionDefinition, ...]:
     """Return known institutions in their stable user-facing order."""
     return INSTITUTIONS
-

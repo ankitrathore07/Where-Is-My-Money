@@ -65,4 +65,3 @@ class OpenAIDescriptionClassifier:
             is_subscription=parsed.is_subscription,
             abstain=parsed.abstain,
         )
-

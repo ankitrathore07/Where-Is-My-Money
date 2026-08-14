@@ -28,6 +28,7 @@
             <optgroup label="Built-in categories">{% for category in category_choices.builtin %}<option value="{{ category.id }}" {% if chosen_category == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</optgroup>
           </select>
           {% if row.category_name %}<span class="badge">{{ row.category_name }}</span>{% endif %}
+          {% if row.categorization_source %}<span class="badge">{{ categorization_source_labels.get(row.categorization_source, "Uncategorized") }}</span>{% endif %}
         </td>
         <td>
           {% set chosen_subscription = edit.is_subscription if edit and edit.is_subscription is not none else row.is_subscription %}

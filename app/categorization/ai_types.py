@@ -23,4 +23,3 @@ class DescriptionClassifier(Protocol):
         description: str,
         allowed_categories: tuple[str, ...],
     ) -> ClassifierResult | None: ...
-

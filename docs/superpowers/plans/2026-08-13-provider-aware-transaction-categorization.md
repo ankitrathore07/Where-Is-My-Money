@@ -47,9 +47,16 @@
 ```python
 def test_institution_catalog_has_stable_known_keys() -> None:
     assert tuple(item.key for item in INSTITUTIONS) == (
-        "chase", "bank_of_america", "citi", "capital_one",
-        "american_express", "discover", "wells_fargo", "other",
+        "chase",
+        "bank_of_america",
+        "citi",
+        "capital_one",
+        "american_express",
+        "discover",
+        "wells_fargo",
+        "other",
     )
+
 
 def test_create_account_persists_catalog_identity(session, workspace) -> None:
     account = create_account(
@@ -81,6 +88,7 @@ Expected: collection or assertion failures because the catalog and `institution_
 class InstitutionDefinition:
     key: str
     label: str
+
 
 INSTITUTIONS = (
     InstitutionDefinition("chase", "Chase"),
@@ -157,13 +165,21 @@ def test_transaction_categories_are_split_by_account_type() -> None:
         {"credit_card"}
     )
 
+
 def test_transaction_import_links_selected_account(session, workspace, tmp_path) -> None:
     account = create_account(
         session, workspace.id, AccountInput("Checking", "checking", "chase", "", False)
     )
     result = create_transaction_import(
-        session, LocalUploadStore(tmp_path), extractor, workspace,
-        "statement.csv", "text/csv", BytesIO(CSV), "retain", account=account,
+        session,
+        LocalUploadStore(tmp_path),
+        extractor,
+        workspace,
+        "statement.csv",
+        "text/csv",
+        BytesIO(CSV),
+        "retain",
+        account=account,
     )
     assert result.job.account_id == account.id
 ```
@@ -244,13 +260,16 @@ Expected: document and import tests pass.
 ```python
 def test_chase_bank_profile_maps_official_export_headers() -> None:
     resolution = resolve_provider_profile(
-        "chase", "checking", ".csv",
+        "chase",
+        "checking",
+        ".csv",
         ("Details", "Posting Date", "Description", "Amount", "Type", "Balance", "Check or Slip #"),
     )
     assert resolution.profile_key == "chase_bank_csv"
     assert resolution.mapping == ColumnMapping(
         "Posting Date", "Description", "single", "Amount", None, None, "mdy", "as_is"
     )
+
 
 def test_unimplemented_institution_uses_generic_mapping() -> None:
     result = resolve_provider_profile("citi", "checking", ".csv", ("Date", "Memo", "Amount"))
@@ -320,6 +339,7 @@ Expected: known Chase CSVs go directly to review; generic CSVs still go to mappi
 )
 def test_sanitizer_removes_identifying_suffixes(raw, expected) -> None:
     assert sanitize_transaction_description(raw) == expected
+
 
 def test_best_buy_auto_payment_is_a_transfer() -> None:
     rule = find_provider_rule("chase_bank_csv", "BEST BUY AUTO PYMT 123456789", -2999)
@@ -405,9 +425,13 @@ def test_graph_sends_only_sanitized_description_and_allowlist() -> None:
         ("ZELLE PAYMENT TO <PAYEE>", ("Housing", "Transfers", "Uncategorized"))
     ]
 
+
 @pytest.mark.parametrize("result", [None, ClassifierResult(None, False, True)])
 def test_graph_abstention_returns_no_suggestion(result) -> None:
-    assert suggest_category(build_categorization_graph(FakeClassifier(result)), "UNKNOWN", CATEGORIES) is None
+    assert (
+        suggest_category(build_categorization_graph(FakeClassifier(result)), "UNKNOWN", CATEGORIES)
+        is None
+    )
 ```
 
 Add cases for unknown category, empty sanitized text, exception, non-boolean schema rejection, and

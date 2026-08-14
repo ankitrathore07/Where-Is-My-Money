@@ -33,9 +33,7 @@ def test_graph_sends_only_sanitized_description_and_allowlist() -> None:
     )
 
     assert result == CategorySuggestion("Transfers", False)
-    assert classifier.calls == [
-        ("ZELLE PAYMENT TO <PAYEE>", CATEGORIES)
-    ]
+    assert classifier.calls == [("ZELLE PAYMENT TO <PAYEE>", CATEGORIES)]
 
 
 @pytest.mark.parametrize(
@@ -101,4 +99,3 @@ def test_sanitized_description_is_capped_before_classifier() -> None:
     )
 
     assert len(classifier.calls[0][0]) == 160
-

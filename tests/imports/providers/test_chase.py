@@ -8,4 +8,3 @@ def test_chase_profiles_are_scoped_to_their_account_types() -> None:
     assert by_key["chase_credit_card_csv"].account_types == frozenset({"credit_card"})
     assert all(profile.institution_key == "chase" for profile in by_key.values())
     assert all(profile.suffixes == frozenset({".csv"}) for profile in by_key.values())
-

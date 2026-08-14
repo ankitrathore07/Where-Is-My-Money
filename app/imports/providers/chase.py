@@ -62,4 +62,3 @@ CHASE_PROVIDER_PROFILES = (
         ),
     ),
 )
-

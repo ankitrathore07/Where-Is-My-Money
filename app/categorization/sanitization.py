@@ -25,4 +25,3 @@ def sanitize_transaction_description(description: str) -> str:
         return "ZELLE PAYMENT FROM <PAYER>"
     redacted = _LONG_IDENTIFIER.sub("<ID>", without_terminal_reference)
     return redacted[:MAX_AI_DESCRIPTION_LENGTH].strip()
-

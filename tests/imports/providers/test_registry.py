@@ -49,9 +49,7 @@ def test_chase_credit_card_profile_maps_export_headers() -> None:
 
 
 def test_unimplemented_institution_uses_generic_mapping() -> None:
-    result = resolve_provider_profile(
-        "citi", "checking", ".csv", ("Date", "Memo", "Amount")
-    )
+    result = resolve_provider_profile("citi", "checking", ".csv", ("Date", "Memo", "Amount"))
 
     assert result.profile_key == "generic_csv"
     assert result.mapping is None
@@ -86,4 +84,3 @@ def test_header_order_and_bom_whitespace_do_not_break_profile_recognition() -> N
 
     assert result.profile_key == "chase_bank_csv"
     assert result.mapping is not None
-

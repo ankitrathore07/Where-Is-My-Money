@@ -24,9 +24,7 @@ def test_provider_aware_migration_round_trips_and_validates_institution_keys(
     engine = create_engine(database_url)
     try:
         inspector = inspect(engine)
-        assert "institution_key" in {
-            column["name"] for column in inspector.get_columns("accounts")
-        }
+        assert "institution_key" in {column["name"] for column in inspector.get_columns("accounts")}
         assert "ck_accounts_institution_key" in {
             constraint["name"] for constraint in inspector.get_check_constraints("accounts")
         }
@@ -36,8 +34,7 @@ def test_provider_aware_migration_round_trips_and_validates_institution_keys(
             )
             connection.execute(
                 text(
-                    "insert into workspaces (name, is_personal, owner_id) "
-                    "values ('Personal', 1, 1)"
+                    "insert into workspaces (name, is_personal, owner_id) values ('Personal', 1, 1)"
                 )
             )
             connection.execute(

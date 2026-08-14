@@ -133,8 +133,8 @@ who creates it so they can share it privately.
 
 1. Sign in, open a workspace, and select **Upload documents**.
 2. Browse or drag and drop up to 10 CSV, PDF, PNG, or JPEG files.
-3. Choose a document category for every file. V1 does not guess or preselect
-   categories.
+3. Choose a document category for every file. Bank and credit-card transaction
+   statements are separate choices and require a compatible workspace account.
 4. Remove unwanted files with **X**, choose one source-retention policy, and
    select **Process**. Queued documents process one at a time, in order.
 5. Follow **Map columns** for transaction CSVs, **Review transactions** for
@@ -158,6 +158,13 @@ detail route; it uses the same review and commit workflow after upload.
 Transaction CSVs must be UTF-8 and no larger than 5 MiB. Map the date and
 description columns. Choose either one signed amount column or separate debit
 and credit columns, then select the CSV's explicit date format.
+
+Accounts store a stable institution choice for parser selection. Tested Chase
+checking/savings and credit-card CSV exports receive predefined mappings and go
+directly to review. Other institutions, legacy accounts, and unrecognized Chase
+headers keep the generic mapping screen until a synthetic tested parser is
+added. The selected account is attached to the import job; the app never guesses
+an institution from file contents.
 
 Transaction PDFs may be up to 10 MiB. Embedded text is read locally; scanned
 PDFs use local Tesseract OCR. Each transaction row must start with a date and
@@ -401,8 +408,22 @@ Automatic categorization uses this order:
 
 1. Keep an explicit manual choice on an existing transaction.
 2. Apply an exact merchant rule saved in the active workspace.
-3. Apply a matching built-in merchant rule with the correct money direction.
-4. Fall back to the built-in **Uncategorized** category.
+3. Apply a confirmed provider rule. Chase card-payment, mortgage-payment, and
+   Zelle patterns are the first supported rules; BEST BUY AUTO PYMT is a
+   **Transfers** payment.
+4. Apply a matching built-in merchant rule with the correct money direction.
+5. Optionally ask a LangGraph/OpenAI classifier for a reviewable suggestion.
+6. Fall back to the built-in **Uncategorized** category.
+
+The optional classifier is off by default. Enable it with
+`OPENAI_CATEGORIZATION_ENABLED=true` and `OPENAI_API_KEY`; the default model is
+configured by `OPENAI_CATEGORIZATION_MODEL=gpt-5.4-nano`, and
+`OPENAI_CATEGORIZATION_TIMEOUT_SECONDS` accepts 1 through 30 seconds. The API
+receives only a locally sanitized description and the built-in category
+allowlist. It does not receive the statement, amount, date, balance, filename,
+account, workspace, or user identity. Failures and abstentions remain
+Uncategorized. Review displays **AI suggestion**, every suggestion is editable,
+and accepting it does not create a future merchant rule.
 
 To create a category, open a workspace, select **Categories**, enter a name, and
 choose expense, income, or transfer. Custom categories belong to that workspace:

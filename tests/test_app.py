@@ -14,9 +14,7 @@ def anyio_backend() -> str:
 
 
 def test_ai_graph_is_absent_when_feature_is_disabled() -> None:
-    application = create_app(
-        Settings(_env_file=None, app_env="test", secret_key="test-secret")
-    )
+    application = create_app(Settings(_env_file=None, app_env="test", secret_key="test-secret"))
 
     assert application.state.categorization_graph is None
 

@@ -51,4 +51,3 @@ def test_chase_rules_do_not_apply_to_generic_or_credit_card_profiles() -> None:
     assert find_provider_rule(None, description, -2999) is None
     assert find_provider_rule("generic_csv", description, -2999) is None
     assert find_provider_rule("chase_credit_card_csv", description, -2999) is None
-

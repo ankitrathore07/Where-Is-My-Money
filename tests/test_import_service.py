@@ -103,12 +103,26 @@ def test_same_csv_can_be_linked_to_two_different_accounts(
     store = LocalUploadStore(tmp_path)
 
     first_result = create_transaction_import(
-        session, store, FakeTransactionExtractor(""), workspace,
-        "checking.csv", "text/csv", BytesIO(CSV_BYTES), "retain", account=first,
+        session,
+        store,
+        FakeTransactionExtractor(""),
+        workspace,
+        "checking.csv",
+        "text/csv",
+        BytesIO(CSV_BYTES),
+        "retain",
+        account=first,
     )
     second_result = create_transaction_import(
-        session, store, FakeTransactionExtractor(""), workspace,
-        "checking.csv", "text/csv", BytesIO(CSV_BYTES), "retain", account=second,
+        session,
+        store,
+        FakeTransactionExtractor(""),
+        workspace,
+        "checking.csv",
+        "text/csv",
+        BytesIO(CSV_BYTES),
+        "retain",
+        account=second,
     )
 
     assert first_result.job.id != second_result.job.id

@@ -49,6 +49,14 @@ ALLOWED_CONTENT_TYPES = {
     },
     ".pdf": {"application/pdf"},
 }
+CATEGORIZATION_SOURCE_LABELS = {
+    "workspace_rule": "Workspace rule",
+    "provider_rule": "Provider rule",
+    "builtin_rule": "Built-in rule",
+    "ai_suggestion": "AI suggestion",
+    "uncategorized": "Uncategorized",
+    "manual": "Manual",
+}
 
 
 def _context(
@@ -139,7 +147,13 @@ def _review_page(
     submitted_edits: tuple[RowEdit, ...] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
-    review = build_review(session, _store(request), job, _extractor(request))
+    review = build_review(
+        session,
+        _store(request),
+        job,
+        _extractor(request),
+        categorization_graph=request.app.state.categorization_graph,
+    )
     secret_key = request.app.state.settings.secret_key or ""
     return templates.TemplateResponse(
         request=request,
@@ -155,6 +169,7 @@ def _review_page(
             submitted=bool(submitted_edits is not None),
             submitted_by_row={edit.row_number: edit for edit in submitted_edits or ()},
             category_choices=list_accessible_categories(session, workspace.id),
+            categorization_source_labels=CATEGORIZATION_SOURCE_LABELS,
             review_tokens={
                 row.row_number: create_review_token(secret_key, job.id, row) for row in review.rows
             },

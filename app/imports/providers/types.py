@@ -20,4 +20,3 @@ class ProviderResolution:
     profile_key: str
     mapping: ColumnMapping | None
     recognized: bool
-

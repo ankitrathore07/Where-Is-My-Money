@@ -64,4 +64,3 @@ def test_openai_adapter_treats_missing_parsed_output_as_abstention() -> None:
     )
 
     assert classifier.classify("UNKNOWN", ("Shopping",)) is None
-

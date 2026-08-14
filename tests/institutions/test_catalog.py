@@ -19,4 +19,3 @@ def test_institution_lookup_rejects_unknown_and_blank_keys() -> None:
     assert get_institution("chase") == INSTITUTIONS[0]
     assert get_institution("missing") is None
     assert get_institution("") is None
-

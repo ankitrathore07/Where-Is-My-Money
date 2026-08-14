@@ -8,8 +8,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.categorization.ai_graph import CompiledCategorizationGraph, suggest_category
+from app.categorization.ai_types import CategorySuggestion
+from app.categorization.sanitization import sanitize_transaction_description
 from app.categorization.service import categorize_candidate
-from app.categorization.types import CategorizationSource
+from app.categorization.types import CategorizationDecision, CategorizationSource
 from app.db.models import Account, Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.document_parser import parse_transaction_statement_text
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
@@ -350,11 +353,78 @@ def _raw_amount(row_values: Mapping[str, str], mapping: ColumnMapping) -> str:
     return f"-{debit}" if debit else credit
 
 
+def _provider_key(job: ImportJob, document: CsvDocument) -> str | None:
+    account = job.account
+    uploaded_file = job.uploaded_file
+    if account is None or uploaded_file is None:
+        return None
+    suffix = Path(uploaded_file.storage_path).suffix.casefold()
+    return resolve_provider_profile(
+        account.institution_key,
+        account.account_type,
+        suffix,
+        document.headers,
+    ).profile_key
+
+
+def _ai_categories(session: Session) -> tuple[Category, ...]:
+    return tuple(
+        session.scalars(
+            select(Category)
+            .where(
+                Category.workspace_id.is_(None),
+                Category.name != "Uncategorized",
+            )
+            .order_by(Category.name)
+        )
+    )
+
+
+def _category_matches_direction(category: Category, amount_cents: int) -> bool:
+    return (
+        category.kind == "transfer"
+        or (category.kind == "expense" and amount_cents < 0)
+        or (category.kind == "income" and amount_cents > 0)
+    )
+
+
+def _apply_ai_suggestion(
+    candidate: NormalizedTransaction,
+    decision: CategorizationDecision,
+    graph: CompiledCategorizationGraph | None,
+    categories_by_name: Mapping[str, Category],
+    suggestion_cache: dict[str, CategorySuggestion | None],
+) -> CategorizationDecision:
+    if graph is None or decision.source is not CategorizationSource.UNCATEGORIZED:
+        return decision
+    cache_key = sanitize_transaction_description(candidate.description)
+    if not cache_key:
+        return decision
+    if cache_key not in suggestion_cache:
+        suggestion_cache[cache_key] = suggest_category(
+            graph,
+            candidate.description,
+            tuple(categories_by_name),
+        )
+    suggestion = suggestion_cache[cache_key]
+    category = categories_by_name.get(suggestion.category_name) if suggestion is not None else None
+    if category is None or not _category_matches_direction(category, candidate.amount_cents):
+        return decision
+    return CategorizationDecision(
+        normalized_merchant=decision.normalized_merchant,
+        category_id=category.id,
+        is_subscription=suggestion.is_subscription,
+        source=CategorizationSource.AI_SUGGESTION,
+    )
+
+
 def build_review(
     session: Session,
     store: LocalUploadStore,
     job: ImportJob,
     extractor: TransactionSourceExtractor | None = None,
+    *,
+    categorization_graph: CompiledCategorizationGraph | None = None,
 ) -> ImportReview:
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
@@ -367,6 +437,10 @@ def build_review(
             "mapping_missing", "Prepare the transaction statement before reviewing it."
         )
     mapping = mapping_from_json(document.headers, job.column_mapping)
+    provider_key = _provider_key(job, document)
+    ai_categories = _ai_categories(session) if categorization_graph is not None else ()
+    ai_categories_by_name = {category.name: category for category in ai_categories}
+    suggestion_cache: dict[str, CategorySuggestion | None] = {}
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
     errors_by_row: dict[int, dict[str, str]] = {}
@@ -389,11 +463,21 @@ def build_review(
         fingerprint = fingerprints_by_row.get(source_row.row_number)
         duplicate = fingerprint in existing if fingerprint is not None else False
         if normalized is not None:
-            decision = (
-                categorize_candidate(session, job.workspace_id, normalized)
-                if not duplicate
-                else None
-            )
+            decision = None
+            if not duplicate:
+                decision = categorize_candidate(
+                    session,
+                    job.workspace_id,
+                    normalized,
+                    provider_key=provider_key,
+                )
+                decision = _apply_ai_suggestion(
+                    normalized,
+                    decision,
+                    categorization_graph,
+                    ai_categories_by_name,
+                    suggestion_cache,
+                )
             category = session.get(Category, decision.category_id) if decision else None
             review_rows.append(
                 ReviewRow(
