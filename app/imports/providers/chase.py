@@ -85,8 +85,14 @@ CHASE_PROVIDER_PROFILES = (
 )
 
 _TRANSACTION_DATE_LINE = re.compile(r"^\s*(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{2}-\d{2})\b")
-_CHASE_BANK_NAME = re.compile(r"\b(?:JPMORGAN\s+CHASE\s+BANK|CHASE)\b", re.IGNORECASE)
-_BANK_STATEMENT = re.compile(r"\b(?:CHECKING|SAVINGS)(?:\s+ACCOUNT)?\s+STATEMENT\b", re.IGNORECASE)
+_CHASE_BANK_NAME = re.compile(r"\bJPMORGAN\s+CHASE\s+BANK\b", re.IGNORECASE)
+_BANK_STATEMENT = re.compile(
+    r"\b(?:"
+    r"(?:CHECKING|SAVINGS)(?:\s+ACCOUNT)?\s+STATEMENT"
+    r"|CHASE(?:\s+[\w&'-]+){0,4}\s+(?:CHECKING|SAVINGS)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _chase_pdf_preamble(text: str) -> str:
