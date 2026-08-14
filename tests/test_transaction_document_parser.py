@@ -87,6 +87,55 @@ def test_pdf_text_parser_infers_unsigned_checking_rows_from_running_balances() -
     ]
 
 
+def test_pdf_text_parser_derives_yearless_dates_from_statement_period() -> None:
+    document = parse_transaction_statement_text(
+        "Fictional Northstar Checking Statement\n"
+        "December 13, 2025 through January 15, 2026\n"
+        "12/15 Payroll +$250.00\n"
+        "01/02 Rent -$100.00"
+    )
+
+    assert [row.values["Date"] for row in document.rows] == ["2025-12-15", "2026-01-02"]
+
+
+def test_pdf_text_parser_accepts_repeated_identical_opening_balances() -> None:
+    document = parse_transaction_statement_text(
+        "Fictional Northstar Checking Statement Transactions\n"
+        "Opening Balance $1,000.00\n"
+        "Beginning Balance $1,000.00\n"
+        "08/01/2026 Rent 100.00 900.00\n"
+        "08/02/2026 Payroll 250.00 1,150.00\n"
+        "08/03/2026 Coffee 10.00 1,140.00"
+    )
+
+    assert [row.values["Amount"] for row in document.rows] == ["-100.00", "250.00", "-10.00"]
+
+
+def test_pdf_text_parser_derives_separated_amounts_from_running_balances() -> None:
+    document = parse_transaction_statement_text(
+        "Fictional Northstar Checking Statement Transactions\n"
+        "DATE DESCRIPTION AMOUNT BALANCE\n"
+        "Opening Balance $1,000.00\n"
+        "08/01/2026 Payroll PPD ID: 9911144442 1,250.00\n"
+        "08/02/2026 Rent -100.00 1,150.00\n"
+        "08/03/2026 Bonus PPD ID: 9911144442 1,350.00"
+    )
+
+    assert [row.values["Amount"] for row in document.rows] == ["250.00", "-100.00", "200.00"]
+
+
+def test_pdf_text_parser_rejects_invalid_separated_amount_marker() -> None:
+    with pytest.raises(TransactionStatementFormatError) as error:
+        parse_transaction_statement_text(
+            "Fictional Northstar Checking Statement Transactions\n"
+            "DATE DESCRIPTION AMOUNT BALANCE\n"
+            "Opening Balance $1,000.00\n"
+            "08/01/2026 Rent +100.00 DEBIT 900.00"
+        )
+
+    assert error.value.code == "ambiguous_transaction_rows"
+
+
 def test_pdf_text_parser_inverts_credit_card_balance_changes() -> None:
     document = parse_transaction_statement_text(
         "Fictional Northstar Credit Card Statement\n"
