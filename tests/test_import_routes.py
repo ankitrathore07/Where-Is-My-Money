@@ -388,6 +388,14 @@ async def test_review_commit_writes_transactions_then_deletes_source(tmp_path: P
             assert 'name="tag_ids_2"' in review.text
             assert "Household Expenditure" in review.text
             assert 'name="billing_period_months_2"' in review.text
+            assert 'class="import-review" data-page-size="50"' in review.text
+            assert "Select matching counterparty" in review.text
+            assert 'data-tag-input list="tag-options-2"' in review.text
+            assert "data-create-tag" in review.text
+            assert 'data-review-group="' in review.text
+            assert "/static/import-review.js" in review.text
+            assert "Description / status" in review.text
+            assert "<th>Status</th>" not in review.text
             with factory() as session:
                 category_id = session.scalar(select(Category.id))
                 assert category_id is not None

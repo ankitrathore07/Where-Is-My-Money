@@ -106,6 +106,7 @@ def categorize_candidate(
             is_subscription=provider_rule.is_subscription,
             source=CategorizationSource.PROVIDER_RULE,
             tag_ids=_builtin_tag_ids(session, provider_rule.tag_names),
+            billing_period_months=provider_rule.billing_period_months,
         )
 
     builtin_rule = find_builtin_rule(key)

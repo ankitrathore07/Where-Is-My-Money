@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -77,6 +77,27 @@ async def tag_create(
         session.rollback()
         return _page(request, user, session, workspace, error=str(exc), status_code=422)
     return RedirectResponse(f"/workspaces/{workspace.id}/tags", status_code=303)
+
+
+@router.post("/tags/inline", dependencies=[Depends(require_csrf)])
+async def tag_create_inline(
+    name: Annotated[str, Form()],
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> JSONResponse:
+    """Create a workspace tag from an explicit import-review action."""
+    del user
+    try:
+        tag = create_custom_tag(session, workspace.id, name)
+        session.commit()
+    except DuplicateTagNameError as exc:
+        session.rollback()
+        return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_409_CONFLICT)
+    except TagValidationError as exc:
+        session.rollback()
+        return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    return JSONResponse({"id": tag.id, "name": tag.name}, status_code=status.HTTP_201_CREATED)
 
 
 @router.post("/tags/{tag_id}", dependencies=[Depends(require_csrf)])

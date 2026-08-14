@@ -74,7 +74,7 @@ def _duplicate_exists(
     excluding_id: int | None = None,
 ) -> bool:
     statement = select(Tag.id).where(
-        Tag.workspace_id == workspace_id,
+        or_(Tag.workspace_id.is_(None), Tag.workspace_id == workspace_id),
         Tag.name_key == name_key,
     )
     if excluding_id is not None:

@@ -152,6 +152,30 @@ def test_compact_chase_export_is_mapped_and_categorized_without_manual_setup(
     assert review.rows[1].tag_ids == (family_support_id,)
 
 
+def test_confirmed_chase_rules_carry_tags_and_cadence_into_review(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    _seed_builtins(session)
+    store = LocalUploadStore(tmp_path)
+    job = _chase_compact_job(
+        session,
+        workspace,
+        store,
+        b"08/02/2026,Remitly United S PAYMENTS 440753768551227 CCD ID: 2452441988,-250.00\n"
+        b"08/01/2026,Klarna*Interview Kic Columbus OH 03/15,-500.00\n",
+    )
+
+    remitly, klarna = build_review(session, store, job).rows
+
+    assert remitly.normalized_merchant == "Remitly"
+    assert remitly.category_name == "Gifts & Donations"
+    assert [session.get(Tag, tag_id).name for tag_id in remitly.tag_ids] == ["Family Support"]
+    assert klarna.normalized_merchant == "Interview Kickstart"
+    assert klarna.category_name == "Education"
+    assert [session.get(Tag, tag_id).name for tag_id in klarna.tag_ids] == ["Installment Plan"]
+    assert klarna.billing_period_months == 1
+
+
 def test_chase_provider_rule_is_visible_without_ai(
     session: Session, workspace: Workspace, tmp_path: Path
 ) -> None:
