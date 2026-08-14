@@ -49,7 +49,8 @@ async def test_member_can_create_edit_and_add_manual_balance(tmp_path: Path) -> 
                     "csrf_token": token,
                     "name": "Everyday Checking",
                     "account_type": "checking",
-                    "institution": "Example CU",
+                    "institution_key": "chase",
+                    "institution": "",
                     "classification": "asset",
                 },
                 follow_redirects=False,
@@ -59,12 +60,15 @@ async def test_member_can_create_edit_and_add_manual_balance(tmp_path: Path) -> 
                 account = session.scalar(select(Account))
                 assert account is not None
                 account_id = account.id
+                assert account.institution_key == "chase"
+                assert account.institution == "Chase"
             edited = await client.post(
                 f"/workspaces/{workspace_id}/accounts/{account_id}",
                 data={
                     "csrf_token": token,
                     "name": "Everyday Checking Updated",
                     "account_type": "checking",
+                    "institution_key": "other",
                     "institution": "Example CU",
                     "classification": "asset",
                 },
@@ -75,6 +79,8 @@ async def test_member_can_create_edit_and_add_manual_balance(tmp_path: Path) -> 
                 updated = session.get(Account, account_id)
                 assert updated is not None
                 assert updated.name == "Everyday Checking Updated"
+                assert updated.institution_key == "other"
+                assert updated.institution == "Example CU"
             balance = await client.post(
                 f"/workspaces/{workspace_id}/accounts/{account_id}/balances",
                 data={
@@ -91,6 +97,45 @@ async def test_member_can_create_edit_and_add_manual_balance(tmp_path: Path) -> 
                 assert saved.balance_cents == 842_050
     finally:
         engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_account_form_lists_known_institutions_and_rejects_unknown_key(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+            form = await client.get(f"/workspaces/{workspace_id}/accounts/new")
+            invalid = await client.post(
+                f"/workspaces/{workspace_id}/accounts",
+                data={
+                    "csrf_token": client.cookies["wimm_csrf"],
+                    "name": "Everyday",
+                    "account_type": "checking",
+                    "institution_key": "not-a-bank",
+                    "institution": "Injected Bank",
+                    "classification": "asset",
+                },
+            )
+            with factory() as session:
+                account_count = session.scalar(select(func.count()).select_from(Account))
+    finally:
+        engine.dispose()
+
+    assert form.status_code == 200
+    assert '<select id="institution-key" name="institution_key"' in form.text
+    assert 'value="chase"' in form.text and ">Chase</option>" in form.text
+    assert '<option value="other">Other / manual mapping</option>' in form.text
+    assert invalid.status_code == 422
+    assert "Choose a known institution." in invalid.text
+    assert account_count == 0
 
 
 @pytest.mark.anyio

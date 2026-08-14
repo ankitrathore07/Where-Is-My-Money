@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -156,11 +157,20 @@ class ImportJob(Base):
 
 class Account(Base):
     __tablename__ = "accounts"
+    __table_args__ = (
+        CheckConstraint(
+            "institution_key IS NULL OR institution_key IN "
+            "('chase', 'bank_of_america', 'citi', 'capital_one', "
+            "'american_express', 'discover', 'wells_fargo', 'other')",
+            name="ck_accounts_institution_key",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     account_type: Mapped[str] = mapped_column(String(50))
+    institution_key: Mapped[str | None] = mapped_column(String(50))
     institution: Mapped[str | None] = mapped_column(String(255))
     is_liability: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

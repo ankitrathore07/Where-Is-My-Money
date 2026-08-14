@@ -49,6 +49,53 @@ def test_create_account_normalizes_text_and_persists_integer_workspace_id(
     assert account.is_liability is False
 
 
+def test_create_account_persists_known_institution_identity_and_catalog_label(
+    session: Session, workspace: Workspace
+) -> None:
+    account = create_account(
+        session,
+        workspace.id,
+        AccountInput("Everyday", "checking", "Ignored free form", False, "chase"),
+    )
+
+    assert account.institution_key == "chase"
+    assert account.institution == "Chase"
+
+
+def test_other_institution_preserves_normalized_free_form_label(
+    session: Session, workspace: Workspace
+) -> None:
+    account = create_account(
+        session,
+        workspace.id,
+        AccountInput("Everyday", "checking", "  Example   Credit Union ", False, "other"),
+    )
+
+    assert account.institution_key == "other"
+    assert account.institution == "Example Credit Union"
+
+
+@pytest.mark.parametrize(
+    ("institution_key", "institution"),
+    [("missing", "Bank"), ("other", "   ")],
+)
+def test_create_account_rejects_invalid_institution_selection(
+    session: Session,
+    workspace: Workspace,
+    institution_key: str,
+    institution: str,
+) -> None:
+    with pytest.raises(AccountValidationError) as error:
+        create_account(
+            session,
+            workspace.id,
+            AccountInput("Everyday", "checking", institution, False, institution_key),
+        )
+
+    assert "institution_key" in error.value.field_errors
+    assert session.query(Account).count() == 0
+
+
 @pytest.mark.parametrize(
     ("values", "field"),
     [

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.accounts.types import ACCOUNT_TYPE_OPTIONS, AccountInput, ManualBalanceInput
 from app.db.models import Account, AccountBalanceSnapshot
+from app.institutions.catalog import get_institution
 
 MAX_BALANCE_CENTS = 9_000_000_000_000_000
 _MAX_ACCOUNT_TEXT_LENGTH = 255
@@ -26,7 +27,7 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _validated_account_values(values: AccountInput) -> tuple[str, str, str, bool]:
+def _validated_account_values(values: AccountInput) -> tuple[str, str, str, bool, str | None]:
     name = _normalized_text(values.name)
     institution = _normalized_text(values.institution)
     field_errors: dict[str, str] = {}
@@ -39,6 +40,17 @@ def _validated_account_values(values: AccountInput) -> tuple[str, str, str, bool
     if len(institution) > _MAX_ACCOUNT_TEXT_LENGTH:
         field_errors["institution"] = "Institution must be 255 characters or fewer."
 
+    institution_key = values.institution_key
+    if institution_key is not None:
+        definition = get_institution(institution_key)
+        if definition is None:
+            field_errors["institution_key"] = "Choose a known institution."
+        elif institution_key == "other":
+            if not institution:
+                field_errors["institution_key"] = "Enter the institution name for Other."
+        else:
+            institution = definition.label
+
     option = _ACCOUNT_TYPES.get(values.account_type)
     if option is None:
         field_errors["account_type"] = "Choose an account type."
@@ -50,16 +62,19 @@ def _validated_account_values(values: AccountInput) -> tuple[str, str, str, bool
 
     if field_errors:
         raise AccountValidationError(field_errors)
-    return name, values.account_type, institution, values.is_liability
+    return name, values.account_type, institution, values.is_liability, institution_key
 
 
 def create_account(session: Session, workspace_id: int, values: AccountInput) -> Account:
     """Validate, flush, and return a new account belonging to one workspace."""
-    name, account_type, institution, is_liability = _validated_account_values(values)
+    name, account_type, institution, is_liability, institution_key = _validated_account_values(
+        values
+    )
     account = Account(
         workspace_id=workspace_id,
         name=name,
         account_type=account_type,
+        institution_key=institution_key,
         institution=institution,
         is_liability=is_liability,
     )
@@ -86,9 +101,12 @@ def update_account(
 ) -> Account:
     """Validate and replace mutable account details in the active workspace."""
     account = get_workspace_account(session, workspace_id, account_id)
-    name, account_type, institution, is_liability = _validated_account_values(values)
+    name, account_type, institution, is_liability, institution_key = _validated_account_values(
+        values
+    )
     account.name = name
     account.account_type = account_type
+    account.institution_key = institution_key
     account.institution = institution
     account.is_liability = is_liability
     session.flush()

@@ -23,6 +23,7 @@ from app.auth.dependencies import require_current_user
 from app.core.middleware import require_csrf
 from app.db.models import Account, User, Workspace
 from app.db.session import get_db
+from app.institutions.catalog import institution_options
 from app.workspaces.dependencies import require_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["accounts"])
@@ -50,12 +51,14 @@ def _account_values(account: Account | None = None) -> dict[str, str]:
         return {
             "name": "",
             "account_type": "checking",
+            "institution_key": "chase",
             "institution": "",
             "classification": "asset",
         }
     return {
         "name": account.name,
         "account_type": account.account_type,
+        "institution_key": account.institution_key or "other",
         "institution": account.institution or "",
         "classification": "liability" if account.is_liability else "asset",
     }
@@ -82,6 +85,7 @@ def _render_account_form(
             values=values or _account_values(account),
             field_errors=field_errors or {},
             account_type_options=ACCOUNT_TYPE_OPTIONS,
+            institution_options=institution_options(),
         ),
         status_code=status_code,
     )
@@ -128,15 +132,17 @@ async def account_create(
     request: Request,
     name: Annotated[str, Form()],
     account_type: Annotated[str, Form()],
-    institution: Annotated[str, Form()],
     classification: Annotated[str, Form()],
     user: Annotated[User, Depends(require_current_user)],
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
+    institution_key: Annotated[str | None, Form()] = None,
+    institution: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     values = {
         "name": name,
         "account_type": account_type,
+        "institution_key": institution_key or "other",
         "institution": institution,
         "classification": classification,
     }
@@ -145,7 +151,11 @@ async def account_create(
             session,
             workspace.id,
             AccountInput(
-                name, account_type, institution, _classification_is_liability(classification)
+                name,
+                account_type,
+                institution,
+                _classification_is_liability(classification),
+                institution_key or "other",
             ),
         )
         session.commit()
@@ -185,15 +195,17 @@ async def account_update(
     account_id: int,
     name: Annotated[str, Form()],
     account_type: Annotated[str, Form()],
-    institution: Annotated[str, Form()],
     classification: Annotated[str, Form()],
     user: Annotated[User, Depends(require_current_user)],
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
+    institution_key: Annotated[str | None, Form()] = None,
+    institution: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     values = {
         "name": name,
         "account_type": account_type,
+        "institution_key": institution_key or "other",
         "institution": institution,
         "classification": classification,
     }
@@ -204,7 +216,11 @@ async def account_update(
             workspace.id,
             account_id,
             AccountInput(
-                name, account_type, institution, _classification_is_liability(classification)
+                name,
+                account_type,
+                institution,
+                _classification_is_liability(classification),
+                institution_key or "other",
             ),
         )
         session.commit()
