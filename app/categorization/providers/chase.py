@@ -22,20 +22,31 @@ CHASE_BANK_RULES = (
     ProviderMerchantRule("CAPITAL ONE MOBILE PMT", "Capital One Payment", "Transfers"),
     ProviderMerchantRule("BEST BUY AUTO PYMT", "Best Buy Card Payment", "Transfers"),
     ProviderMerchantRule("BEST BUY AUTO PAYMENT", "Best Buy Card Payment", "Transfers"),
+    ProviderMerchantRule("BEST BUY PAYMENT", "Best Buy Card Payment", "Transfers"),
     ProviderMerchantRule("NEWREZ-SHELLPOINT ACH PMT", "Newrez Mortgage", "Housing"),
+    ProviderMerchantRule("NEWREZ-SHELLPOIN ACH PMT", "Newrez Mortgage", "Housing"),
     ProviderMerchantRule(
-        "ZELLE PAYMENT TO <PAYEE>",
-        "Zelle Transfer",
-        "Transfers",
-        amount_direction="expense",
+        "MICROSOFT EDIPAYMENT",
+        "Microsoft Income",
+        "Income",
+        amount_direction="income",
     ),
     ProviderMerchantRule(
-        "ZELLE PAYMENT FROM <PAYER>",
-        "Zelle Transfer",
-        "Transfers",
+        "MICROSOFT CTX",
+        "Microsoft Income",
+        "Income",
+        amount_direction="income",
+    ),
+    ProviderMerchantRule("XOOM DEBIT", "Xoom", "Gifts & Donations"),
+    ProviderMerchantRule(
+        "REMOTE ONLINE DEPOSIT",
+        "Remote Online Deposit",
+        "Income",
         amount_direction="income",
     ),
 )
+
+CHASE_BANK_PROFILE_KEYS = frozenset({"chase_bank_csv", "chase_bank_compact_csv"})
 
 
 def _direction_matches(rule: ProviderMerchantRule, amount_cents: int) -> bool:
@@ -52,7 +63,7 @@ def find_provider_rule(
     amount_cents: int,
 ) -> ProviderMerchantRule | None:
     """Return an anchored confirmed rule for one tested provider profile."""
-    if provider_key != "chase_bank_csv":
+    if provider_key not in CHASE_BANK_PROFILE_KEYS:
         return None
     sanitized = sanitize_transaction_description(description)
     return next(

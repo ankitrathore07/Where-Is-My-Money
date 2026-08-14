@@ -25,6 +25,21 @@ def test_chase_bank_profile_maps_export_headers() -> None:
     )
 
 
+def test_chase_compact_bank_profile_maps_attached_export_headers() -> None:
+    result = resolve_provider_profile(
+        "chase",
+        "checking",
+        ".csv",
+        ("Date", "Description", "Amount"),
+    )
+
+    assert result.profile_key == "chase_bank_compact_csv"
+    assert result.recognized is True
+    assert result.mapping == ColumnMapping(
+        "Date", "Description", "single", "Amount", None, None, "mdy", "as_is"
+    )
+
+
 def test_chase_credit_card_profile_maps_export_headers() -> None:
     result = resolve_provider_profile(
         "chase",

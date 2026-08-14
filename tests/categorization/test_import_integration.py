@@ -21,6 +21,7 @@ from app.imports.types import RowEdit
 
 CSV = b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n"
 CHASE_HEADER = b"Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n"
+CHASE_COMPACT_HEADER = b"Date,Description,Amount\n"
 
 
 class RecordingClassifier:
@@ -92,6 +93,59 @@ def _chase_job(
         "retain",
         account=account,
     ).job
+
+
+def _chase_compact_job(
+    session: Session,
+    workspace: Workspace,
+    store: LocalUploadStore,
+    rows: bytes,
+):
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+    return create_csv_import(
+        session,
+        store,
+        workspace,
+        BytesIO(CHASE_COMPACT_HEADER + rows),
+        "retain",
+        account=account,
+    ).job
+
+
+def test_compact_chase_export_is_mapped_and_categorized_without_manual_setup(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    _seed_builtins(session)
+    store = LocalUploadStore(tmp_path)
+    job = _chase_compact_job(
+        session,
+        workspace,
+        store,
+        b"08/03/2026,MICROSOFT EDIPAYMENT PPD ID: 9911144442,3101.11\n"
+        b"08/02/2026,XOOM DEBIT OID 30178544 WEB ID: 1770510487,-500.00\n"
+        b"08/01/2026,REMOTE ONLINE DEPOSIT # 1,460.54\n"
+        b"07/31/2026,Zelle payment to Sample Payee 30148050922,-100.00\n",
+    )
+
+    review = build_review(session, store, job)
+
+    assert job.column_mapping is not None
+    assert job.column_mapping["date_column"] == "Date"
+    assert [(row.category_name, row.categorization_source) for row in review.rows] == [
+        ("Income", "provider_rule"),
+        ("Gifts & Donations", "provider_rule"),
+        ("Income", "provider_rule"),
+        ("Uncategorized", "uncategorized"),
+    ]
 
 
 def test_chase_provider_rule_is_visible_without_ai(
