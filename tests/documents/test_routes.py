@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
 from app.db.models import (
+    Account,
     AccountStatementImport,
     ImportJob,
     Payslip,
@@ -73,6 +74,106 @@ async def test_document_upload_requires_csrf_before_storage(tmp_path: Path) -> N
         engine.dispose()
     assert response.status_code == 403
     assert list(tmp_path.rglob("*.csv")) == []
+
+
+@pytest.mark.anyio
+async def test_bank_transaction_upload_requires_a_compatible_workspace_account(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                card = Account(
+                    workspace_id=workspace_id,
+                    name="Card",
+                    account_type="credit_card",
+                    institution_key="chase",
+                    institution="Chase",
+                    is_liability=True,
+                )
+                session.add(card)
+                session.commit()
+                card_id = card.id
+            missing = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={
+                    "category_key": "bank_transaction_statement",
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                },
+                files={"document": ("checking.csv", CSV_BYTES, "text/csv")},
+            )
+            mismatched = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={
+                    "category_key": "bank_transaction_statement",
+                    "account_id": str(card_id),
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                },
+                files={"document": ("checking.csv", CSV_BYTES, "text/csv")},
+            )
+        with factory() as session:
+            assert session.scalar(select(func.count(ImportJob.id))) == 0
+    finally:
+        engine.dispose()
+
+    assert missing.status_code == 400
+    assert missing.json()["code"] == "account_required"
+    assert mismatched.status_code == 400
+    assert mismatched.json()["code"] == "account_type_mismatch"
+    assert list(tmp_path.rglob("*.csv")) == []
+
+
+@pytest.mark.anyio
+async def test_bank_transaction_upload_links_the_selected_workspace_account(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace_id = session.scalar(select(Workspace.id))
+                assert workspace_id is not None
+                checking = Account(
+                    workspace_id=workspace_id,
+                    name="Checking",
+                    account_type="checking",
+                    institution_key="chase",
+                    institution="Chase",
+                    is_liability=False,
+                )
+                session.add(checking)
+                session.commit()
+                checking_id = checking.id
+            response = await client.post(
+                f"/workspaces/{workspace_id}/document-uploads",
+                data={
+                    "category_key": "bank_transaction_statement",
+                    "account_id": str(checking_id),
+                    "retention_choice": "retain",
+                    "csrf_token": token,
+                },
+                files={"document": ("checking.csv", CSV_BYTES, "text/csv")},
+            )
+        with factory() as session:
+            job = session.scalar(select(ImportJob))
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert job is not None and job.account_id == checking_id
 
 
 @pytest.mark.anyio

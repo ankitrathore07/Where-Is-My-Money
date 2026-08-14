@@ -7,7 +7,7 @@
     <p class="eyebrow">{{ workspace.name }}</p>
     <h1>Upload documents</h1>
     <p>Add up to 10 files, choose every document category manually, then review the queue before processing.</p>
-    <p class="muted">Category suggestions using AI or machine learning are planned for a future version.</p>
+    <p class="muted">Known statement formats use provider rules first. Optional AI suggestions use only a sanitized description and still require review.</p>
   </section>
 
   <form id="document-upload-form" class="panel document-upload" novalidate>
@@ -23,7 +23,7 @@
 
     <div class="table-wrap document-queue-wrap" hidden>
       <table class="document-queue">
-        <thead><tr><th scope="col">File</th><th scope="col">Document category</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+        <thead><tr><th scope="col">File</th><th scope="col">Document category</th><th scope="col">Account</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
         <tbody id="document-queue-body"></tbody>
       </table>
     </div>

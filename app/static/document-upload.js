@@ -9,16 +9,34 @@
   const categoryByKey = new Map(
     config.categories.map((category) => [category.key, category]),
   );
+  categoryByKey.set("transaction_statement", {
+    key: "transaction_statement",
+    label: "Bank or credit-card transaction statement",
+    supported: true,
+    accepted_suffixes: [".csv", ".pdf"],
+    max_bytes: Math.max(
+      ...config.categories
+        .filter((category) => category.key.endsWith("transaction_statement"))
+        .map((category) => category.max_bytes),
+    ),
+    compatible_account_types: [],
+  });
+  const accountById = new Map(
+    config.accounts.map((account) => [String(account.id), account]),
+  );
   /**
    * @typedef {object} QueueItem
    * @property {string} id
    * @property {string} signature
    * @property {File | null} file
    * @property {string} categoryKey
+   * @property {string} accountId
    * @property {string} state
    * @property {string} message
    * @property {HTMLTableRowElement | null} row
    * @property {HTMLSelectElement | null} select
+   * @property {HTMLSelectElement | null} accountSelect
+   * @property {HTMLTableCellElement | null} accountCell
    * @property {HTMLSpanElement | null} status
    * @property {HTMLTableCellElement | null} actionCell
    * @property {HTMLButtonElement | null} remove
@@ -82,6 +100,19 @@
         message: `This file exceeds the ${Math.floor(category.max_bytes / 1048576)} MiB limit.`,
       };
     }
+    const compatibleTypes = category.compatible_account_types || [];
+    if (compatibleTypes.length) {
+      if (!item.accountId) {
+        return { state: "needs-account", message: "Choose an account." };
+      }
+      const account = accountById.get(item.accountId);
+      if (!account || !compatibleTypes.includes(account.account_type)) {
+        return {
+          state: "invalid",
+          message: "Choose an account that matches this statement type.",
+        };
+      }
+    }
     return { state: "ready", message: "Ready to process." };
   }
 
@@ -140,6 +171,7 @@
 
   function setPendingControls(item, disabled) {
     item.select.disabled = disabled;
+    item.accountSelect.disabled = disabled;
     item.remove.disabled = disabled;
     item.row.setAttribute("aria-busy", disabled ? "true" : "false");
   }
@@ -170,6 +202,7 @@
     setPendingControls(item, false);
     setItemState(item, "complete", message || "Ready for review.");
     item.select.disabled = true;
+    item.accountSelect.disabled = true;
     const link = document.createElement("a");
     link.href = href;
     link.textContent = label;
@@ -192,6 +225,7 @@
     const body = new FormData();
     body.append("document", item.file, item.file.name);
     body.append("category_key", item.categoryKey);
+    if (item.accountId) body.append("account_id", item.accountId);
     body.append("retention_choice", retentionChoice);
     body.append("csrf_token", csrfToken.value);
 
@@ -307,6 +341,35 @@
     refreshBatch();
   }
 
+  function populateAccountOptions(item) {
+    const category = categoryByKey.get(item.categoryKey);
+    const compatibleTypes = category?.compatible_account_types || [];
+    const matchingAccounts = config.accounts.filter((account) =>
+      compatibleTypes.includes(account.account_type),
+    );
+    item.accountCell.replaceChildren();
+    item.accountSelect.replaceChildren();
+    const prompt = document.createElement("option");
+    prompt.value = "";
+    prompt.textContent = matchingAccounts.length
+      ? "Choose an account"
+      : "No compatible accounts";
+    item.accountSelect.append(prompt);
+    for (const account of matchingAccounts) {
+      const option = document.createElement("option");
+      option.value = String(account.id);
+      option.textContent = account.institution
+        ? `${account.name} · ${account.institution}`
+        : account.name;
+      item.accountSelect.append(option);
+    }
+    if (compatibleTypes.length) item.accountCell.append(item.accountSelect);
+    if (!matchingAccounts.some((account) => String(account.id) === item.accountId)) {
+      item.accountId = matchingAccounts.length === 1 ? String(matchingAccounts[0].id) : "";
+    }
+    item.accountSelect.value = item.accountId;
+  }
+
   function removeItem(id) {
     const item = queue.get(id);
     if (!item) return;
@@ -350,12 +413,27 @@
       option.textContent = category.label;
       select.append(option);
     }
+    const legacyOption = document.createElement("option");
+    legacyOption.value = "transaction_statement";
+    legacyOption.textContent = "Bank or credit-card transaction statement";
+    legacyOption.hidden = true;
+    select.append(legacyOption);
     select.addEventListener("change", () => {
       item.categoryKey = select.value;
+      populateAccountOptions(item);
       restoreRemoveAction(item);
       refreshItem(item);
     });
     categoryCell.append(select);
+
+    const accountCell = document.createElement("td");
+    const accountSelect = document.createElement("select");
+    accountSelect.setAttribute("aria-label", `Account for ${item.file.name}`);
+    accountSelect.addEventListener("change", () => {
+      item.accountId = accountSelect.value;
+      restoreRemoveAction(item);
+      refreshItem(item);
+    });
 
     const statusCell = document.createElement("td");
     const statusText = document.createElement("span");
@@ -371,13 +449,16 @@
     remove.addEventListener("click", () => removeItem(item.id));
     actionCell.append(remove);
 
-    row.append(fileCell, categoryCell, statusCell, actionCell);
+    row.append(fileCell, categoryCell, accountCell, statusCell, actionCell);
     item.row = row;
     item.select = select;
+    item.accountSelect = accountSelect;
+    item.accountCell = accountCell;
     item.status = statusText;
     item.actionCell = actionCell;
     item.remove = remove;
     queueBody.append(row);
+    populateAccountOptions(item);
     refreshItem(item);
   }
 
@@ -403,6 +484,7 @@
         signature,
         file,
         categoryKey: "",
+        accountId: "",
         state: "needs-category",
         message: "Choose a category.",
         row: null,

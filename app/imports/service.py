@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationSource
-from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
+from app.db.models import Account, Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.document_parser import parse_transaction_statement_text
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
 from app.imports.mapping import mapping_from_json, validate_mapping
@@ -89,12 +89,23 @@ def get_workspace_import(session: Session, workspace_id: int, import_id: int) ->
     )
 
 
-def _matching_import(session: Session, workspace_id: int, checksum: str) -> ImportJob | None:
+def _matching_import(
+    session: Session,
+    workspace_id: int,
+    checksum: str,
+    account_id: int | None = None,
+) -> ImportJob | None:
+    account_clause = (
+        ImportJob.account_id == account_id
+        if account_id is not None
+        else ImportJob.account_id.is_(None)
+    )
     return session.scalar(
         select(ImportJob)
         .where(
             ImportJob.workspace_id == workspace_id,
             ImportJob.source_checksum == checksum,
+            account_clause,
             ImportJob.status.in_(ACTIVE_STATUSES | COMMITTED_STATUSES),
         )
         .order_by(ImportJob.id.desc())
@@ -107,6 +118,8 @@ def create_csv_import(
     workspace: Workspace,
     upload: BinaryIO,
     retention_choice: str,
+    *,
+    account: Account | None = None,
 ) -> UploadResult:
     """Validate a private CSV source and create or resume its import job."""
     if retention_choice not in RETENTION_CHOICES:
@@ -117,7 +130,12 @@ def create_csv_import(
     saved = store.save(workspace.id, upload)
     try:
         parse_csv_bytes(store.read(saved.storage_key))
-        existing = _matching_import(session, workspace.id, saved.checksum)
+        existing = _matching_import(
+            session,
+            workspace.id,
+            saved.checksum,
+            account.id if account is not None else None,
+        )
         if existing is not None:
             store.delete(saved.storage_key)
             kind: UploadResultKind = (
@@ -137,6 +155,7 @@ def create_csv_import(
         job = ImportJob(
             workspace_id=workspace.id,
             uploaded_file=uploaded_file,
+            account=account,
             status="awaiting_mapping",
             source_checksum=saved.checksum,
         )
@@ -158,11 +177,20 @@ def create_transaction_import(
     media_type: str,
     upload: BinaryIO,
     retention_choice: str,
+    *,
+    account: Account | None = None,
 ) -> UploadResult:
     """Create a reviewed CSV or locally extracted PDF transaction import."""
     suffix = Path(filename).suffix.casefold()
     if suffix == ".csv":
-        return create_csv_import(session, store, workspace, upload, retention_choice)
+        return create_csv_import(
+            session,
+            store,
+            workspace,
+            upload,
+            retention_choice,
+            account=account,
+        )
     if suffix != ".pdf" or media_type.casefold() != "application/pdf":
         raise ImportStateError(
             "unsupported_file_type", "Choose a CSV or PDF transaction statement."
@@ -176,7 +204,12 @@ def create_transaction_import(
     try:
         extracted = extractor.extract(store.read(saved.storage_key), suffix)
         parse_transaction_statement_text(extracted.text)
-        existing = _matching_import(session, workspace.id, saved.checksum)
+        existing = _matching_import(
+            session,
+            workspace.id,
+            saved.checksum,
+            account.id if account is not None else None,
+        )
         if existing is not None:
             store.delete(saved.storage_key)
             kind: UploadResultKind = (
@@ -206,6 +239,7 @@ def create_transaction_import(
         job = ImportJob(
             workspace_id=workspace.id,
             uploaded_file=uploaded_file,
+            account=account,
             status="reviewing",
             column_mapping=mapping.to_json(),
             source_checksum=saved.checksum,

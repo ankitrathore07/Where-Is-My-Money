@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import app.imports.service as import_service
 from app.db.models import (
+    Account,
     Category,
     ImportJob,
     MerchantRule,
@@ -49,6 +50,69 @@ class FakeTransactionExtractor:
 class FailingDeleteStore(LocalUploadStore):
     def delete(self, storage_key: str) -> None:
         raise UploadStorageError("delete_failed", "Synthetic delete failure")
+
+
+def test_account_linked_csv_import_persists_the_selected_account(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+
+    result = create_transaction_import(
+        session,
+        LocalUploadStore(tmp_path),
+        FakeTransactionExtractor(""),
+        workspace,
+        "checking.csv",
+        "text/csv",
+        BytesIO(CSV_BYTES),
+        "retain",
+        account=account,
+    )
+
+    assert result.job.account_id == account.id
+
+
+def test_same_csv_can_be_linked_to_two_different_accounts(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    first = Account(
+        workspace_id=workspace.id,
+        name="First Checking",
+        account_type="checking",
+        institution="Bank",
+        is_liability=False,
+    )
+    second = Account(
+        workspace_id=workspace.id,
+        name="Second Checking",
+        account_type="checking",
+        institution="Bank",
+        is_liability=False,
+    )
+    session.add_all([first, second])
+    session.flush()
+    store = LocalUploadStore(tmp_path)
+
+    first_result = create_transaction_import(
+        session, store, FakeTransactionExtractor(""), workspace,
+        "checking.csv", "text/csv", BytesIO(CSV_BYTES), "retain", account=first,
+    )
+    second_result = create_transaction_import(
+        session, store, FakeTransactionExtractor(""), workspace,
+        "checking.csv", "text/csv", BytesIO(CSV_BYTES), "retain", account=second,
+    )
+
+    assert first_result.job.id != second_result.job.id
+    assert second_result.job.account_id == second.id
 
 
 def test_pdf_transaction_statement_enters_existing_review_flow(

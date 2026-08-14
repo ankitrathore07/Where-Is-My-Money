@@ -7,11 +7,13 @@ from app.documents.catalog import (
     MAX_QUEUE_FILES,
     DocumentUploadValidationError,
     client_catalog,
+    compatible_account_types,
     validate_processable_upload,
 )
 
 EXPECTED_KEYS = (
-    "transaction_statement",
+    "bank_transaction_statement",
+    "credit_card_transaction_statement",
     "payslip",
     "bank_balance_statement",
     "credit_card_balance_statement",
@@ -27,7 +29,8 @@ EXPECTED_KEYS = (
 def test_catalog_exposes_stable_manual_categories_and_supported_processors() -> None:
     assert tuple(category.key for category in DOCUMENT_CATEGORIES) == EXPECTED_KEYS
     assert {category.key for category in DOCUMENT_CATEGORIES if category.processor} == {
-        "transaction_statement",
+        "bank_transaction_statement",
+        "credit_card_transaction_statement",
         "payslip",
         "bank_balance_statement",
         "credit_card_balance_statement",
@@ -41,17 +44,34 @@ def test_catalog_exposes_stable_manual_categories_and_supported_processors() -> 
     assert MAX_QUEUE_FILES == 10
 
 
+def test_transaction_categories_have_distinct_account_compatibility() -> None:
+    assert compatible_account_types("bank_transaction_statement") == frozenset(
+        {"checking", "savings"}
+    )
+    assert compatible_account_types("credit_card_transaction_statement") == frozenset(
+        {"credit_card"}
+    )
+    assert compatible_account_types("payslip") == frozenset()
+
+
 @pytest.mark.parametrize(
     "key,filename,content_type,processor",
     [
-        ("transaction_statement", "checking.csv", "text/csv", "transaction_import"),
+        ("bank_transaction_statement", "checking.csv", "text/csv", "transaction_import"),
         (
-            "transaction_statement",
+            "bank_transaction_statement",
             "checking.csv",
             "application/octet-stream",
             "transaction_import",
         ),
-        ("transaction_statement", "checking.pdf", "application/pdf", "transaction_import"),
+        ("bank_transaction_statement", "checking.pdf", "application/pdf", "transaction_import"),
+        (
+            "credit_card_transaction_statement",
+            "card.csv",
+            "text/csv",
+            "transaction_import",
+        ),
+        ("transaction_statement", "legacy.csv", "text/csv", "transaction_import"),
         ("payslip", "pay.pdf", "application/pdf", "payslip"),
         ("payslip", "pay.jpeg", "image/jpeg", "payslip"),
         ("retirement_401k_statement", "plan.csv", "text/csv", "statement_balance"),
@@ -74,7 +94,12 @@ def test_processable_metadata_returns_the_selected_category(
     [
         ("missing", "checking.csv", "text/csv", "unknown_category"),
         ("unlisted", "account.pdf", "application/pdf", "processor_unavailable"),
-        ("transaction_statement", "checking.png", "image/png", "category_format_mismatch"),
+        (
+            "bank_transaction_statement",
+            "checking.png",
+            "image/png",
+            "category_format_mismatch",
+        ),
         ("payslip", "pay.pdf", "text/plain", "category_format_mismatch"),
     ],
 )
@@ -94,15 +119,17 @@ def test_client_catalog_contains_no_classifier_or_server_only_objects() -> None:
         max_statement_bytes=12_000_000,
     )
     assert payload[0] == {
-        "key": "transaction_statement",
-        "label": "Bank or credit-card transaction statement",
+        "key": "bank_transaction_statement",
+        "label": "Bank transaction statement",
         "supported": True,
         "accepted_suffixes": [".csv", ".pdf"],
         "max_bytes": 12_000_000,
+        "compatible_account_types": ["checking", "savings"],
     }
-    assert payload[2]["supported"] is True
-    assert payload[2]["accepted_suffixes"] == [".csv", ".jpeg", ".jpg", ".pdf", ".png"]
-    assert payload[2]["max_bytes"] == 12_000_000
+    assert payload[1]["compatible_account_types"] == ["credit_card"]
+    assert payload[3]["supported"] is True
+    assert payload[3]["accepted_suffixes"] == [".csv", ".jpeg", ".jpg", ".pdf", ".png"]
+    assert payload[3]["max_bytes"] == 12_000_000
     assert "suggestion" not in payload[0]
     assert "confidence" not in payload[0]
 

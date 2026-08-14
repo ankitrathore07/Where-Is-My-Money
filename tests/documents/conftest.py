@@ -9,7 +9,7 @@ import uvicorn
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 from sqlalchemy import select
 
-from app.db.models import Category, Workspace
+from app.db.models import Account, Category, Workspace
 from app.payslips.extraction import ExtractedText
 from tests.route_helpers import build_route_test_app
 
@@ -125,5 +125,16 @@ def signed_in_upload_page(
     with factory() as session:
         workspace_id = session.scalar(select(Workspace.id))
         assert workspace_id is not None
+        session.add(
+            Account(
+                workspace_id=workspace_id,
+                name="Chase Checking",
+                account_type="checking",
+                institution_key="chase",
+                institution="Chase",
+                is_liability=False,
+            )
+        )
+        session.commit()
     page.goto(f"{base_url}/workspaces/{workspace_id}/documents/new")
     return page, workspace_id
