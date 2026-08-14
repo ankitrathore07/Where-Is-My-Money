@@ -11,6 +11,7 @@ class DocumentCategory:
     label: str
     processor: DocumentProcessorKey | None
     content_types_by_suffix: Mapping[str, frozenset[str]]
+    compatible_account_types: frozenset[str] = frozenset()
 
     @property
     def accepted_suffixes(self) -> frozenset[str]:

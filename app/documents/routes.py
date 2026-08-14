@@ -9,14 +9,20 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app.accounts.service import (
+    AccountNotFoundError,
+    get_workspace_account,
+    list_workspace_accounts,
+)
 from app.auth.dependencies import require_current_user
 from app.core.middleware import require_csrf
-from app.db.models import User, Workspace
+from app.db.models import Account, User, Workspace
 from app.db.session import get_db
 from app.documents.catalog import (
     MAX_QUEUE_FILES,
     DocumentUploadValidationError,
     client_catalog,
+    compatible_account_types,
     validate_processable_upload,
 )
 from app.documents.types import DocumentProcessResult
@@ -49,6 +55,7 @@ STATEMENT_CATEGORY_BY_DOCUMENT_CATEGORY = {
 async def new_document_upload(
     request: Request,
     user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> HTMLResponse:
     settings = request.app.state.settings
@@ -60,6 +67,15 @@ async def new_document_upload(
             max_payslip_bytes=settings.max_payslip_upload_bytes,
             max_statement_bytes=settings.max_statement_upload_bytes,
         ),
+        "accounts": [
+            {
+                "id": account.id,
+                "name": account.name,
+                "institution": account.institution or "",
+                "account_type": account.account_type,
+            }
+            for account in list_workspace_accounts(session, workspace.id)
+        ],
     }
     return templates.TemplateResponse(
         request=request,
@@ -97,6 +113,7 @@ def _process_transaction(
     workspace: Workspace,
     document: UploadFile,
     retention_choice: str,
+    account: Account | None,
 ) -> DocumentProcessResult:
     result = create_transaction_import(
         session,
@@ -107,6 +124,7 @@ def _process_transaction(
         document.content_type or "",
         document.file,
         retention_choice,
+        account=account,
     )
     if result.kind == "already_committed":
         destination = f"/workspaces/{workspace.id}/transactions?already_imported=1"
@@ -183,6 +201,7 @@ def process_document_upload(
     user: Annotated[User, Depends(require_current_user)],
     session: Annotated[Session, Depends(get_db)],
     workspace: Annotated[Workspace, Depends(require_workspace)],
+    account_id: Annotated[int | None, Form()] = None,
 ) -> JSONResponse:
     """Validate and dispatch one supported private document for review."""
     if multipart_file_count != 1 or len(documents) != 1:
@@ -199,6 +218,24 @@ def process_document_upload(
             document.content_type,
         )
         if category.processor == "transaction_import":
+            account = None
+            allowed_account_types = compatible_account_types(category.key)
+            if allowed_account_types:
+                if account_id is None:
+                    raise DocumentUploadValidationError(
+                        "account_required", "Choose an account for this statement."
+                    )
+                try:
+                    account = get_workspace_account(session, workspace.id, account_id)
+                except AccountNotFoundError:
+                    raise DocumentUploadValidationError(
+                        "invalid_account", "Choose a valid account for this statement."
+                    ) from None
+                if account.account_type not in allowed_account_types:
+                    raise DocumentUploadValidationError(
+                        "account_type_mismatch",
+                        "Choose an account that matches this statement type.",
+                    )
             result = _process_transaction(
                 session,
                 request.app.state.upload_store,
@@ -206,6 +243,7 @@ def process_document_upload(
                 workspace,
                 document,
                 retention_choice,
+                account,
             )
         elif category.processor == "payslip":
             result = _process_payslip(

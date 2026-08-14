@@ -23,6 +23,7 @@ from app.dashboard.service import (
     SPENDING_PERIOD_OPTIONS,
     SpendingPeriodValidationError,
     build_dashboard_report,
+    build_monthly_cash_flow_series,
     build_spending_report,
     resolve_spending_period,
 )
@@ -94,6 +95,7 @@ async def dashboard(
     as_of: str = "",
     spending_period: str = "month",
     spending_month: str = "",
+    cash_flow_view: str = "monthly",
     statement_cleanup_failed: int | None = None,
 ) -> HTMLResponse:
     """Render the active member's aggregate financial dashboard."""
@@ -105,6 +107,15 @@ async def dashboard(
         )
     report = build_dashboard_report(session, workspace.id, as_of_date)
     reference_date = report.as_of_date or as_of_date or date.today()
+    if cash_flow_view not in {"monthly", "yearly"}:
+        return _date_error_response(
+            request, user, workspace, "Choose the monthly or yearly cash-flow view."
+        )
+    cash_flow_series = (
+        build_monthly_cash_flow_series(session, workspace.id, reference_date)
+        if cash_flow_view == "monthly"
+        else report.cash_flow_series
+    )
     try:
         period = resolve_spending_period(spending_period, spending_month, reference_date)
     except SpendingPeriodValidationError as exc:
@@ -118,7 +129,13 @@ async def dashboard(
                 error=str(exc),
                 report=report,
                 page_data=dashboard_page_data(report),
-                chart_data=chart_payload(report),
+                chart_data=chart_payload(report, cash_flow_series),
+                cash_flow_series=cash_flow_series,
+                cash_flow_view=cash_flow_view,
+                cash_flow_period_label=(
+                    "Last 12 months" if cash_flow_view == "monthly" else "Five-year view"
+                ),
+                as_of_value=as_of,
                 spending_report=None,
                 spending_chart_data=None,
                 spending_period_options=SPENDING_PERIOD_OPTIONS,
@@ -148,7 +165,13 @@ async def dashboard(
             workspace,
             report=report,
             page_data=dashboard_page_data(report),
-            chart_data=chart_payload(report),
+            chart_data=chart_payload(report, cash_flow_series),
+            cash_flow_series=cash_flow_series,
+            cash_flow_view=cash_flow_view,
+            cash_flow_period_label=(
+                "Last 12 months" if cash_flow_view == "monthly" else "Five-year view"
+            ),
+            as_of_value=as_of,
             spending_report=spending_report,
             spending_chart_data=spending_chart_payload(spending_report),
             spending_period_options=SPENDING_PERIOD_OPTIONS,

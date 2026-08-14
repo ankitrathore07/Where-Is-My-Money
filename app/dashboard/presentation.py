@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.dashboard.types import DashboardReport, SpendingReport
+from app.dashboard.types import AnnualCashFlow, DashboardReport, MonthlyCashFlow, SpendingReport
 
 
 @dataclass(frozen=True)
@@ -59,17 +59,24 @@ def dashboard_page_data(report: DashboardReport) -> DashboardPageData:
     )
 
 
-def chart_payload(report: DashboardReport) -> dict[str, dict[str, list[str | int | None]]]:
+def chart_payload(
+    report: DashboardReport,
+    cash_flow_series: tuple[AnnualCashFlow | MonthlyCashFlow, ...] | None = None,
+) -> dict[str, dict[str, list[str | int | None]]]:
     """Return the bounded aggregate values safe to serialize for local charts."""
+    selected_cash_flow = cash_flow_series or report.cash_flow_series
     return {
         "net_worth": {
             "labels": [str(point.year) for point in report.net_worth_series],
             "values": [point.net_worth_cents for point in report.net_worth_series],
         },
         "cash_flow": {
-            "labels": [str(point.year) for point in report.cash_flow_series],
-            "income": [point.income_cents for point in report.cash_flow_series],
-            "spending": [point.spending_cents for point in report.cash_flow_series],
+            "labels": [
+                point.label if isinstance(point, MonthlyCashFlow) else str(point.year)
+                for point in selected_cash_flow
+            ],
+            "income": [point.income_cents for point in selected_cash_flow],
+            "spending": [point.spending_cents for point in selected_cash_flow],
         },
     }
 

@@ -76,6 +76,8 @@ class ReviewRow:
     category_name: str | None = None
     is_subscription: bool | None = None
     categorization_source: str | None = None
+    tag_ids: tuple[int, ...] = ()
+    billing_period_months: int | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,12 @@ class RowEdit:
     category_id: int | None = None
     is_subscription: bool | None = None
     categorization_source: str | None = None
+    tag_ids: tuple[int, ...] | None = None
+    billing_period_months: int | None = None
+    billing_period_submitted: bool = False
     original_normalized_merchant: str | None = None
     original_category_id: int | None = None
     original_is_subscription: bool | None = None
     original_categorization_source: str | None = None
+    original_tag_ids: tuple[int, ...] | None = None
+    original_billing_period_months: int | None = None

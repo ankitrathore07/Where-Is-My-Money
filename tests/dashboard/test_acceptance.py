@@ -111,11 +111,12 @@ async def test_signed_in_user_can_view_the_fixed_demo_without_cross_workspace_da
     assert "Neighborhood Market" in response.text
     assert "1 outgoing transaction needs category review" in response.text
     assert "Internal savings transfer" not in response.text
-    assert response.text.count("<td>2022</td>") == 2
-    assert response.text.count("<td>2023</td>") == 2
-    assert response.text.count("<td>2024</td>") == 2
-    assert response.text.count("<td>2025</td>") == 2
-    assert response.text.count("<td>2026</td>") == 2
+    assert response.text.count("<td>2022</td>") == 1
+    assert "Last 12 months" in response.text
+    assert response.text.count("<td>2023</td>") == 1
+    assert response.text.count("<td>2024</td>") == 1
+    assert response.text.count("<td>2025</td>") == 1
+    assert response.text.count("<td>2026</td>") == 1
     for name in (
         "Everyday Checking",
         "Emergency Savings",

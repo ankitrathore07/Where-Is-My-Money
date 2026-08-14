@@ -16,6 +16,7 @@ from app.dashboard.types import (
     AnnualPosition,
     DashboardHighlight,
     DashboardReport,
+    MonthlyCashFlow,
     PositionSummary,
     SpendingBreakdown,
     SpendingPeriod,
@@ -437,6 +438,88 @@ def build_cash_flow_series(
             )
         series.append(
             AnnualCashFlow(year, income or None, spending, savings, rate, total["review"])
+        )
+    return tuple(series)
+
+
+def build_monthly_cash_flow_series(
+    session: Session, workspace_id: int, cutoff: date, *, months: int = 12
+) -> tuple[MonthlyCashFlow, ...]:
+    """Build ascending calendar-month cash flow through the inclusive cutoff."""
+    if months < 1 or months > 120:
+        raise ValueError("months must be between 1 and 120")
+    first_month = _shift_months_clamped(_month_start(cutoff), -(months - 1))
+    month_starts: list[date] = []
+    current = first_month
+    while current <= _month_start(cutoff):
+        month_starts.append(current)
+        if current.year == date.max.year and current.month == 12:
+            break
+        current = _shift_months_clamped(current, 1)
+
+    rows = session.execute(
+        select(Transaction, Category)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.date >= datetime.combine(first_month, time.min, tzinfo=UTC),
+            _transaction_cutoff_condition(cutoff),
+        )
+        .order_by(Transaction.date, Transaction.id)
+    )
+    totals = {
+        month: {"income": 0, "spending": 0, "review": 0, "valid": False} for month in month_starts
+    }
+    for transaction, category in rows:
+        transaction_date = _calendar_date(transaction.date)
+        if transaction_date is None:
+            continue
+        month = _month_start(transaction_date)
+        total = totals.get(month)
+        if total is None:
+            continue
+        category_is_available = category is not None and (
+            category.workspace_id is None or category.workspace_id == workspace_id
+        )
+        kind = category.kind if category_is_available else None
+        if kind == "transfer":
+            continue
+        if kind == "income" and transaction.amount_cents > 0:
+            total["income"] += transaction.amount_cents
+            total["valid"] = True
+        elif kind == "expense" and transaction.amount_cents < 0:
+            total["spending"] -= transaction.amount_cents
+            total["valid"] = True
+        else:
+            total["review"] += 1
+
+    series: list[MonthlyCashFlow] = []
+    for month in month_starts:
+        total = totals[month]
+        label = f"{calendar.month_abbr[month.month]} {month.year}"
+        if not total["valid"]:
+            series.append(MonthlyCashFlow(month, label, None, None, None, None, total["review"]))
+            continue
+        income = total["income"]
+        spending = total["spending"]
+        savings = income - spending
+        rate = None
+        if income:
+            rate = int(
+                (Decimal(savings) / Decimal(income) * Decimal(10_000)).quantize(
+                    Decimal("1"), rounding=ROUND_HALF_UP
+                )
+            )
+        series.append(
+            MonthlyCashFlow(
+                month,
+                label,
+                income or None,
+                spending,
+                savings,
+                rate,
+                total["review"],
+            )
         )
     return tuple(series)
 

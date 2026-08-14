@@ -41,10 +41,18 @@ class DocumentUploadValidationError(ValueError):
 
 DOCUMENT_CATEGORIES = (
     DocumentCategory(
-        "transaction_statement",
-        "Bank or credit-card transaction statement",
+        "bank_transaction_statement",
+        "Bank transaction statement",
         "transaction_import",
         TRANSACTION_CONTENT_TYPES,
+        frozenset({"checking", "savings"}),
+    ),
+    DocumentCategory(
+        "credit_card_transaction_statement",
+        "Credit-card transaction statement",
+        "transaction_import",
+        TRANSACTION_CONTENT_TYPES,
+        frozenset({"credit_card"}),
     ),
     DocumentCategory("payslip", "Payslip", "payslip", PAYSLIP_CONTENT_TYPES),
     DocumentCategory(
@@ -88,10 +96,24 @@ DOCUMENT_CATEGORIES = (
 _CATEGORY_BY_KEY: Mapping[str, DocumentCategory] = MappingProxyType(
     {category.key: category for category in DOCUMENT_CATEGORIES}
 )
+_LEGACY_TRANSACTION_CATEGORY = DocumentCategory(
+    "transaction_statement",
+    "Bank or credit-card transaction statement",
+    "transaction_import",
+    TRANSACTION_CONTENT_TYPES,
+)
 
 
 def get_document_category(key: str) -> DocumentCategory | None:
+    if key == _LEGACY_TRANSACTION_CATEGORY.key:
+        return _LEGACY_TRANSACTION_CATEGORY
     return _CATEGORY_BY_KEY.get(key)
+
+
+def compatible_account_types(category_key: str) -> frozenset[str]:
+    """Return account types accepted by an account-linked document category."""
+    category = get_document_category(category_key)
+    return category.compatible_account_types if category is not None else frozenset()
 
 
 def validate_processable_upload(
@@ -136,6 +158,7 @@ def client_catalog(
             "supported": category.processor is not None,
             "accepted_suffixes": sorted(category.accepted_suffixes),
             "max_bytes": limits.get(category.processor),
+            "compatible_account_types": sorted(category.compatible_account_types),
         }
         for category in DOCUMENT_CATEGORIES
     ]

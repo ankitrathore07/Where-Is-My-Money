@@ -142,13 +142,23 @@
 
         <div class="dashboard-main-grid">
           <section class="dashboard-panel dashboard-chart-panel" aria-labelledby="cash-flow-trend-heading">
-            <div class="dashboard-panel-heading"><h2 id="cash-flow-trend-heading">Income and spending</h2><span>Five-year view</span></div>
-            <div class="dashboard-chart"><canvas id="income-spending-chart" role="img" aria-label="Five-year income and spending trend. The following table contains the same values."></canvas></div>
+            <div class="dashboard-panel-heading"><h2 id="cash-flow-trend-heading">Income and spending</h2><span>{{ cash_flow_period_label }}</span></div>
+            <form action="/workspaces/{{ workspace.id }}/dashboard" method="get" class="dashboard-period-form">
+              {% if as_of_value %}<input type="hidden" name="as_of" value="{{ as_of_value }}">{% endif %}
+              {% if spending_report %}<input type="hidden" name="spending_period" value="{{ spending_report.period.key }}"><input type="hidden" name="spending_month" value="{{ spending_report.period.selected_month }}">{% endif %}
+              <label for="cash-flow-view">Cash-flow view</label>
+              <select id="cash-flow-view" name="cash_flow_view">
+                <option value="monthly" {% if cash_flow_view == "monthly" %}selected{% endif %}>Last 12 months</option>
+                <option value="yearly" {% if cash_flow_view == "yearly" %}selected{% endif %}>Yearly</option>
+              </select>
+              <button class="button button-small" type="submit">Update</button>
+            </form>
+            <div class="dashboard-chart"><canvas id="income-spending-chart" role="img" aria-label="Income and spending trend. The following table contains the same values."></canvas></div>
             <div class="table-wrap dashboard-chart-fallback">
               <table>
                 <caption>Income and spending fallback</caption>
-                <thead><tr><th>Year</th><th>Income</th><th>Spending</th><th>Saved</th><th>Savings rate</th></tr></thead>
-                <tbody>{% for point in report.cash_flow_series %}<tr><td>{{ point.year }}</td><td>{% if point.income_cents is not none %}{{ format_money(point.income_cents) }}{% else %}No income data{% endif %}</td><td>{% if point.spending_cents is not none %}{{ format_money(point.spending_cents) }}{% else %}No spending data{% endif %}</td><td>{% if point.savings_cents is not none %}{{ format_money(point.savings_cents) }}{% else %}No savings data{% endif %}</td><td>{% if point.savings_rate_basis_points is not none %}{{ format_basis_points(point.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</td></tr>{% endfor %}</tbody>
+                <thead><tr><th>Period</th><th>Income</th><th>Spending</th><th>Saved</th><th>Savings rate</th></tr></thead>
+                <tbody>{% for point in cash_flow_series %}<tr><td>{{ point.label if cash_flow_view == "monthly" else point.year }}</td><td>{% if point.income_cents is not none %}{{ format_money(point.income_cents) }}{% else %}No income data{% endif %}</td><td>{% if point.spending_cents is not none %}{{ format_money(point.spending_cents) }}{% else %}No spending data{% endif %}</td><td>{% if point.savings_cents is not none %}{{ format_money(point.savings_cents) }}{% else %}No savings data{% endif %}</td><td>{% if point.savings_rate_basis_points is not none %}{{ format_basis_points(point.savings_rate_basis_points) }}{% else %}Unavailable{% endif %}</td></tr>{% endfor %}</tbody>
               </table>
             </div>
           </section>

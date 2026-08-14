@@ -13,7 +13,7 @@ import secrets
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEVELOPMENT_SECRET_SENTINEL = "dev-only-ephemeral-key-do-not-use-in-production"
@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     max_payslip_upload_bytes: int = 10 * 1024 * 1024
     max_statement_upload_bytes: int = 10 * 1024 * 1024
     trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
+    openai_api_key: str = ""
+    openai_categorization_model: str = "gpt-5.4-nano"
+    openai_categorization_enabled: bool = False
+    openai_categorization_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
 
     @property
     def is_production(self) -> bool:

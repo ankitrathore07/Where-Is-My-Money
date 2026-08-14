@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.categorization.builtins import BuiltinMerchantRule, find_builtin_rule
 from app.categorization.normalization import merchant_display_fallback, merchant_key
+from app.categorization.providers.chase import find_provider_rule
 from app.categorization.types import CategorizationDecision, CategorizationSource
-from app.db.models import Category, MerchantRule
+from app.db.models import Category, MerchantRule, Tag
 from app.imports.types import NormalizedTransaction
 
 
@@ -43,6 +44,19 @@ def _required_builtin_category(session: Session, name: str) -> Category:
     return category
 
 
+def _builtin_tag_ids(session: Session, names: tuple[str, ...]) -> tuple[int, ...]:
+    if not names:
+        return ()
+    name_keys = {_category_name_key(name) for name in names}
+    return tuple(
+        session.scalars(
+            select(Tag.id)
+            .where(Tag.workspace_id.is_(None), Tag.name_key.in_(name_keys))
+            .order_by(Tag.name_key, Tag.id)
+        )
+    )
+
+
 def _direction_matches(rule: BuiltinMerchantRule, amount_cents: int) -> bool:
     return (
         rule.amount_direction == "either"
@@ -55,6 +69,8 @@ def categorize_candidate(
     session: Session,
     workspace_id: int,
     candidate: NormalizedTransaction,
+    *,
+    provider_key: str | None = None,
 ) -> CategorizationDecision:
     """Apply workspace, built-in, then safe-fallback precedence to one PR4 candidate."""
     key = merchant_key(candidate.description)
@@ -73,7 +89,24 @@ def categorize_candidate(
                 category_id=category.id,
                 is_subscription=workspace_rule.is_subscription,
                 source=CategorizationSource.WORKSPACE_RULE,
+                tag_ids=tuple(tag.id for tag in workspace_rule.tags),
+                billing_period_months=workspace_rule.billing_period_months,
             )
+
+    provider_rule = find_provider_rule(
+        provider_key,
+        candidate.description,
+        candidate.amount_cents,
+    )
+    if provider_rule is not None:
+        category = _required_builtin_category(session, provider_rule.category_name)
+        return CategorizationDecision(
+            normalized_merchant=provider_rule.normalized_merchant,
+            category_id=category.id,
+            is_subscription=provider_rule.is_subscription,
+            source=CategorizationSource.PROVIDER_RULE,
+            tag_ids=_builtin_tag_ids(session, provider_rule.tag_names),
+        )
 
     builtin_rule = find_builtin_rule(key)
     if builtin_rule is not None and _direction_matches(builtin_rule, candidate.amount_cents):

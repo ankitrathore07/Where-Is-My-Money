@@ -16,6 +16,7 @@ from app.categories.service import list_accessible_categories
 from app.core.middleware import require_csrf
 from app.db.models import Category, User, Workspace
 from app.db.session import get_db
+from app.tags.service import TagNotFoundError, list_accessible_tags
 from app.transactions.queries import (
     FilterValidationError,
     TransactionFilters,
@@ -159,6 +160,8 @@ def _categorization_response(
     submitted_category_id: int | None = None,
     submitted_subscription: bool | None = None,
     submitted_save_for_future: bool = False,
+    submitted_tag_ids: tuple[int, ...] | None = None,
+    submitted_billing_period_months: int | None = None,
 ) -> HTMLResponse:
     try:
         transaction = get_transaction_for_categorization(session, workspace.id, transaction_id)
@@ -175,6 +178,7 @@ def _categorization_response(
             "transaction": transaction,
             "format_money": _format_money,
             "choices": list_accessible_categories(session, workspace.id),
+            "tag_choices": list_accessible_tags(session, workspace.id),
             "error": error,
             "merchant_value": submitted_merchant
             if submitted_merchant is not None
@@ -186,6 +190,12 @@ def _categorization_response(
             if submitted_subscription is not None
             else transaction.is_subscription,
             "save_for_future_value": submitted_save_for_future,
+            "tag_values": set(submitted_tag_ids)
+            if submitted_tag_ids is not None
+            else {tag.id for tag in transaction.tags},
+            "billing_period_value": submitted_billing_period_months
+            if submitted_billing_period_months is not None
+            else transaction.billing_period_months,
         },
         status_code=status_code,
     )
@@ -219,6 +229,8 @@ async def transaction_categorization_submit(
     workspace: Annotated[Workspace, Depends(require_workspace)],
     is_subscription: Annotated[str | None, Form()] = None,
     save_for_future: Annotated[str | None, Form()] = None,
+    tag_ids: Annotated[list[int] | None, Form()] = None,
+    billing_period_months: Annotated[int | None, Form()] = None,
 ) -> HTMLResponse:
     subscription_value = is_subscription is not None
     save_value = save_for_future is not None
@@ -232,10 +244,12 @@ async def transaction_categorization_submit(
                 category_id,
                 subscription_value,
                 save_value,
+                tag_ids=tuple(tag_ids or ()),
+                billing_period_months=billing_period_months,
             ),
         )
         session.commit()
-    except (TransactionNotFoundError, CategoryNotAccessibleError) as exc:
+    except (TransactionNotFoundError, CategoryNotAccessibleError, TagNotFoundError) as exc:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
     except (ManualCategorizationValidationError, MerchantRuleKeyError) as exc:
@@ -252,6 +266,8 @@ async def transaction_categorization_submit(
             submitted_category_id=category_id,
             submitted_subscription=subscription_value,
             submitted_save_for_future=save_value,
+            submitted_tag_ids=tuple(tag_ids or ()),
+            submitted_billing_period_months=billing_period_months,
         )
     except IntegrityError:
         session.rollback()
@@ -267,6 +283,8 @@ async def transaction_categorization_submit(
             submitted_category_id=category_id,
             submitted_subscription=subscription_value,
             submitted_save_for_future=save_value,
+            submitted_tag_ids=tuple(tag_ids or ()),
+            submitted_billing_period_months=billing_period_months,
         )
     return RedirectResponse(
         f"/workspaces/{workspace.id}/transactions",

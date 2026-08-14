@@ -51,6 +51,24 @@ def live_announcements(page: Page) -> list[str]:
     return page.evaluate("window.documentAnnouncements")
 
 
+def test_bank_statement_requires_and_auto_selects_compatible_account(
+    signed_in_upload_page: tuple[Page, int],
+) -> None:
+    page, _ = signed_in_upload_page
+    page.locator("#document-files").set_input_files(payload("checking.csv", "text/csv", CSV_BYTES))
+    row = page.locator("#document-queue-body tr")
+
+    row.get_by_label("Document category for checking.csv").select_option(
+        "bank_transaction_statement"
+    )
+
+    account = row.get_by_label("Account for checking.csv")
+    expect(account).to_be_visible()
+    expect(account).not_to_have_value("")
+    expect(account.locator("option:checked")).to_contain_text("Chase Checking")
+    expect(page.locator("#process-documents")).to_be_enabled()
+
+
 def test_picker_adds_multiple_manual_category_rows_and_removes_one(
     signed_in_upload_page: tuple[Page, int],
 ) -> None:

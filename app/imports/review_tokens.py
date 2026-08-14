@@ -20,19 +20,23 @@ class ReviewBaseline:
     category_id: int | None
     is_subscription: bool | None
     categorization_source: str | None
+    tag_ids: tuple[int, ...]
+    billing_period_months: int | None
 
 
 def create_review_token(secret_key: str, job_id: int, row: ReviewRow) -> str:
     serializer = URLSafeTimedSerializer(secret_key, salt=REVIEW_TOKEN_SALT)
     return serializer.dumps(
         {
-            "v": 1,
+            "v": 2,
             "job_id": job_id,
             "row_number": row.row_number,
             "normalized_merchant": row.normalized_merchant,
             "category_id": row.category_id,
             "is_subscription": row.is_subscription,
             "categorization_source": row.categorization_source,
+            "tag_ids": list(row.tag_ids),
+            "billing_period_months": row.billing_period_months,
         }
     )
 
@@ -55,15 +59,31 @@ def load_review_token(
     category_id = payload.get("category_id")
     subscription = payload.get("is_subscription")
     source = payload.get("categorization_source")
+    tag_ids = payload.get("tag_ids")
+    billing_period_months = payload.get("billing_period_months")
     valid = (
-        payload.get("v") == 1
+        payload.get("v") == 2
         and payload.get("job_id") == job_id
         and payload.get("row_number") == row_number
         and (merchant is None or isinstance(merchant, str))
         and (category_id is None or type(category_id) is int)
         and (subscription is None or type(subscription) is bool)
         and (source is None or isinstance(source, str))
+        and isinstance(tag_ids, list)
+        and all(type(tag_id) is int and tag_id > 0 for tag_id in tag_ids)
+        and len(tag_ids) == len(set(tag_ids))
+        and (
+            billing_period_months is None
+            or (type(billing_period_months) is int and 1 <= billing_period_months <= 120)
+        )
     )
     if not valid:
         raise ReviewTokenError("Review data could not be verified; reload and try again.")
-    return ReviewBaseline(merchant, category_id, subscription, source)
+    return ReviewBaseline(
+        merchant,
+        category_id,
+        subscription,
+        source,
+        tuple(tag_ids),
+        billing_period_months,
+    )

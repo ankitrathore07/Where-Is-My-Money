@@ -42,6 +42,17 @@ class AnnualCashFlow:
 
 
 @dataclass(frozen=True)
+class MonthlyCashFlow:
+    month: date
+    label: str
+    income_cents: int | None
+    spending_cents: int | None
+    savings_cents: int | None
+    savings_rate_basis_points: int | None
+    needs_review_count: int
+
+
+@dataclass(frozen=True)
 class DashboardHighlight:
     kind: str
     title: str

@@ -9,7 +9,9 @@ class CategorizationSource(StrEnum):
 
     MANUAL = "manual"
     WORKSPACE_RULE = "workspace_rule"
+    PROVIDER_RULE = "provider_rule"
     BUILTIN_RULE = "builtin_rule"
+    AI_SUGGESTION = "ai_suggestion"
     UNCATEGORIZED = "uncategorized"
 
 
@@ -21,3 +23,5 @@ class CategorizationDecision:
     category_id: int
     is_subscription: bool
     source: CategorizationSource
+    tag_ids: tuple[int, ...] = ()
+    billing_period_months: int | None = None

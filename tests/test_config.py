@@ -58,6 +58,26 @@ def test_statement_upload_limit_is_independent_from_payslip_limit() -> None:
     assert configured.max_statement_upload_bytes == 10 * 1024 * 1024
 
 
+def test_ai_categorization_defaults_off_without_a_key() -> None:
+    configured = Settings(_env_file=None, app_env="test", secret_key="test-secret")
+
+    assert configured.openai_api_key == ""
+    assert configured.openai_categorization_enabled is False
+    assert configured.openai_categorization_model == "gpt-5.4-nano"
+    assert configured.openai_categorization_timeout_seconds == 8.0
+
+
+@pytest.mark.parametrize("timeout", [0.9, 30.1])
+def test_ai_categorization_timeout_is_bounded(timeout: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            secret_key="test-secret",
+            openai_categorization_timeout_seconds=timeout,
+        )
+
+
 def test_environment_name_is_restricted_to_known_modes() -> None:
     with pytest.raises(ValidationError, match="development.*test.*production"):
         Settings(_env_file=None, app_env="prod", secret_key="test-secret")

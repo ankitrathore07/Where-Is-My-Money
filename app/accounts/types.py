@@ -27,6 +27,7 @@ class AccountInput:
     account_type: str
     institution: str
     is_liability: bool
+    institution_key: str | None = None
 
 
 @dataclass(frozen=True)

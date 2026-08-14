@@ -17,6 +17,8 @@ from app.auth.dependencies import get_optional_current_user
 from app.auth.oauth import build_google_oauth
 from app.auth.routes import router as auth_router
 from app.categories.routes import router as category_router
+from app.categorization.ai_graph import build_categorization_graph
+from app.categorization.openai_classifier import OpenAIDescriptionClassifier
 from app.core.config import Settings, settings
 from app.core.logging import configure_logging, logger
 from app.core.middleware import (
@@ -39,6 +41,7 @@ from app.statement_imports.body_limit import StatementUploadBodyLimitMiddleware
 from app.statement_imports.extraction import StatementDocumentExtractor
 from app.statement_imports.routes import router as statement_import_router
 from app.statement_imports.storage import StatementUploadStore
+from app.tags.routes import router as tag_router
 from app.transactions.routes import router as transaction_router
 from app.workspaces.routes import router as workspace_router
 
@@ -112,6 +115,15 @@ def create_app(
     application.state.statement_extractor = StatementDocumentExtractor(
         DocumentExtractor(TesseractOcrEngine())
     )
+    application.state.categorization_graph = None
+    if configured.openai_categorization_enabled and configured.openai_api_key:
+        application.state.categorization_graph = build_categorization_graph(
+            OpenAIDescriptionClassifier(
+                api_key=configured.openai_api_key,
+                model=configured.openai_categorization_model,
+                timeout_seconds=configured.openai_categorization_timeout_seconds,
+            )
+        )
 
     application.add_middleware(TrustedHostMiddleware, allowed_hosts=configured.trusted_hosts)
 
@@ -143,6 +155,7 @@ def create_app(
     application.include_router(dashboard_router)
     application.include_router(account_router)
     application.include_router(category_router)
+    application.include_router(tag_router)
     application.include_router(planning_router)
     application.include_router(document_router)
     application.include_router(import_router)

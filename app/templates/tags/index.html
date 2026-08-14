@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Tags Â· {{ workspace.name }}{% endblock %}
+
+{% block content %}
+  <section class="page-heading"><p class="eyebrow">{{ workspace.name }}</p><h1>Transaction tags</h1><p>Use multiple tags for reporting across primary categories.</p></section>
+  {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+  <section class="panel">
+    <h2>Add a custom tag</h2>
+    <form action="/workspaces/{{ workspace.id }}/tags" method="post" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label for="name">Tag name</label><input id="name" name="name" maxlength="100" required><button class="button" type="submit">Add tag</button></form>
+  </section>
+  <section class="panel"><h2>Your tags</h2>{% if choices.workspace %}<ul>{% for tag in choices.workspace %}<li><form action="/workspaces/{{ workspace.id }}/tags/{{ tag.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="name" maxlength="100" value="{{ tag.name }}" required><button type="submit">Rename</button></form><form action="/workspaces/{{ workspace.id }}/tags/{{ tag.id }}/delete" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="link-button" type="submit">Delete</button></form></li>{% endfor %}</ul>{% else %}<p>No custom tags yet.</p>{% endif %}</section>
+  <section class="panel"><h2>Built-in tags</h2><ul>{% for tag in choices.builtin %}<li>{{ tag.name }}</li>{% endfor %}</ul></section>
+{% endblock %}

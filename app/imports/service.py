@@ -8,9 +8,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.categorization.ai_graph import CompiledCategorizationGraph, suggest_category
+from app.categorization.ai_types import CategorySuggestion
+from app.categorization.sanitization import sanitize_transaction_description
 from app.categorization.service import categorize_candidate
-from app.categorization.types import CategorizationSource
-from app.db.models import Category, ImportJob, Transaction, UploadedFile, Workspace
+from app.categorization.types import CategorizationDecision, CategorizationSource
+from app.db.models import Account, Category, ImportJob, Transaction, UploadedFile, Workspace
 from app.imports.document_parser import parse_transaction_statement_text
 from app.imports.duplicates import find_existing_fingerprints, fingerprint_transactions
 from app.imports.mapping import mapping_from_json, validate_mapping
@@ -20,6 +23,7 @@ from app.imports.normalization import (
     normalize_source_row,
 )
 from app.imports.parser import parse_csv_bytes
+from app.imports.providers.registry import resolve_provider_profile
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import (
     ColumnMapping,
@@ -28,6 +32,11 @@ from app.imports.types import (
     NormalizedTransaction,
     ReviewRow,
     RowEdit,
+)
+from app.tags.service import (
+    TagNotFoundError,
+    accessible_tags_by_id,
+    tag_ids_with_subscription,
 )
 
 ACTIVE_STATUSES = {"awaiting_mapping", "reviewing"}
@@ -89,12 +98,23 @@ def get_workspace_import(session: Session, workspace_id: int, import_id: int) ->
     )
 
 
-def _matching_import(session: Session, workspace_id: int, checksum: str) -> ImportJob | None:
+def _matching_import(
+    session: Session,
+    workspace_id: int,
+    checksum: str,
+    account_id: int | None = None,
+) -> ImportJob | None:
+    account_clause = (
+        ImportJob.account_id == account_id
+        if account_id is not None
+        else ImportJob.account_id.is_(None)
+    )
     return session.scalar(
         select(ImportJob)
         .where(
             ImportJob.workspace_id == workspace_id,
             ImportJob.source_checksum == checksum,
+            account_clause,
             ImportJob.status.in_(ACTIVE_STATUSES | COMMITTED_STATUSES),
         )
         .order_by(ImportJob.id.desc())
@@ -107,6 +127,8 @@ def create_csv_import(
     workspace: Workspace,
     upload: BinaryIO,
     retention_choice: str,
+    *,
+    account: Account | None = None,
 ) -> UploadResult:
     """Validate a private CSV source and create or resume its import job."""
     if retention_choice not in RETENTION_CHOICES:
@@ -116,8 +138,21 @@ def create_csv_import(
 
     saved = store.save(workspace.id, upload)
     try:
-        parse_csv_bytes(store.read(saved.storage_key))
-        existing = _matching_import(session, workspace.id, saved.checksum)
+        document = parse_csv_bytes(store.read(saved.storage_key))
+        provider_mapping = None
+        if account is not None:
+            provider_mapping = resolve_provider_profile(
+                account.institution_key,
+                account.account_type,
+                ".csv",
+                document.headers,
+            ).mapping
+        existing = _matching_import(
+            session,
+            workspace.id,
+            saved.checksum,
+            account.id if account is not None else None,
+        )
         if existing is not None:
             store.delete(saved.storage_key)
             kind: UploadResultKind = (
@@ -137,7 +172,9 @@ def create_csv_import(
         job = ImportJob(
             workspace_id=workspace.id,
             uploaded_file=uploaded_file,
-            status="awaiting_mapping",
+            account=account,
+            status="reviewing" if provider_mapping is not None else "awaiting_mapping",
+            column_mapping=(provider_mapping.to_json() if provider_mapping is not None else None),
             source_checksum=saved.checksum,
         )
         session.add(job)
@@ -158,11 +195,20 @@ def create_transaction_import(
     media_type: str,
     upload: BinaryIO,
     retention_choice: str,
+    *,
+    account: Account | None = None,
 ) -> UploadResult:
     """Create a reviewed CSV or locally extracted PDF transaction import."""
     suffix = Path(filename).suffix.casefold()
     if suffix == ".csv":
-        return create_csv_import(session, store, workspace, upload, retention_choice)
+        return create_csv_import(
+            session,
+            store,
+            workspace,
+            upload,
+            retention_choice,
+            account=account,
+        )
     if suffix != ".pdf" or media_type.casefold() != "application/pdf":
         raise ImportStateError(
             "unsupported_file_type", "Choose a CSV or PDF transaction statement."
@@ -176,7 +222,12 @@ def create_transaction_import(
     try:
         extracted = extractor.extract(store.read(saved.storage_key), suffix)
         parse_transaction_statement_text(extracted.text)
-        existing = _matching_import(session, workspace.id, saved.checksum)
+        existing = _matching_import(
+            session,
+            workspace.id,
+            saved.checksum,
+            account.id if account is not None else None,
+        )
         if existing is not None:
             store.delete(saved.storage_key)
             kind: UploadResultKind = (
@@ -206,6 +257,7 @@ def create_transaction_import(
         job = ImportJob(
             workspace_id=workspace.id,
             uploaded_file=uploaded_file,
+            account=account,
             status="reviewing",
             column_mapping=mapping.to_json(),
             source_checksum=saved.checksum,
@@ -306,11 +358,80 @@ def _raw_amount(row_values: Mapping[str, str], mapping: ColumnMapping) -> str:
     return f"-{debit}" if debit else credit
 
 
+def _provider_key(job: ImportJob, document: CsvDocument) -> str | None:
+    account = job.account
+    uploaded_file = job.uploaded_file
+    if account is None or uploaded_file is None:
+        return None
+    suffix = Path(uploaded_file.storage_path).suffix.casefold()
+    return resolve_provider_profile(
+        account.institution_key,
+        account.account_type,
+        suffix,
+        document.headers,
+    ).profile_key
+
+
+def _ai_categories(session: Session) -> tuple[Category, ...]:
+    return tuple(
+        session.scalars(
+            select(Category)
+            .where(
+                Category.workspace_id.is_(None),
+                Category.name != "Uncategorized",
+            )
+            .order_by(Category.name)
+        )
+    )
+
+
+def _category_matches_direction(category: Category, amount_cents: int) -> bool:
+    return (
+        category.kind == "transfer"
+        or (category.kind == "expense" and amount_cents < 0)
+        or (category.kind == "income" and amount_cents > 0)
+    )
+
+
+def _apply_ai_suggestion(
+    candidate: NormalizedTransaction,
+    decision: CategorizationDecision,
+    graph: CompiledCategorizationGraph | None,
+    categories_by_name: Mapping[str, Category],
+    suggestion_cache: dict[str, CategorySuggestion | None],
+) -> CategorizationDecision:
+    if graph is None or decision.source is not CategorizationSource.UNCATEGORIZED:
+        return decision
+    cache_key = sanitize_transaction_description(candidate.description)
+    if not cache_key:
+        return decision
+    if cache_key not in suggestion_cache:
+        suggestion_cache[cache_key] = suggest_category(
+            graph,
+            candidate.description,
+            tuple(categories_by_name),
+        )
+    suggestion = suggestion_cache[cache_key]
+    category = categories_by_name.get(suggestion.category_name) if suggestion is not None else None
+    if category is None or not _category_matches_direction(category, candidate.amount_cents):
+        return decision
+    return CategorizationDecision(
+        normalized_merchant=decision.normalized_merchant,
+        category_id=category.id,
+        is_subscription=suggestion.is_subscription,
+        source=CategorizationSource.AI_SUGGESTION,
+        tag_ids=decision.tag_ids,
+        billing_period_months=decision.billing_period_months,
+    )
+
+
 def build_review(
     session: Session,
     store: LocalUploadStore,
     job: ImportJob,
     extractor: TransactionSourceExtractor | None = None,
+    *,
+    categorization_graph: CompiledCategorizationGraph | None = None,
 ) -> ImportReview:
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
@@ -323,6 +444,10 @@ def build_review(
             "mapping_missing", "Prepare the transaction statement before reviewing it."
         )
     mapping = mapping_from_json(document.headers, job.column_mapping)
+    provider_key = _provider_key(job, document)
+    ai_categories = _ai_categories(session) if categorization_graph is not None else ()
+    ai_categories_by_name = {category.name: category for category in ai_categories}
+    suggestion_cache: dict[str, CategorySuggestion | None] = {}
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
     errors_by_row: dict[int, dict[str, str]] = {}
@@ -345,11 +470,21 @@ def build_review(
         fingerprint = fingerprints_by_row.get(source_row.row_number)
         duplicate = fingerprint in existing if fingerprint is not None else False
         if normalized is not None:
-            decision = (
-                categorize_candidate(session, job.workspace_id, normalized)
-                if not duplicate
-                else None
-            )
+            decision = None
+            if not duplicate:
+                decision = categorize_candidate(
+                    session,
+                    job.workspace_id,
+                    normalized,
+                    provider_key=provider_key,
+                )
+                decision = _apply_ai_suggestion(
+                    normalized,
+                    decision,
+                    categorization_graph,
+                    ai_categories_by_name,
+                    suggestion_cache,
+                )
             category = session.get(Category, decision.category_id) if decision else None
             review_rows.append(
                 ReviewRow(
@@ -367,6 +502,16 @@ def build_review(
                     category_name=category.name if category else None,
                     is_subscription=decision.is_subscription if decision else None,
                     categorization_source=decision.source.value if decision else None,
+                    tag_ids=(
+                        tag_ids_with_subscription(
+                            session,
+                            decision.tag_ids,
+                            decision.is_subscription,
+                        )
+                        if decision
+                        else ()
+                    ),
+                    billing_period_months=(decision.billing_period_months if decision else None),
                 )
             )
         else:
@@ -408,7 +553,7 @@ def _reviewed_fields(
     candidate: NormalizedTransaction,
     review_row: ReviewRow,
     edit: RowEdit,
-) -> tuple[str, int, bool, str]:
+) -> tuple[str, int, bool, str, tuple[int, ...], int | None]:
     if (
         review_row.category_id is None
         or review_row.normalized_merchant is None
@@ -420,11 +565,15 @@ def _reviewed_fields(
         fallback_category_id = decision.category_id
         fallback_subscription = decision.is_subscription
         fallback_source = decision.source.value
+        fallback_tag_ids = decision.tag_ids
+        fallback_billing_period_months = decision.billing_period_months
     else:
         fallback_merchant = review_row.normalized_merchant
         fallback_category_id = review_row.category_id
         fallback_subscription = review_row.is_subscription
         fallback_source = review_row.categorization_source
+        fallback_tag_ids = review_row.tag_ids
+        fallback_billing_period_months = review_row.billing_period_months
 
     merchant = (
         edit.normalized_merchant if edit.normalized_merchant is not None else fallback_merchant
@@ -443,6 +592,28 @@ def _reviewed_fields(
     source = edit.categorization_source or fallback_source
     if source not in {item.value for item in CategorizationSource}:
         raise ValueError("source")
+    selected_tag_ids = edit.tag_ids if edit.tag_ids is not None else fallback_tag_ids
+    try:
+        selected_tag_ids = tag_ids_with_subscription(
+            session,
+            selected_tag_ids,
+            subscription,
+        )
+        tags = accessible_tags_by_id(session, workspace_id, selected_tag_ids)
+    except TagNotFoundError as exc:
+        raise ValueError("tags") from exc
+    tag_ids = tuple(tag.id for tag in tags)
+    billing_period_months = (
+        edit.billing_period_months
+        if edit.billing_period_submitted or edit.billing_period_months is not None
+        else fallback_billing_period_months
+    )
+    if billing_period_months is not None and (
+        type(billing_period_months) is not int
+        or billing_period_months < 1
+        or billing_period_months > 120
+    ):
+        raise ValueError("billing_period_months")
 
     has_original = any(
         value is not None
@@ -451,7 +622,31 @@ def _reviewed_fields(
             edit.original_category_id,
             edit.original_is_subscription,
             edit.original_categorization_source,
+            edit.original_tag_ids,
+            edit.original_billing_period_months,
         )
+    )
+    original_subscription = (
+        edit.original_is_subscription
+        if edit.original_is_subscription is not None
+        else review_row.is_subscription
+    )
+    original_tag_ids = (
+        edit.original_tag_ids if edit.original_tag_ids is not None else review_row.tag_ids
+    )
+    try:
+        original_tag_ids = tag_ids_with_subscription(
+            session,
+            original_tag_ids,
+            bool(original_subscription),
+        )
+        original_tags = accessible_tags_by_id(session, workspace_id, original_tag_ids)
+    except TagNotFoundError as exc:
+        raise ValueError("tags") from exc
+    original_billing_period_months = (
+        edit.original_billing_period_months
+        if edit.original_tag_ids is not None
+        else review_row.billing_period_months
     )
     baseline = (
         (
@@ -459,6 +654,8 @@ def _reviewed_fields(
             edit.original_category_id,
             edit.original_is_subscription,
             edit.original_categorization_source,
+            tuple(sorted(tag.id for tag in original_tags)),
+            original_billing_period_months,
         )
         if has_original
         else (
@@ -466,10 +663,20 @@ def _reviewed_fields(
             review_row.category_id,
             review_row.is_subscription,
             review_row.categorization_source,
+            tuple(sorted(review_row.tag_ids)),
+            review_row.billing_period_months,
         )
     )
     changed = (
-        (merchant, category_id, subscription, source) != baseline
+        (
+            merchant,
+            category_id,
+            subscription,
+            source,
+            tuple(sorted(tag_ids)),
+            billing_period_months,
+        )
+        != baseline
         or edit.date_value != review_row.date_value
         or edit.description_value != review_row.description_value
         or edit.amount_value != review_row.amount_value
@@ -479,6 +686,8 @@ def _reviewed_fields(
         category_id,
         subscription,
         CategorizationSource.MANUAL.value if changed else source,
+        tag_ids,
+        billing_period_months,
     )
 
 
@@ -512,7 +721,7 @@ def commit_import(
         )
 
     normalized: list[NormalizedTransaction] = []
-    reviewed_fields: dict[int, tuple[str, int, bool, str]] = {}
+    reviewed_fields: dict[int, tuple[str, int, bool, str, tuple[int, ...], int | None]] = {}
     review_by_row = {row.row_number: row for row in review.rows}
     row_errors: dict[int, dict[str, str]] = {}
     for edit in edits:
@@ -563,21 +772,24 @@ def commit_import(
 
     for item in new_items:
         transaction = item.transaction
-        merchant, category_id, is_subscription, source = reviewed_fields[transaction.row_number]
-        session.add(
-            Transaction(
-                workspace_id=job.workspace_id,
-                date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
-                description=transaction.description,
-                normalized_merchant=merchant,
-                amount_cents=transaction.amount_cents,
-                category_id=category_id,
-                categorization_source=source,
-                is_subscription=is_subscription,
-                duplicate_fingerprint=item.fingerprint,
-                import_job_id=job.id,
-            )
+        merchant, category_id, is_subscription, source, tag_ids, billing_period_months = (
+            reviewed_fields[transaction.row_number]
         )
+        persisted = Transaction(
+            workspace_id=job.workspace_id,
+            date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
+            description=transaction.description,
+            normalized_merchant=merchant,
+            amount_cents=transaction.amount_cents,
+            category_id=category_id,
+            categorization_source=source,
+            is_subscription=is_subscription,
+            billing_period_months=billing_period_months,
+            duplicate_fingerprint=item.fingerprint,
+            import_job_id=job.id,
+        )
+        persisted.tags = list(accessible_tags_by_id(session, job.workspace_id, tag_ids))
+        session.add(persisted)
     job.status = "committed"
     job.validation_errors = None
     try:

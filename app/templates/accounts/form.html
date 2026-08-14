@@ -25,7 +25,15 @@
       </select>
       {% if field_errors.account_type %}<p class="alert" role="alert">{{ field_errors.account_type }}</p>{% endif %}
 
-      <label for="institution">Institution</label>
+      <label for="institution-key">Institution</label>
+      <select id="institution-key" name="institution_key">
+        {% for option in institution_options %}
+          <option value="{{ option.key }}"{% if values.institution_key == option.key %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% if field_errors.institution_key %}<p class="alert" role="alert">{{ field_errors.institution_key }}</p>{% endif %}
+
+      <label for="institution">Institution name (when Other)</label>
       <input id="institution" name="institution" value="{{ values.institution }}" maxlength="255">
       {% if field_errors.institution %}<p class="alert" role="alert">{{ field_errors.institution }}</p>{% endif %}
 
