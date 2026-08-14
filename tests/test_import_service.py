@@ -115,6 +115,76 @@ def test_same_csv_can_be_linked_to_two_different_accounts(
     assert second_result.job.account_id == second.id
 
 
+def test_recognized_chase_bank_csv_skips_manual_mapping(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+    source = Path("tests/fixtures/statements/synthetic_chase_bank.csv").read_bytes()
+
+    result = create_transaction_import(
+        session,
+        LocalUploadStore(tmp_path),
+        FakeTransactionExtractor(""),
+        workspace,
+        "checking.csv",
+        "text/csv",
+        BytesIO(source),
+        "retain",
+        account=account,
+    )
+
+    assert result.job.status == "reviewing"
+    assert result.job.column_mapping == {
+        "date_column": "Posting Date",
+        "description_column": "Description",
+        "amount_mode": "single",
+        "amount_column": "Amount",
+        "debit_column": None,
+        "credit_column": None,
+        "date_format": "mdy",
+        "amount_sign": "as_is",
+    }
+
+
+def test_unrecognized_chase_csv_keeps_manual_mapping(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    account = Account(
+        workspace_id=workspace.id,
+        name="Chase Checking",
+        account_type="checking",
+        institution_key="chase",
+        institution="Chase",
+        is_liability=False,
+    )
+    session.add(account)
+    session.flush()
+
+    result = create_transaction_import(
+        session,
+        LocalUploadStore(tmp_path),
+        FakeTransactionExtractor(""),
+        workspace,
+        "checking.csv",
+        "text/csv",
+        BytesIO(CSV_BYTES),
+        "retain",
+        account=account,
+    )
+
+    assert result.job.status == "awaiting_mapping"
+    assert result.job.column_mapping is None
+
+
 def test_pdf_transaction_statement_enters_existing_review_flow(
     session: Session, workspace: Workspace, tmp_path: Path
 ) -> None:

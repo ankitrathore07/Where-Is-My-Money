@@ -20,6 +20,7 @@ from app.imports.normalization import (
     normalize_source_row,
 )
 from app.imports.parser import parse_csv_bytes
+from app.imports.providers.registry import resolve_provider_profile
 from app.imports.storage import LocalUploadStore, UploadStorageError
 from app.imports.types import (
     ColumnMapping,
@@ -129,7 +130,15 @@ def create_csv_import(
 
     saved = store.save(workspace.id, upload)
     try:
-        parse_csv_bytes(store.read(saved.storage_key))
+        document = parse_csv_bytes(store.read(saved.storage_key))
+        provider_mapping = None
+        if account is not None:
+            provider_mapping = resolve_provider_profile(
+                account.institution_key,
+                account.account_type,
+                ".csv",
+                document.headers,
+            ).mapping
         existing = _matching_import(
             session,
             workspace.id,
@@ -156,7 +165,8 @@ def create_csv_import(
             workspace_id=workspace.id,
             uploaded_file=uploaded_file,
             account=account,
-            status="awaiting_mapping",
+            status="reviewing" if provider_mapping is not None else "awaiting_mapping",
+            column_mapping=(provider_mapping.to_json() if provider_mapping is not None else None),
             source_checksum=saved.checksum,
         )
         session.add(job)
