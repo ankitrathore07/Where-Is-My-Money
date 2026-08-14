@@ -4,8 +4,8 @@ from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
-from app.dashboard.service import build_cash_flow_series
-from app.dashboard.types import AnnualCashFlow
+from app.dashboard.service import build_cash_flow_series, build_monthly_cash_flow_series
+from app.dashboard.types import AnnualCashFlow, MonthlyCashFlow
 from app.db.models import Category, Transaction, Workspace
 
 
@@ -73,6 +73,25 @@ def test_cash_flow_uses_half_up_basis_point_rounding_and_spending_only_semantics
         AnnualCashFlow(2025, 8_000, 7_998, 2, 3, 0),
         AnnualCashFlow(2026, None, 2_500, -2_500, None, 0),
     )
+
+
+def test_monthly_cash_flow_defaults_to_twelve_calendar_months(
+    session: Session, workspace: Workspace
+) -> None:
+    income = _category(session, "Income", "income")
+    expense = _category(session, "Expense", "expense")
+    _transaction(session, workspace.id, datetime(2025, 9, 1, tzinfo=UTC), 10_000, income.id)
+    _transaction(session, workspace.id, datetime(2025, 9, 2, tzinfo=UTC), -4_000, expense.id)
+    _transaction(session, workspace.id, datetime(2026, 8, 10, tzinfo=UTC), 20_000, income.id)
+    _transaction(session, workspace.id, datetime(2026, 8, 11, tzinfo=UTC), 99_999, income.id)
+
+    series = build_monthly_cash_flow_series(session, workspace.id, date(2026, 8, 10))
+
+    assert len(series) == 12
+    assert series[0] == MonthlyCashFlow(
+        date(2025, 9, 1), "Sep 2025", 10_000, 4_000, 6_000, 6_000, 0
+    )
+    assert series[-1] == MonthlyCashFlow(date(2026, 8, 1), "Aug 2026", 20_000, 0, 20_000, 10_000, 0)
 
 
 def test_cash_flow_excludes_rows_outside_the_inclusive_calendar_window(

@@ -255,6 +255,9 @@ async def test_dashboard_renders_aggregate_totals_five_year_fallbacks_and_safe_p
                 foreign_workspace_id = foreign_workspace.id
 
             response = await client.get(f"/workspaces/{workspace_id}/dashboard?as_of=2026-08-10")
+            yearly_response = await client.get(
+                f"/workspaces/{workspace_id}/dashboard?as_of=2026-08-10&cash_flow_view=yearly"
+            )
             foreign_response = await client.get(
                 f"/workspaces/{foreign_workspace_id}/dashboard", follow_redirects=False
             )
@@ -266,17 +269,15 @@ async def test_dashboard_renders_aggregate_totals_five_year_fallbacks_and_safe_p
     assert "$83,130.00 owed" in response.text
     assert "$284,620.00" in response.text
     assert "$24,840.00" in response.text
-    assert (
-        re.findall(r"<td>(202\d)</td>", response.text)
-        == [
-            "2022",
-            "2023",
-            "2024",
-            "2025",
-            "2026",
-        ]
-        * 2
-    )
+    assert re.findall(r"<td>(202\d)</td>", response.text) == [
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+        "2026",
+    ]
+    assert "Last 12 months" in response.text
+    assert "Five-year view" in yearly_response.text
     assert "$2,000.00" in response.text
     assert "$500.00" in response.text
     assert "75.0%" in response.text
@@ -293,6 +294,27 @@ async def test_dashboard_renders_aggregate_totals_five_year_fallbacks_and_safe_p
     assert set(payload) == {"cash_flow", "net_worth"}
     assert set(payload["net_worth"]) == {"labels", "values"}
     assert set(payload["cash_flow"]) == {"income", "labels", "spending"}
+    assert payload["cash_flow"]["labels"] == [
+        "Sep 2025",
+        "Oct 2025",
+        "Nov 2025",
+        "Dec 2025",
+        "Jan 2026",
+        "Feb 2026",
+        "Mar 2026",
+        "Apr 2026",
+        "May 2026",
+        "Jun 2026",
+        "Jul 2026",
+        "Aug 2026",
+    ]
+    assert _chart_payload(yearly_response.text)["cash_flow"]["labels"] == [
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+        "2026",
+    ]
 
 
 @pytest.mark.anyio
@@ -373,7 +395,7 @@ async def test_dashboard_renders_inferred_and_explicit_date_min_account_history(
     assert "As of 0001-01-01." in inferred.text
     assert "$123.45" in inferred.text
     assert _chart_payload(inferred.text)["net_worth"]["labels"] == ["1"]
-    assert _chart_payload(inferred.text)["cash_flow"]["labels"] == ["1"]
+    assert _chart_payload(inferred.text)["cash_flow"]["labels"] == ["Jan 1"]
     assert _chart_payload(explicit.text) == _chart_payload(inferred.text)
 
 
@@ -416,9 +438,22 @@ async def test_dashboard_renders_inferred_and_explicit_date_max_transaction(
     assert "As of 9999-12-31." in inferred.text
     assert "$123.45" in inferred.text
     assert _chart_payload(inferred.text)["cash_flow"] == {
-        "labels": ["9995", "9996", "9997", "9998", "9999"],
-        "income": [None, None, None, None, 12_345],
-        "spending": [None, None, None, None, 0],
+        "labels": [
+            "Jan 9999",
+            "Feb 9999",
+            "Mar 9999",
+            "Apr 9999",
+            "May 9999",
+            "Jun 9999",
+            "Jul 9999",
+            "Aug 9999",
+            "Sep 9999",
+            "Oct 9999",
+            "Nov 9999",
+            "Dec 9999",
+        ],
+        "income": [None, None, None, None, None, None, None, None, None, None, None, 12_345],
+        "spending": [None, None, None, None, None, None, None, None, None, None, None, 0],
     }
     assert _chart_payload(explicit.text) == _chart_payload(inferred.text)
 
@@ -615,8 +650,8 @@ async def test_dashboard_treats_transfer_only_activity_as_transaction_history(
     assert without_eligible_transfer.status_code == 200
     assert "No transactions have been imported yet." in without_eligible_transfer.text
     assert "No transactions have been imported yet." not in response.text
-    assert _fallback_row(response.text, "Income and spending fallback", "2026") == [
-        "2026",
+    assert _fallback_row(response.text, "Income and spending fallback", "Aug 2026") == [
+        "Aug 2026",
         "No income data",
         "No spending data",
         "No savings data",
