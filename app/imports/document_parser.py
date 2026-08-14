@@ -1,12 +1,21 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from app.imports.types import CsvDocument, CsvSourceRow
 
 DATE_AT_START = re.compile(
     r"^\s*(?P<date>\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/(?:\d{2}|\d{4}))\s+(?P<body>.+)$"
+)
+YEARLESS_DATE_AT_START = re.compile(r"^\s*(?P<month>\d{1,2})/(?P<day>\d{1,2})\s+(?P<body>.+)$")
+STATEMENT_PERIOD = re.compile(
+    r"(?P<start>(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\s+\d{1,2},\s+\d{4})\s+"
+    r"(?:through|to)\s+"
+    r"(?P<end>(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\s+\d{1,2},\s+\d{4})",
+    re.IGNORECASE,
 )
 MONEY_TOKEN = re.compile(
     r"(?<![\w.])(?:(?P<direction_before>CR|DR|CREDIT|DEBIT)\s+)?"
@@ -36,7 +45,7 @@ class _ColumnTransaction:
     line_number: int
     date: str
     description: str
-    amount_magnitude: Decimal
+    amount_magnitude: Decimal | None
     explicit_amount: Decimal | None
     balance: Decimal
 
@@ -58,6 +67,47 @@ def _iso_date(value: str) -> str:
         raise TransactionStatementFormatError(
             "invalid_transaction_date", "A transaction contains an invalid date."
         ) from exc
+
+
+def _statement_period(text: str) -> tuple[date, date] | None:
+    periods: list[tuple[date, date]] = []
+    for match in STATEMENT_PERIOD.finditer(text):
+        try:
+            start = datetime.strptime(match.group("start").title(), "%B %d, %Y").date()
+            end = datetime.strptime(match.group("end").title(), "%B %d, %Y").date()
+        except ValueError:
+            continue
+        if start <= end:
+            periods.append((start, end))
+    unique_periods = tuple(dict.fromkeys(periods))
+    return unique_periods[0] if len(unique_periods) == 1 else None
+
+
+def _expand_yearless_transaction_dates(text: str) -> str:
+    period = _statement_period(text)
+    if period is None:
+        return text
+    start, end = period
+    expanded: list[str] = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.split())
+        match = YEARLESS_DATE_AT_START.match(line)
+        if match is None:
+            expanded.append(raw_line)
+            continue
+        candidates: list[date] = []
+        for year in range(start.year, end.year + 1):
+            try:
+                candidate = date(year, int(match.group("month")), int(match.group("day")))
+            except ValueError:
+                continue
+            if start <= candidate <= end:
+                candidates.append(candidate)
+        if len(candidates) == 1:
+            expanded.append(f"{candidates[0]:%m/%d/%Y} {match.group('body')}")
+        else:
+            expanded.append(raw_line)
+    return "\n".join(expanded)
 
 
 def _signed_amount(match: re.Match[str]) -> str | None:
@@ -206,7 +256,25 @@ def _opening_balance(preamble: tuple[str, ...]) -> Decimal | None:
         balance = _money_value(money_matches[-1])
         if balance is not None:
             balances.append(balance)
-    return balances[0] if len(balances) == 1 else None
+    unique_balances = tuple(dict.fromkeys(balances))
+    return unique_balances[0] if len(unique_balances) == 1 else None
+
+
+def _has_amount_balance_header(preamble: tuple[str, ...]) -> bool:
+    return any(
+        re.search(r"\bAMOUNT\b.*\bBALANCE\b", line, re.IGNORECASE) is not None for line in preamble
+    )
+
+
+def _is_labeled_reference(body: str, match: re.Match[str]) -> bool:
+    raw = match.group("amount")
+    if any(character in raw for character in ".$,+-()"):
+        return False
+    prefix = body[: match.start()]
+    return (
+        re.search(r"\b(?:ID|REFERENCE|REF|NUMBER|NO|CARD)\s*:?[ ]*$", prefix, re.IGNORECASE)
+        is not None
+    )
 
 
 def _looks_like_column_statement(text: str, preamble: tuple[str, ...]) -> bool:
@@ -220,7 +288,9 @@ def _looks_like_column_statement(text: str, preamble: tuple[str, ...]) -> bool:
     )
 
 
-def _column_transactions(text: str) -> tuple[_ColumnTransaction, ...]:
+def _column_transactions(
+    text: str, *, allow_separated_amounts: bool
+) -> tuple[_ColumnTransaction, ...]:
     transactions: list[_ColumnTransaction] = []
     ambiguous = False
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
@@ -231,16 +301,23 @@ def _column_transactions(text: str) -> tuple[_ColumnTransaction, ...]:
         money_matches = tuple(MONEY_TOKEN.finditer(body))
         if not money_matches:
             continue
-        if len(money_matches) < 2:
+        balance_match = money_matches[-1]
+        amount_match = money_matches[-2] if len(money_matches) >= 2 else None
+        if (
+            amount_match is not None
+            and allow_separated_amounts
+            and _is_labeled_reference(body, amount_match)
+        ):
+            amount_match = None
+        if amount_match is None and not allow_separated_amounts:
             ambiguous = True
             continue
 
-        amount_match, balance_match = money_matches[-2:]
-        amount_value = _money_value(amount_match)
+        amount_value = _money_value(amount_match) if amount_match is not None else None
         balance = _money_value(balance_match)
         description = _description_without_money(body, money_matches)
         if (
-            amount_value is None
+            (amount_match is not None and amount_value is None)
             or amount_value == 0
             or balance is None
             or not description
@@ -248,13 +325,13 @@ def _column_transactions(text: str) -> tuple[_ColumnTransaction, ...]:
         ):
             ambiguous = True
             continue
-        explicit = _signed_amount(amount_match)
+        explicit = _signed_amount(amount_match) if amount_match is not None else None
         transactions.append(
             _ColumnTransaction(
                 line_number=line_number,
                 date=_iso_date(line_match.group("date")),
                 description=description,
-                amount_magnitude=abs(amount_value),
+                amount_magnitude=abs(amount_value) if amount_value is not None else None,
                 explicit_amount=Decimal(explicit) if explicit is not None else None,
                 balance=balance,
             )
@@ -281,7 +358,11 @@ def _observed_orientation(
     observed: set[int] = set()
     previous_balance = opening_balance
     for transaction in transactions:
-        if previous_balance is not None and transaction.explicit_amount is not None:
+        if (
+            previous_balance is not None
+            and transaction.amount_magnitude is not None
+            and transaction.explicit_amount is not None
+        ):
             delta = transaction.balance - previous_balance
             if abs(delta) != transaction.amount_magnitude:
                 raise _ambiguous_transaction_rows()
@@ -293,7 +374,9 @@ def _observed_orientation(
 
 
 def _column_transaction_document(text: str, preamble: tuple[str, ...]) -> CsvDocument:
-    transactions = _column_transactions(text)
+    transactions = _column_transactions(
+        text, allow_separated_amounts=_has_amount_balance_header(preamble)
+    )
     opening_balance = _opening_balance(preamble)
     heading_orientation = _statement_orientation(preamble)
     observed_orientation = _observed_orientation(transactions, opening_balance)
@@ -314,19 +397,26 @@ def _column_transaction_document(text: str, preamble: tuple[str, ...]) -> CsvDoc
             amount = transaction.explicit_amount
         else:
             delta = transaction.balance - previous_balance
-            if abs(delta) != transaction.amount_magnitude:
+            if delta == 0:
                 raise _ambiguous_transaction_rows()
-            if orientation is None:
-                if transaction.explicit_amount is None:
+            if transaction.amount_magnitude is None:
+                if orientation is None:
                     raise _ambiguous_transaction_rows()
-                amount = transaction.explicit_amount
-            else:
                 amount = delta * orientation
-                if (
-                    transaction.explicit_amount is not None
-                    and transaction.explicit_amount != amount
-                ):
+            else:
+                if abs(delta) != transaction.amount_magnitude:
                     raise _ambiguous_transaction_rows()
+                if orientation is None:
+                    if transaction.explicit_amount is None:
+                        raise _ambiguous_transaction_rows()
+                    amount = transaction.explicit_amount
+                else:
+                    amount = delta * orientation
+                    if (
+                        transaction.explicit_amount is not None
+                        and transaction.explicit_amount != amount
+                    ):
+                        raise _ambiguous_transaction_rows()
         rows.append(
             CsvSourceRow(
                 transaction.line_number,
@@ -349,6 +439,7 @@ def parse_transaction_statement_text(text: str) -> CsvDocument:
     fallback is allowed only when account type and exact running-balance changes
     prove the direction of every otherwise unsigned transaction.
     """
+    text = _expand_yearless_transaction_dates(text)
     try:
         return _strict_transaction_document(text)
     except TransactionStatementFormatError as exc:
