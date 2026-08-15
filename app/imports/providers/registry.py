@@ -1,6 +1,8 @@
 """Explicit provider-profile resolution from a selected account."""
 
+from app.imports.providers.capital_one import CAPITAL_ONE_PROVIDER_PROFILES
 from app.imports.providers.chase import CHASE_PDF_PROFILES, CHASE_PROVIDER_PROFILES
+from app.imports.providers.citi import CITI_PROVIDER_PROFILES
 from app.imports.providers.types import (
     ProviderDocumentResolution,
     ProviderPdfProfile,
@@ -8,7 +10,11 @@ from app.imports.providers.types import (
     ProviderResolution,
 )
 
-PROVIDER_PROFILES: tuple[ProviderProfile, ...] = CHASE_PROVIDER_PROFILES
+PROVIDER_PROFILES: tuple[ProviderProfile, ...] = (
+    *CHASE_PROVIDER_PROFILES,
+    *CAPITAL_ONE_PROVIDER_PROFILES,
+    *CITI_PROVIDER_PROFILES,
+)
 PROVIDER_PDF_PROFILES: tuple[ProviderPdfProfile, ...] = CHASE_PDF_PROFILES
 
 
