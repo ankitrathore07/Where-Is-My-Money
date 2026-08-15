@@ -160,11 +160,12 @@ description columns. Choose either one signed amount column or separate debit
 and credit columns, then select the CSV's explicit date format.
 
 Accounts store a stable institution choice for parser selection. Tested Chase
-checking/savings and credit-card CSV exports receive predefined mappings and go
-directly to review. Other institutions, legacy accounts, and unrecognized Chase
-headers keep the generic mapping screen until a synthetic tested parser is
-added. The selected account is attached to the import job; the app never guesses
-an institution from file contents.
+checking/savings and credit-card CSV exports, Capital One credit-card CSV
+exports, and Citi Costco credit-card CSV exports receive predefined mappings
+and go directly to review. Other institution/account layouts, legacy accounts,
+and unrecognized headers keep the generic mapping screen until a synthetic
+tested parser is added. The selected account is attached to the import job; the
+app never guesses an institution from file contents.
 
 Transaction PDFs may be up to 10 MiB. Embedded text is read locally; scanned
 PDFs use local Tesseract OCR. Each transaction row must start with a date and
@@ -456,9 +457,8 @@ Then run:
 - Ruff format checks that contributors produce the same layout.
 - Pytest runs synthetic unit, integration, and Chromium browser-flow fixtures.
   No real financial or identity data belongs in tests. Transaction coverage uses
-  only the included fictional `synthetic_checking.csv` and
-  `synthetic_transaction_pdf_text.txt` fixtures, and payslip coverage uses only
-  the fictional Northstar Bicycle Works fixture.
+  only fictional files under `tests/fixtures/statements`, and payslip coverage
+  uses only the fictional Northstar Bicycle Works fixture.
 - Alembic migrations describe database changes in source control. PR 4 adds a
   reversible data migration for the built-in categories, PR 6 adds the unique
   one-income-record-per-payslip rule, and CI upgrades a fresh SQLite database
