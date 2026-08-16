@@ -74,6 +74,9 @@ class User(Base):
     sent_invitations: Mapped[list["WorkspaceInvitation"]] = relationship(
         back_populates="invited_by"
     )
+    initiated_rule_application_runs: Mapped[list["RuleApplicationRun"]] = relationship(
+        back_populates="initiated_by_user"
+    )
 
 
 class Workspace(Base):
@@ -94,6 +97,9 @@ class Workspace(Base):
     tags: Mapped[list["Tag"]] = relationship(back_populates="workspace")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="workspace")
     merchant_rules: Mapped[list["MerchantRule"]] = relationship(back_populates="workspace")
+    rule_application_runs: Mapped[list["RuleApplicationRun"]] = relationship(
+        back_populates="workspace"
+    )
     payslips: Mapped[list["Payslip"]] = relationship(back_populates="workspace")
     income_records: Mapped[list["IncomeRecord"]] = relationship(back_populates="workspace")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="workspace")
@@ -444,6 +450,62 @@ class MerchantRule(Base):
         secondary=merchant_rule_tags,
         back_populates="merchant_rules",
         order_by="Tag.name_key",
+    )
+    application_runs: Mapped[list["RuleApplicationRun"]] = relationship(
+        back_populates="merchant_rule"
+    )
+
+
+class RuleApplicationRun(Base):
+    """Redacted audit metadata for one historical rule-application attempt."""
+
+    __tablename__ = "rule_application_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "rule_lock_version > 0",
+            name="ck_rule_application_runs_rule_lock_version_positive",
+        ),
+        CheckConstraint(
+            "status IN ('previewed', 'confirmed', 'stale', 'failed')",
+            name="ck_rule_application_runs_status",
+        ),
+        CheckConstraint(
+            "matched_count >= 0 AND changed_count >= 0 AND unchanged_count >= 0 "
+            "AND manual_skip_count >= 0 AND conflict_skip_count >= 0",
+            name="ck_rule_application_runs_counts_nonnegative",
+        ),
+        CheckConstraint(
+            "(status = 'confirmed' AND confirmed_at IS NOT NULL) OR "
+            "(status <> 'confirmed' AND confirmed_at IS NULL)",
+            name="ck_rule_application_runs_confirmation_state",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    merchant_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("merchant_rules.id", ondelete="SET NULL"), index=True
+    )
+    initiated_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    rule_name_snapshot: Mapped[str] = mapped_column(String(120))
+    rule_lock_version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16))
+    selection_json: Mapped[dict] = mapped_column(JSON)
+    preview_digest: Mapped[str] = mapped_column(String(64), index=True)
+    matched_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    changed_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    unchanged_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    manual_skip_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    conflict_skip_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="rule_application_runs")
+    merchant_rule: Mapped["MerchantRule | None"] = relationship(back_populates="application_runs")
+    initiated_by_user: Mapped["User"] = relationship(
+        back_populates="initiated_rule_application_runs"
     )
 
 
