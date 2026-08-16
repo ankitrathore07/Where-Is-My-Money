@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Protocol
 
+from app.rules.evaluation import ConditionResult
 from app.rules.types import (
     AllCondition,
     AnyCondition,
@@ -22,6 +24,15 @@ class RuleActions(Protocol):
     tag_ids: tuple[int, ...]
     is_subscription: bool
     billing_period_months: int | None
+
+
+@dataclass(frozen=True)
+class RuleExplanationLine:
+    """One safe, ordered condition-evaluation line for server-rendered simulation."""
+
+    depth: int
+    text: str
+    matched: bool
 
 
 _FIELD_LABELS = {
@@ -129,6 +140,54 @@ def describe_actions(
     else:
         parts.append("clear billing cadence")
     return "; ".join(parts)
+
+
+def describe_evaluation(
+    condition: ConditionNode,
+    result: ConditionResult,
+    *,
+    account_names: Mapping[int, str] | None = None,
+    provider_names: Mapping[str, str] | None = None,
+    depth: int = 0,
+) -> tuple[RuleExplanationLine, ...]:
+    """Pair a typed condition tree with its safe evaluation result, preserving order."""
+    outcome = "match" if result.matched else "no match"
+    if isinstance(condition, PredicateCondition):
+        summary = describe_condition(
+            condition,
+            account_names=account_names,
+            provider_names=provider_names,
+        )
+        return (
+            RuleExplanationLine(
+                depth,
+                f"{summary}: {outcome}",
+                result.matched,
+            ),
+        )
+    if isinstance(condition, AllCondition):
+        label = f"all conditions: {outcome}"
+        children = condition.children
+    elif isinstance(condition, AnyCondition):
+        label = f"any condition: {outcome}"
+        children = condition.children
+    elif isinstance(condition, NotCondition):
+        label = f"not: {outcome}"
+        children = (condition.child,)
+    else:
+        return (RuleExplanationLine(depth, f"invalid condition: {outcome}", False),)
+    lines = [RuleExplanationLine(depth, label, result.matched)]
+    for child, child_result in zip(children, result.children, strict=False):
+        lines.extend(
+            describe_evaluation(
+                child,
+                child_result,
+                account_names=account_names,
+                provider_names=provider_names,
+                depth=depth + 1,
+            )
+        )
+    return tuple(lines)
 
 
 def _describe_predicate(

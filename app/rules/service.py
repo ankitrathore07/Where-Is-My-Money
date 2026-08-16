@@ -144,6 +144,16 @@ class RuleImpactPreview:
 
 
 @dataclass(frozen=True)
+class RuleDeletionPreview:
+    """Historical contexts whose current winning rule would change after deletion."""
+
+    target_winner_count: int
+    next_rule_match_count: int
+    fallback_match_count: int
+    unavailable_count: int
+
+
+@dataclass(frozen=True)
 class _PreviewTransaction:
     id: int
     transaction_date: datetime
@@ -212,6 +222,60 @@ def simulate_rules(session: Session, workspace_id: int, context: RuleContext) ->
                 workspace_rules=CompiledWorkspaceRuleSet(workspace_id, ()),
             )
     return RuleSimulation(matches, decision)
+
+
+def preview_rule_deletion(session: Session, workspace_id: int, rule_id: int) -> RuleDeletionPreview:
+    """Count definite post-delete next-rule and fallback outcomes without changing state."""
+    get_rule(session, workspace_id, rule_id)
+    compiled = load_compiled_rule_set(session, workspace_id)
+    target_index = next(
+        (index for index, rule in enumerate(compiled.rules) if rule.id == rule_id),
+        None,
+    )
+    if target_index is None:
+        return RuleDeletionPreview(0, 0, 0, 0)
+
+    target_winner_count = 0
+    next_rule_match_count = 0
+    fallback_match_count = 0
+    unavailable_count = 0
+    for transaction in _preview_transactions(session, workspace_id):
+        context = _rule_context(transaction)
+        winner_index, ambiguous = _historical_winner_index(compiled.rules, context)
+        if ambiguous:
+            unavailable_count += 1
+            continue
+        if winner_index != target_index:
+            continue
+        target_winner_count += 1
+        lower_index, lower_ambiguous = _historical_winner_index(
+            compiled.rules[target_index + 1 :], context
+        )
+        if lower_ambiguous:
+            unavailable_count += 1
+        elif lower_index is None:
+            fallback_match_count += 1
+        else:
+            next_rule_match_count += 1
+    return RuleDeletionPreview(
+        target_winner_count,
+        next_rule_match_count,
+        fallback_match_count,
+        unavailable_count,
+    )
+
+
+def _historical_winner_index(
+    rules: tuple[CompiledWorkspaceRule, ...], context: RuleContext
+) -> tuple[int | None, bool]:
+    unknown_before_winner = False
+    for index, rule in enumerate(rules):
+        outcome = _evaluate_historical_condition(rule.condition, context)
+        if outcome is None:
+            unknown_before_winner = True
+        elif outcome:
+            return (None, True) if unknown_before_winner else (index, False)
+    return (None, unknown_before_winner)
 
 
 def preview_rule_impact(
@@ -608,6 +672,20 @@ def create_rule(session: Session, workspace_id: int, draft: RuleDraft) -> Mercha
     session.add(rule)
     session.flush()
     return rule
+
+
+def normalize_rule_draft(session: Session, workspace_id: int, draft: RuleDraft) -> RuleDraft:
+    """Return the exact validated values lifecycle writes persist for an untrusted draft."""
+    values = _validated_draft(session, workspace_id, draft)
+    return RuleDraft(
+        name=values.name,
+        condition=values.condition,
+        normalized_merchant=values.normalized_merchant,
+        category_id=values.category_id,
+        tag_ids=tuple(tag.id for tag in values.tags),
+        is_subscription=values.is_subscription,
+        billing_period_months=values.billing_period_months,
+    )
 
 
 def update_rule(

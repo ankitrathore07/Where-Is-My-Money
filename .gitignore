@@ -220,6 +220,9 @@ __marimo__/
 # Where Is My Money local application data
 data/
 
+# Root test-run artifacts
+/tmp/
+
 # Local isolated feature worktrees
 .worktrees/
 

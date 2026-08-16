@@ -82,6 +82,7 @@ async def test_workspace_page_exposes_all_authenticated_navigation_destinations(
         ("Income", f"/workspaces/{workspace_id}/income"),
         ("Categories", f"/workspaces/{workspace_id}/categories"),
         ("Tags", f"/workspaces/{workspace_id}/tags"),
+        ("Rules", f"/workspaces/{workspace_id}/rules"),
         ("Sign out", None),
     ]
     assert navigation.forms == [{"action": "/auth/sign-out", "method": "post"}]
