@@ -44,6 +44,7 @@ from app.rules.service import (
 )
 from app.rules.types import PredicateCondition
 from app.rules.validation import condition_to_json
+from app.transactions.service import upsert_workspace_rule
 
 SECRET = "history-application-secret"
 
@@ -450,6 +451,88 @@ def test_confirm_rejects_changed_state_before_mutating_any_selected_row(
     assert run.confirmed_at is None
 
 
+def test_stale_audit_exposes_run_metadata_and_obeys_caller_commit_or_rollback(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if a 409 mapper cannot durably commit stale status without a service commit."""
+    current = _category(session, workspace.id, "Current")
+    target = _category(session, workspace.id, "Target")
+    rule = _rule(session, workspace.id, target.id)
+    committed_transaction = _transaction(
+        session,
+        workspace.id,
+        current.id,
+        description="COFFEE COMMIT STALE",
+    )
+    rolled_back_transaction = _transaction(
+        session,
+        workspace.id,
+        current.id,
+        description="COFFEE ROLLBACK STALE",
+    )
+    session.commit()
+
+    committed_preview = preview_historical_application(
+        session,
+        workspace.id,
+        rule.id,
+        HistoryFilters(),
+        selected_transaction_ids=(committed_transaction.id,),
+        user_id=workspace.owner_id,
+        secret_key=SECRET,
+    )
+    session.commit()
+    committed_transaction.normalized_merchant = "Changed after preview"
+    session.commit()
+
+    with pytest.raises(StaleRuleApplicationError) as committed_error:
+        confirm_historical_application(
+            session,
+            workspace.id,
+            committed_preview.token,
+            workspace.owner_id,
+            secret_key=SECRET,
+        )
+    assert committed_error.value.run_id == committed_preview.run_id
+    assert committed_error.value.status == "stale"
+    session.commit()
+
+    with Session(bind=session.get_bind()) as fresh:
+        committed_run = fresh.get(RuleApplicationRun, committed_preview.run_id)
+        assert committed_run is not None
+        assert committed_run.status == "stale"
+
+    rolled_back_preview = preview_historical_application(
+        session,
+        workspace.id,
+        rule.id,
+        HistoryFilters(),
+        selected_transaction_ids=(rolled_back_transaction.id,),
+        user_id=workspace.owner_id,
+        secret_key=SECRET,
+    )
+    session.commit()
+    rolled_back_transaction.normalized_merchant = "Changed then rolled back"
+    session.commit()
+
+    with pytest.raises(StaleRuleApplicationError) as rolled_back_error:
+        confirm_historical_application(
+            session,
+            workspace.id,
+            rolled_back_preview.token,
+            workspace.owner_id,
+            secret_key=SECRET,
+        )
+    assert rolled_back_error.value.run_id == rolled_back_preview.run_id
+    assert rolled_back_error.value.status == "stale"
+    session.rollback()
+
+    with Session(bind=session.get_bind()) as fresh:
+        rolled_back_run = fresh.get(RuleApplicationRun, rolled_back_preview.run_id)
+        assert rolled_back_run is not None
+        assert rolled_back_run.status == "previewed"
+
+
 def test_confirmation_recomputes_full_order_and_detects_new_shadowing_rule(
     session: Session, workspace: Workspace
 ) -> None:
@@ -577,6 +660,108 @@ def test_preview_requires_initiator_membership_and_writes_no_foreign_audit(
         )
 
     assert session.scalar(select(RuleApplicationRun)) is None
+
+
+def test_preview_requires_explicit_initiator_before_any_workspace_or_selection_lookup(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+) -> None:
+    """Break if missing/foreign identity can use rule, filter, or selection errors as an oracle."""
+    target = _category(session, workspace.id, "Target")
+    rule = _rule(session, workspace.id, target.id)
+    session.flush()
+
+    with pytest.raises(TypeError):
+        preview_historical_application(
+            session,
+            workspace.id,
+            rule.id,
+            HistoryFilters(),
+            secret_key=SECRET,
+        )
+
+    for malformed_user_id in (None, True, 0, other_workspace.owner_id):
+        statements: list[str] = []
+
+        @event.listens_for(session.get_bind(), "before_cursor_execute")
+        def capture_statement(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _many,
+            captured=statements,
+        ):
+            captured.append(" ".join(statement.casefold().split()))
+
+        try:
+            with pytest.raises(RuleNotFoundError, match="Rule not found"):
+                preview_historical_application(
+                    session,
+                    workspace.id,
+                    rule.id,
+                    HistoryFilters(direction=True),  # type: ignore[arg-type]
+                    selected_transaction_ids=(True,),  # type: ignore[arg-type]
+                    user_id=malformed_user_id,  # type: ignore[arg-type]
+                    secret_key=SECRET,
+                )
+        finally:
+            event.remove(session.get_bind(), "before_cursor_execute", capture_statement)
+
+        assert all("merchant_rules" not in statement for statement in statements)
+        assert all("categories" not in statement for statement in statements)
+        assert all("accounts" not in statement for statement in statements)
+        assert all("rule_application_runs" not in statement for statement in statements)
+        if type(malformed_user_id) is int and malformed_user_id > 0:
+            assert len(statements) == 1
+            assert "workspace_memberships" in statements[0]
+        else:
+            assert statements == []
+
+
+def test_confirm_checks_membership_before_loading_untrusted_token(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+) -> None:
+    """Break if token validity or workspace state is observable before membership authorization."""
+    workspace_id = workspace.id
+    foreign_user_id = other_workspace.owner_id
+    for malformed_user_id in (None, True, 0, foreign_user_id):
+        statements: list[str] = []
+
+        @event.listens_for(session.get_bind(), "before_cursor_execute")
+        def capture_statement(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _many,
+            captured=statements,
+        ):
+            captured.append(" ".join(statement.casefold().split()))
+
+        try:
+            with pytest.raises(RuleNotFoundError, match="Rule not found"):
+                confirm_historical_application(
+                    session,
+                    workspace_id,
+                    "invalid-token",
+                    malformed_user_id,  # type: ignore[arg-type]
+                    secret_key=SECRET,
+                )
+        finally:
+            event.remove(session.get_bind(), "before_cursor_execute", capture_statement)
+
+        if type(malformed_user_id) is int and malformed_user_id > 0:
+            assert len(statements) == 1
+            assert "workspace_memberships" in statements[0]
+            assert "rule_application_runs" not in statements[0]
+        else:
+            assert statements == []
 
 
 def test_invalid_target_and_matching_invalid_higher_actions_fail_closed(
@@ -1037,5 +1222,125 @@ def test_concurrent_confirmation_serializes_nonunique_digest_and_reuses_outcome(
                 target_id,
                 target_id,
             ]
+    finally:
+        engine.dispose()
+
+
+def test_concurrent_confirmation_and_legacy_upsert_have_one_serial_order(
+    tmp_path: Path,
+) -> None:
+    """Break if the legacy exact-key writer can change a rule during confirmation."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'concurrent-legacy-writer.db'}",
+        connect_args={"check_same_thread": False, "timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    try:
+        with factory() as seed:
+            owner = User(
+                google_sub="history-legacy-writer-owner",
+                email="history-legacy-writer@example.com",
+                display_name="Owner",
+            )
+            workspace = Workspace(name="Concurrent writer", is_personal=True, owner=owner)
+            seed.add(workspace)
+            seed.flush()
+            seed.add(
+                WorkspaceMembership(
+                    workspace_id=workspace.id,
+                    user_id=owner.id,
+                    role="member",
+                )
+            )
+            current = _category(seed, workspace.id, "Current")
+            original_target = _category(seed, workspace.id, "Original target")
+            replacement_target = _category(seed, workspace.id, "Replacement target")
+            rule = _rule(seed, workspace.id, original_target.id)
+            rule.merchant_pattern = "COFFEE CONCURRENT WRITER"
+            transaction = _transaction(
+                seed,
+                workspace.id,
+                current.id,
+                description="COFFEE CONCURRENT WRITER",
+            )
+            seed.commit()
+            workspace_id = workspace.id
+            owner_id = owner.id
+            rule_id = rule.id
+            transaction_id = transaction.id
+            current_category_id = current.id
+            original_target_id = original_target.id
+            replacement_target_id = replacement_target.id
+
+        with factory() as preview_session:
+            preview = preview_historical_application(
+                preview_session,
+                workspace_id,
+                rule_id,
+                HistoryFilters(),
+                selected_transaction_ids=(transaction_id,),
+                user_id=owner_id,
+                secret_key=SECRET,
+            )
+            preview_session.commit()
+
+        barrier = Barrier(2)
+
+        def confirm() -> str:
+            with factory() as worker:
+                barrier.wait(timeout=5)
+                try:
+                    confirm_historical_application(
+                        worker,
+                        workspace_id,
+                        preview.token,
+                        owner_id,
+                        secret_key=SECRET,
+                    )
+                except StaleRuleApplicationError as error:
+                    assert error.run_id == preview.run_id
+                    assert error.status == "stale"
+                    worker.commit()
+                    return "stale"
+                worker.commit()
+                return "confirmed"
+
+        def update_legacy_rule() -> int:
+            with factory() as worker:
+                barrier.wait(timeout=5)
+                updated = upsert_workspace_rule(
+                    worker,
+                    workspace_id,
+                    "COFFEE CONCURRENT WRITER",
+                    "Replacement merchant",
+                    replacement_target_id,
+                    False,
+                )
+                worker.commit()
+                return updated.lock_version
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            confirm_future = pool.submit(confirm)
+            update_future = pool.submit(update_legacy_rule)
+            outcome = confirm_future.result(timeout=20)
+            updated_version = update_future.result(timeout=20)
+
+        assert updated_version == 2
+        with factory() as check:
+            stored_rule = check.get(MerchantRule, rule_id)
+            stored_transaction = check.get(Transaction, transaction_id)
+            run = check.get(RuleApplicationRun, preview.run_id)
+            assert stored_rule is not None
+            assert stored_rule.category_id == replacement_target_id
+            assert stored_rule.lock_version == 2
+            assert stored_transaction is not None
+            assert run is not None
+            if outcome == "confirmed":
+                assert stored_transaction.category_id == original_target_id
+                assert run.status == "confirmed"
+            else:
+                assert stored_transaction.category_id == current_category_id
+                assert run.status == "stale"
     finally:
         engine.dispose()

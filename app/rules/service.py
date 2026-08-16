@@ -76,7 +76,18 @@ class RuleConflictError(RuntimeError):
 
 
 class StaleRuleApplicationError(RuleConflictError):
-    """Raised when signed historical preview state is no longer current."""
+    """Expose a flushed stale audit; the caller still chooses commit or rollback."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: int | None = None,
+        status: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.run_id = run_id
+        self.status = status
 
 
 class RuleValidationError(ValueError):
@@ -310,14 +321,14 @@ def preview_historical_application(
     filters: HistoryFilters,
     *,
     selected_transaction_ids: tuple[int, ...] | list[int] | None = None,
-    user_id: int | None = None,
+    user_id: int,
     secret_key: str | None = None,
 ) -> HistoricalApplicationPreview:
     """Create a redacted audit preview and signed, bounded confirmation token."""
+    initiated_by_user_id = _application_user_id(session, workspace_id, user_id)
     rule = get_rule(session, workspace_id, rule_id)
     normalized_filters = _normalize_history_filters(session, workspace_id, filters)
     requested_ids = _normalize_selected_transaction_ids(selected_transaction_ids)
-    initiated_by_user_id = _application_user_id(session, workspace_id, user_id)
     rules, target = _historical_rule_plan(session, workspace_id, rule_id)
     evaluation = _evaluate_historical_application(
         session,
@@ -400,11 +411,11 @@ def confirm_historical_application(
     secret_key: str | None = None,
 ) -> HistoricalApplicationResult:
     """Recompute signed state under locks and atomically apply one bounded selection."""
+    _application_user_id(session, workspace_id, user_id)
     payload = load_application_token(_application_secret(secret_key), token)
     if payload.workspace_id != workspace_id:
         raise StaleRuleApplicationError("The application preview changed; reload and try again.")
-    _application_user_id(session, workspace_id, user_id)
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
 
     selection = canonical_application_selection(payload)
     confirmed = _confirmed_application_run(
@@ -599,23 +610,19 @@ def _normalize_selected_transaction_ids(
 def _application_user_id(
     session: Session,
     workspace_id: int,
-    user_id: int | None,
+    user_id: int,
 ) -> int:
-    workspace = session.scalar(select(Workspace).where(Workspace.id == workspace_id))
-    if workspace is None:
-        raise RuleNotFoundError("Rule not found.")
-    selected_user_id = workspace.owner_id if user_id is None else user_id
-    if type(selected_user_id) is not int or selected_user_id <= 0:
+    if type(user_id) is not int or user_id <= 0:
         raise RuleNotFoundError("Rule not found.")
     authorized = session.scalar(
         select(WorkspaceMembership.id).where(
             WorkspaceMembership.workspace_id == workspace_id,
-            WorkspaceMembership.user_id == selected_user_id,
+            WorkspaceMembership.user_id == user_id,
         )
     )
     if authorized is None:
         raise RuleNotFoundError("Rule not found.")
-    return selected_user_id
+    return user_id
 
 
 def _application_secret(secret_key: str | None) -> str:
@@ -1073,7 +1080,11 @@ def _mark_application_stale(session: Session, run: RuleApplicationRun) -> None:
     run.status = "stale"
     run.confirmed_at = None
     session.flush()
-    raise StaleRuleApplicationError("The application preview changed; reload and try again.")
+    raise StaleRuleApplicationError(
+        "The application preview changed; reload and try again.",
+        run_id=run.id,
+        status=run.status,
+    )
 
 
 def _apply_historical_states(
@@ -1600,7 +1611,7 @@ def get_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
 
 def create_rule(session: Session, workspace_id: int, draft: RuleDraft) -> MerchantRule:
     """Validate, append, flush, and return a new enabled workspace rule."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     values = _validated_draft(session, workspace_id, draft)
     existing = list(list_rules(session, workspace_id))
     _assign_compact_priorities(existing)
@@ -1647,7 +1658,7 @@ def update_rule(
     expected_lock_version: int,
 ) -> MerchantRule:
     """Atomically replace mutable rule values when the submitted version is current."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     _validate_lock_version(expected_lock_version)
     values = _validated_draft(session, workspace_id, draft)
@@ -1686,7 +1697,7 @@ def set_rule_enabled(
     expected_lock_version: int,
 ) -> MerchantRule:
     """Enable or disable one rule under an optimistic-lock check."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     _validate_lock_version(expected_lock_version)
     if type(enabled) is not bool:
@@ -1716,7 +1727,7 @@ def move_rule(
     expected_lock_version: int | None = None,
 ) -> MerchantRule:
     """Move a rule and compact all priorities inside the caller's transaction."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     moved = get_rule(session, workspace_id, rule_id)
     ordered = list(list_rules(session, workspace_id))
     if type(new_index) is not int or not 0 <= new_index < len(ordered):
@@ -1745,7 +1756,7 @@ def move_rule(
 
 def duplicate_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
     """Copy a scoped rule and insert the copy immediately after its source."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     source = get_rule(session, workspace_id, rule_id)
     try:
         source_condition = parse_condition(_persisted_condition_payload(source))
@@ -1797,7 +1808,7 @@ def delete_rule(
     expected_lock_version: int | None = None,
 ) -> None:
     """Delete a scoped rule and compact remaining priorities without committing."""
-    _serialize_workspace_ordering(session, workspace_id)
+    serialize_workspace_rule_mutation(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     if expected_lock_version is not None:
         _validate_lock_version(expected_lock_version)
@@ -1953,8 +1964,8 @@ def _assign_compact_priorities(rules: list[MerchantRule]) -> None:
         rule.priority = priority
 
 
-def _serialize_workspace_ordering(session: Session, workspace_id: int) -> None:
-    """Lock the workspace before reading or rewriting its ordered rule collection."""
+def serialize_workspace_rule_mutation(session: Session, workspace_id: int) -> None:
+    """Lock a workspace before any writer reads or mutates its rule collection."""
     bind = session.get_bind()
     if bind.dialect.name == "sqlite":
         result = session.execute(

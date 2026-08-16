@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.categorization.normalization import MAX_MERCHANT_LENGTH, merchant_key
 from app.categorization.types import CategorizationSource
 from app.db.models import Category, MerchantRule, Transaction
+from app.rules.service import list_rules, serialize_workspace_rule_mutation
 from app.tags.service import (
     replace_rule_tags,
     replace_transaction_tags,
@@ -46,15 +47,20 @@ class ManualCategorizationInput:
 
 
 def get_transaction_for_categorization(
-    session: Session, workspace_id: int, transaction_id: int
+    session: Session,
+    workspace_id: int,
+    transaction_id: int,
+    *,
+    lock: bool = False,
 ) -> Transaction:
     """Load a transaction only through its active workspace boundary."""
-    transaction = session.scalar(
-        select(Transaction).where(
-            Transaction.id == transaction_id,
-            Transaction.workspace_id == workspace_id,
-        )
+    statement = select(Transaction).where(
+        Transaction.id == transaction_id,
+        Transaction.workspace_id == workspace_id,
     )
+    if lock:
+        statement = statement.with_for_update()
+    transaction = session.scalar(statement)
     if transaction is None:
         raise TransactionNotFoundError("Transaction not found")
     return transaction
@@ -117,6 +123,8 @@ def upsert_workspace_rule(
     billing_period_months: int | None = None,
 ) -> MerchantRule:
     """Create or replace one exact merchant rule inside the active workspace."""
+    serialize_workspace_rule_mutation(session, workspace_id)
+    effective_tag_ids = tag_ids_with_subscription(session, tag_ids, is_subscription)
     rule = session.scalar(
         select(MerchantRule).where(
             MerchantRule.workspace_id == workspace_id,
@@ -124,27 +132,43 @@ def upsert_workspace_rule(
         )
     )
     if rule is None:
+        ordered = list(list_rules(session, workspace_id))
+        for priority, existing_rule in enumerate(ordered):
+            existing_rule.priority = priority
         rule = MerchantRule(
             workspace_id=workspace_id,
             merchant_pattern=key,
+            enabled=True,
+            priority=len(ordered),
+            condition_version=1,
+            condition_json={},
+            lock_version=1,
             normalized_merchant=normalized_merchant,
             category_id=category_id,
             is_subscription=is_subscription,
             billing_period_months=billing_period_months,
         )
         session.add(rule)
+        session.flush()
+        replace_rule_tags(session, workspace_id, rule, effective_tag_ids)
     else:
+        current_tag_ids = {tag.id for tag in rule.tags}
+        actions_changed = (
+            rule.normalized_merchant != normalized_merchant
+            or rule.category_id != category_id
+            or rule.is_subscription != is_subscription
+            or rule.billing_period_months != billing_period_months
+            or current_tag_ids != set(effective_tag_ids)
+        )
         rule.normalized_merchant = normalized_merchant
         rule.category_id = category_id
         rule.is_subscription = is_subscription
         rule.billing_period_months = billing_period_months
-    session.flush()
-    replace_rule_tags(
-        session,
-        workspace_id,
-        rule,
-        tag_ids_with_subscription(session, tag_ids, is_subscription),
-    )
+        if actions_changed:
+            rule.lock_version += 1
+            replace_rule_tags(session, workspace_id, rule, effective_tag_ids)
+        else:
+            session.flush()
     return rule
 
 
@@ -155,7 +179,21 @@ def manually_categorize_transaction(
     values: ManualCategorizationInput,
 ) -> Transaction:
     """Apply a scoped manual update and optionally upsert one exact-key rule."""
-    transaction = get_transaction_for_categorization(session, workspace_id, transaction_id)
+    (
+        normalized_merchant,
+        is_subscription,
+        save_for_future,
+        tag_ids,
+        billing_period_months,
+    ) = _validated_values(values)
+    if save_for_future:
+        serialize_workspace_rule_mutation(session, workspace_id)
+    transaction = get_transaction_for_categorization(
+        session,
+        workspace_id,
+        transaction_id,
+        lock=save_for_future,
+    )
 
     category = session.scalar(
         select(Category).where(
@@ -166,13 +204,6 @@ def manually_categorize_transaction(
     if category is None:
         raise CategoryNotAccessibleError("Category not found")
 
-    (
-        normalized_merchant,
-        is_subscription,
-        save_for_future,
-        tag_ids,
-        billing_period_months,
-    ) = _validated_values(values)
     key = merchant_key(transaction.description)
     if save_for_future and not key:
         raise MerchantRuleKeyError("Transaction description has no usable merchant key")

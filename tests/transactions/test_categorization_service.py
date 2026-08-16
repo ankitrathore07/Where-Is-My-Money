@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from app.transactions.service import (
     MerchantRuleKeyError,
     TransactionNotFoundError,
     manually_categorize_transaction,
+    upsert_workspace_rule,
 )
 
 
@@ -187,6 +188,177 @@ def test_save_for_future_replaces_only_same_workspace_rule(session: Session) -> 
     assert first_rule.is_subscription is True
     assert second_rule.normalized_merchant == "Second Label"
     assert second_rule.category_id == second_category.id
+
+
+def test_legacy_rule_upsert_serializes_and_versions_only_real_action_changes(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if a legacy writer bypasses the workspace lock or digest-visible lock version."""
+    old_category = _category(session, workspace.id, "Old")
+    new_category = _category(session, workspace.id, "New")
+    old_tag = Tag(workspace_id=workspace.id, name="Old tag", name_key="old tag")
+    new_tag = Tag(workspace_id=workspace.id, name="New tag", name_key="new tag")
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        merchant_pattern="WHOLE FOODS MARKET",
+        name="Whole Foods",
+        enabled=True,
+        priority=0,
+        lock_version=4,
+        normalized_merchant="Old merchant",
+        category=old_category,
+        tags=[old_tag],
+    )
+    session.add_all((new_tag, rule))
+    session.commit()
+    statements: list[str] = []
+
+    @event.listens_for(session.get_bind(), "before_cursor_execute")
+    def capture_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(" ".join(statement.casefold().split()))
+
+    try:
+        updated = upsert_workspace_rule(
+            session,
+            workspace.id,
+            "WHOLE FOODS MARKET",
+            "New merchant",
+            new_category.id,
+            False,
+            tag_ids=(new_tag.id,),
+            billing_period_months=6,
+        )
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", capture_statement)
+
+    workspace_lock_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update workspaces")
+    )
+    rule_lookup_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("select merchant_rules")
+    )
+    assert workspace_lock_index < rule_lookup_index
+    assert updated is rule
+    assert rule.lock_version == 5
+    assert rule.normalized_merchant == "New merchant"
+    assert rule.category_id == new_category.id
+    assert rule.billing_period_months == 6
+    assert [tag.id for tag in rule.tags] == [new_tag.id]
+
+    unchanged = upsert_workspace_rule(
+        session,
+        workspace.id,
+        "WHOLE FOODS MARKET",
+        "New merchant",
+        new_category.id,
+        False,
+        tag_ids=(new_tag.id,),
+        billing_period_months=6,
+    )
+    assert unchanged is rule
+    assert rule.lock_version == 5
+
+
+def test_legacy_rule_insert_compacts_existing_order_and_appends_deterministically(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if legacy inserts keep duplicate/default priority instead of the rule-service order."""
+    category = _category(session, workspace.id, "Rules")
+    session.add_all(
+        (
+            MerchantRule(
+                workspace_id=workspace.id,
+                merchant_pattern="FIRST",
+                name="First",
+                enabled=True,
+                priority=4,
+                lock_version=1,
+                normalized_merchant="First",
+                category=category,
+            ),
+            MerchantRule(
+                workspace_id=workspace.id,
+                merchant_pattern="SECOND",
+                name="Second",
+                enabled=True,
+                priority=9,
+                lock_version=1,
+                normalized_merchant="Second",
+                category=category,
+            ),
+        )
+    )
+    session.commit()
+
+    inserted = upsert_workspace_rule(
+        session,
+        workspace.id,
+        "THIRD",
+        "Third",
+        category.id,
+        False,
+    )
+    ordered = tuple(
+        session.scalars(
+            select(MerchantRule)
+            .where(MerchantRule.workspace_id == workspace.id)
+            .order_by(MerchantRule.priority, MerchantRule.id)
+        )
+    )
+
+    assert [rule.merchant_pattern for rule in ordered] == ["FIRST", "SECOND", "THIRD"]
+    assert [rule.priority for rule in ordered] == [0, 1, 2]
+    assert inserted.priority == 2
+    assert inserted.lock_version == 1
+
+
+def test_save_for_future_locks_workspace_before_loading_or_flushing_transaction(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if manual-save and confirmation acquire locks in reverse order."""
+    category = _category(session, workspace.id, "Groceries")
+    transaction = _transaction(session, workspace.id, category)
+    session.commit()
+    transaction_id = transaction.id
+    category_id = category.id
+    workspace_id = workspace.id
+    statements: list[str] = []
+
+    @event.listens_for(session.get_bind(), "before_cursor_execute")
+    def capture_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(" ".join(statement.casefold().split()))
+
+    try:
+        manually_categorize_transaction(
+            session,
+            workspace_id,
+            transaction_id,
+            ManualCategorizationInput("Whole Foods", category_id, False, True),
+        )
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", capture_statement)
+
+    workspace_lock_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update workspaces")
+    )
+    transaction_lookup_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("select transactions")
+    )
+    transaction_flush_indexes = [
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update transactions")
+    ]
+    assert workspace_lock_index < transaction_lookup_index
+    assert all(workspace_lock_index < index for index in transaction_flush_indexes)
 
 
 def test_not_saving_for_future_leaves_existing_rule_unchanged(
