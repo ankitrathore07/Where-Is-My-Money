@@ -6,8 +6,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from sqlalchemy import JSON
+from sqlalchemy.types import TypeDecorator
 
 APPLICATION_TOKEN_SALT = "where-is-my-money-rule-application"
 APPLICATION_TOKEN_MAX_AGE = 3600
@@ -17,6 +20,7 @@ MAX_SELECTED_TRANSACTION_IDS = 500
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
 _FILTER_KEYS = {"account_id", "category_id", "date_from", "date_to", "direction"}
 _DIRECTIONS = {"all", "expense", "income", "zero"}
+_SELECTION_KEYS = {"normalized_filters", "selected_transaction_ids"}
 _PAYLOAD_KEYS = {
     "v",
     "workspace_id",
@@ -53,43 +57,29 @@ class ApplicationTokenPayload:
     normalized_filters: Mapping[str, NormalizedFilterValue]
 
 
-class _ImmutableDict(dict[str, object]):
-    """JSON-serializable dict that cannot change after validated construction."""
+class _FrozenMapping(Mapping[str, object]):
+    """Small immutable mapping used for canonical and hydrated audit selections."""
 
-    def _immutable(self, *_args: object, **_kwargs: object) -> None:
-        raise TypeError("Canonical application selections are immutable.")
+    __slots__ = ("_values",)
 
-    __delitem__ = _immutable
-    __setitem__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
+    def __init__(self, values: Mapping[str, object]) -> None:
+        self._values = MappingProxyType(dict(values))
 
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
 
-class _ImmutableList(list[int]):
-    """JSON-serializable integer list that cannot change after validated construction."""
+    def __iter__(self):
+        return iter(self._values)
 
-    def _immutable(self, *_args: object, **_kwargs: object) -> None:
-        raise TypeError("Canonical application selections are immutable.")
+    def __len__(self) -> int:
+        return len(self._values)
 
-    __delitem__ = _immutable
-    __iadd__ = _immutable
-    __imul__ = _immutable
-    __setitem__ = _immutable
-    append = _immutable
-    clear = _immutable
-    extend = _immutable
-    insert = _immutable
-    pop = _immutable
-    remove = _immutable
-    reverse = _immutable
-    sort = _immutable
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Mapping) and dict(self.items()) == dict(other.items())
 
 
-class _CanonicalApplicationSelection(_ImmutableDict):
-    """Marker for selection JSON created from a validated signed payload."""
+class _CanonicalApplicationSelection(_FrozenMapping):
+    """Deeply immutable representation returned by the persistence boundary."""
 
 
 def _positive_int(value: object) -> bool:
@@ -121,6 +111,52 @@ def _canonical_filters(value: object) -> dict[str, NormalizedFilterValue] | None
             return None
         canonical[key] = filter_value
     return dict(sorted(canonical.items()))
+
+
+def _canonicalize_application_selection(value: object) -> _CanonicalApplicationSelection:
+    if not isinstance(value, Mapping) or set(value) != _SELECTION_KEYS:
+        raise RuleApplicationTokenError(
+            "Application preview could not be verified; reload and try again."
+        )
+    filters = _canonical_filters(value["normalized_filters"])
+    selected_ids = value["selected_transaction_ids"]
+    valid = (
+        filters is not None
+        and type(selected_ids) in {list, tuple}
+        and len(selected_ids) <= MAX_SELECTED_TRANSACTION_IDS
+        and all(_positive_int(transaction_id) for transaction_id in selected_ids)
+        and len(selected_ids) == len(set(selected_ids))
+        and tuple(selected_ids) == tuple(sorted(selected_ids))
+    )
+    if not valid:
+        raise RuleApplicationTokenError(
+            "Application preview could not be verified; reload and try again."
+        )
+    return _CanonicalApplicationSelection(
+        {
+            "normalized_filters": _FrozenMapping(filters),
+            "selected_transaction_ids": tuple(selected_ids),
+        }
+    )
+
+
+class ApplicationSelectionJSON(TypeDecorator):
+    """Validate every audit JSON bind and deeply freeze every hydrated result."""
+
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value: object, _dialect: object) -> dict[str, object]:
+        canonical = _canonicalize_application_selection(value)
+        return {
+            "normalized_filters": dict(canonical["normalized_filters"]),
+            "selected_transaction_ids": list(canonical["selected_transaction_ids"]),
+        }
+
+    def process_result_value(
+        self, value: object, _dialect: object
+    ) -> _CanonicalApplicationSelection:
+        return _canonicalize_application_selection(value)
 
 
 def _validated_payload(raw: object) -> ApplicationTokenPayload:
@@ -164,7 +200,7 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
 
 def canonical_application_selection(
     payload: ApplicationTokenPayload,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Return the only selection JSON shape supported by application audit persistence."""
     if type(payload) is not ApplicationTokenPayload:
         raise RuleApplicationTokenError(
@@ -181,10 +217,10 @@ def canonical_application_selection(
             "normalized_filters": payload.normalized_filters,
         }
     )
-    return _CanonicalApplicationSelection(
+    return _canonicalize_application_selection(
         {
-            "normalized_filters": _ImmutableDict(validated.normalized_filters),
-            "selected_transaction_ids": _ImmutableList(validated.selected_transaction_ids),
+            "normalized_filters": validated.normalized_filters,
+            "selected_transaction_ids": validated.selected_transaction_ids,
         }
     )
 

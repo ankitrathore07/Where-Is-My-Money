@@ -1,11 +1,12 @@
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, event, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Engine, create_engine, event, insert, inspect, text
+from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
 from app.db.models import MerchantRule, RuleApplicationRun, Workspace
@@ -71,7 +72,7 @@ def _valid_run_values() -> dict[str, object]:
 
 def _canonical_selection(
     *, selected_transaction_ids: tuple[int, ...] = (2, 7)
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     return application_tokens.canonical_application_selection(
         ApplicationTokenPayload(
             workspace_id=1,
@@ -81,6 +82,36 @@ def _canonical_selection(
             state_digest="a" * 64,
             normalized_filters={},
         )
+    )
+
+
+def _model_rule(session: Session, workspace: Workspace) -> MerchantRule:
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        name="Coffee",
+        condition_json={},
+        lock_version=2,
+    )
+    session.add(rule)
+    session.flush()
+    return rule
+
+
+def _model_run(
+    workspace: Workspace,
+    rule: MerchantRule,
+    *,
+    selection_json: object,
+) -> RuleApplicationRun:
+    return RuleApplicationRun(
+        workspace_id=workspace.id,
+        merchant_rule_id=rule.id,
+        initiated_by_user_id=workspace.owner_id,
+        rule_name_snapshot=rule.name,
+        rule_lock_version=rule.lock_version,
+        status="previewed",
+        selection_json=selection_json,
+        preview_digest="b" * 64,
     )
 
 
@@ -195,14 +226,7 @@ def test_application_run_model_exposes_ownership_relationships(
     session: Session, workspace: Workspace
 ) -> None:
     """Break if Task 10 cannot navigate the audit to its authorized workspace, user, and rule."""
-    rule = MerchantRule(
-        workspace_id=workspace.id,
-        name="Coffee",
-        condition_json={},
-        lock_version=2,
-    )
-    session.add(rule)
-    session.flush()
+    rule = _model_rule(session, workspace)
     run = RuleApplicationRun(
         workspace_id=workspace.id,
         merchant_rule_id=rule.id,
@@ -312,14 +336,25 @@ def test_application_run_migration_rejects_invalid_foreign_references(
             "selected_transaction_ids": [2],
         },
         {"normalized_filters": {}, "selected_transaction_ids": [2], "token": "signed"},
+        {"normalized_filters": {}, "selected_transaction_ids": [7, 2]},
+        {"normalized_filters": {}, "selected_transaction_ids": [2, 2]},
+        {"normalized_filters": {}, "selected_transaction_ids": [True]},
+        {"normalized_filters": {}, "selected_transaction_ids": [0]},
+        {"normalized_filters": {}, "selected_transaction_ids": list(range(1, 502))},
     ],
 )
 def test_application_run_model_rejects_unvalidated_selection_json(
+    session: Session,
+    workspace: Workspace,
     selection_json: dict[str, object],
 ) -> None:
-    """Break if direct ORM assignment can bypass the canonical redacted selection boundary."""
-    with pytest.raises(ValueError):
-        RuleApplicationRun(selection_json=selection_json)
+    """Break if direct ORM assignment can bypass validation at the final bind boundary."""
+    rule = _model_rule(session, workspace)
+    run = _model_run(workspace, rule, selection_json=selection_json)
+    session.add(run)
+
+    with pytest.raises(StatementError):
+        session.flush()
 
 
 def test_application_run_model_accepts_only_canonical_application_selection() -> None:
@@ -338,7 +373,7 @@ def test_application_run_model_accepts_only_canonical_application_selection() ->
 
     assert run.selection_json == {
         "normalized_filters": {"account_id": 3, "direction": "income"},
-        "selected_transaction_ids": [2, 7],
+        "selected_transaction_ids": (2, 7),
     }
 
 
@@ -352,7 +387,80 @@ def test_application_run_canonical_selection_cannot_be_mutated_after_validation(
     with pytest.raises(TypeError):
         run.selection_json["normalized_filters"]["direction"] = "expense"
     with pytest.raises(TypeError):
-        run.selection_json["selected_transaction_ids"].append(99)
+        run.selection_json["selected_transaction_ids"][0] = 99
+
+
+def test_application_run_canonical_selection_rejects_union_mutation() -> None:
+    """Break if inherited dict union operators bypass top-level or nested immutability."""
+    selection = _canonical_selection()
+    filters = selection["normalized_filters"]
+
+    with pytest.raises(TypeError):
+        selection |= {"token": "signed-preview-token"}
+    with pytest.raises(TypeError):
+        filters |= {"description": "PRIVATE MERCHANT"}
+
+
+def test_application_selection_stays_immutable_after_flush_and_reload(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if JSON hydration returns mutable dictionaries or lists after persistence."""
+    rule = _model_rule(session, workspace)
+    run = _model_run(workspace, rule, selection_json=_canonical_selection())
+    session.add(run)
+    session.commit()
+    session.expire(run, ["selection_json"])
+
+    assert run.selection_json == {
+        "normalized_filters": {},
+        "selected_transaction_ids": (2, 7),
+    }
+    with pytest.raises(TypeError):
+        run.selection_json["token"] = "signed-preview-token"
+    with pytest.raises(TypeError):
+        run.selection_json["normalized_filters"]["description"] = "PRIVATE"
+    with pytest.raises(TypeError):
+        run.selection_json["selected_transaction_ids"][0] = 99
+
+
+def test_application_selection_mutation_after_assignment_is_rejected_on_flush(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if a mutated accepted object can pass the final database bind boundary."""
+    rule = _model_rule(session, workspace)
+    selection_json: dict[str, object] = {
+        "normalized_filters": {},
+        "selected_transaction_ids": [2, 7],
+    }
+    run = _model_run(workspace, rule, selection_json=selection_json)
+    selection_json["token"] = "signed-preview-token"
+    session.add(run)
+
+    with pytest.raises(StatementError):
+        session.flush()
+
+
+def test_application_selection_core_insert_rejects_sensitive_json(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if Core or bulk writes bypass the ORM validator and persist prohibited content."""
+    rule = _model_rule(session, workspace)
+    with pytest.raises(StatementError):
+        session.execute(
+            insert(RuleApplicationRun).values(
+                workspace_id=workspace.id,
+                merchant_rule_id=rule.id,
+                initiated_by_user_id=workspace.owner_id,
+                rule_name_snapshot=rule.name,
+                rule_lock_version=rule.lock_version,
+                status="previewed",
+                selection_json={
+                    "normalized_filters": {"description": "PRIVATE MERCHANT"},
+                    "selected_transaction_ids": [2],
+                },
+                preview_digest="b" * 64,
+            )
+        )
 
 
 @pytest.mark.parametrize(

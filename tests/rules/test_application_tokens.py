@@ -89,7 +89,7 @@ def test_application_selection_is_canonical_and_contains_only_approved_state() -
 
     assert selection == {
         "normalized_filters": {"account_id": 5, "direction": "expense"},
-        "selected_transaction_ids": [3, 11],
+        "selected_transaction_ids": (3, 11),
     }
 
 

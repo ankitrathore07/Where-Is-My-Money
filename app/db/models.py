@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
@@ -22,10 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
-from app.rules.application_tokens import (
-    _CanonicalApplicationSelection,
-    validate_application_digest,
-)
+from app.rules.application_tokens import ApplicationSelectionJSON, validate_application_digest
 
 
 class Base(DeclarativeBase):
@@ -505,7 +503,7 @@ class RuleApplicationRun(Base):
     rule_name_snapshot: Mapped[str] = mapped_column(String(120))
     rule_lock_version: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16))
-    selection_json: Mapped[dict] = mapped_column(JSON)
+    selection_json: Mapped[Mapping[str, object]] = mapped_column(ApplicationSelectionJSON())
     preview_digest: Mapped[str] = mapped_column(String(64), index=True)
     matched_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     changed_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -520,12 +518,6 @@ class RuleApplicationRun(Base):
     initiated_by_user: Mapped["User"] = relationship(
         back_populates="initiated_rule_application_runs"
     )
-
-    @validates("selection_json")
-    def _validate_selection_json(self, _key: str, value: object) -> dict[str, object]:
-        if type(value) is not _CanonicalApplicationSelection:
-            raise ValueError("Use canonical_application_selection() for audit selection JSON.")
-        return value
 
     @validates("preview_digest")
     def _validate_preview_digest(self, _key: str, value: object) -> str:
