@@ -42,7 +42,7 @@ _FIELDS = frozenset(
     }
 )
 _PROVIDER_KEYS = frozenset(
-    profile.key for profile in (*PROVIDER_PROFILES, *PROVIDER_PDF_PROFILES)
+    {"generic_csv", *(profile.key for profile in (*PROVIDER_PROFILES, *PROVIDER_PDF_PROFILES))}
 )
 
 
@@ -53,14 +53,15 @@ class RuleConditionValidationError(ValueError):
 def parse_condition(payload: object) -> ConditionNode:
     """Return a normalized immutable condition tree, rejecting malformed input."""
     root = _mapping(payload)
-    if root.get("version") != CONDITION_VERSION:
+    if not _is_int(root.get("version")) or root["version"] != CONDITION_VERSION:
         _invalid("Condition version must be 1.")
     return _parse_node(root, depth=1, predicate_count=[0], root=True)
 
 
 def condition_to_json(node: ConditionNode) -> str:
     """Serialize a valid typed condition with stable compact JSON formatting."""
-    payload = {"version": CONDITION_VERSION, **_node_to_payload(node)}
+    normalized = parse_condition({"version": CONDITION_VERSION, **_node_to_payload(node)})
+    payload = {"version": CONDITION_VERSION, **_node_to_payload(normalized)}
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -74,6 +75,8 @@ def _parse_node(
     if root:
         expected_keys.add("version")
     node_type = payload.get("type")
+    if not isinstance(node_type, str):
+        _invalid("Condition node type is not supported.")
     if node_type == "predicate":
         expected_keys.update({"field", "operator", "value"})
         _only_keys(payload, expected_keys)
@@ -160,7 +163,7 @@ def _node_to_payload(node: ConditionNode) -> dict[str, object]:
         return {"type": "any", "children": [_node_to_payload(child) for child in node.children]}
     if isinstance(node, NotCondition):
         return {"type": "not", "child": _node_to_payload(node.child)}
-    raise TypeError("Condition node type is not supported.")
+    _invalid("Condition node type is not supported.")
 
 
 def _mapping(value: object) -> Mapping[str, object]:
