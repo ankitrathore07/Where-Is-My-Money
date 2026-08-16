@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import unicodedata
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, time
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, case, delete, insert, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.categorization.normalization import merchant_display_fallback, merchant_key
@@ -22,12 +23,21 @@ from app.db.models import (
     Category,
     ImportJob,
     MerchantRule,
+    RuleApplicationRun,
     Tag,
     Transaction,
     Workspace,
+    WorkspaceMembership,
     transaction_tags,
 )
 from app.imports.types import NormalizedTransaction
+from app.rules.application_tokens import (
+    MAX_SELECTED_TRANSACTION_IDS,
+    ApplicationTokenPayload,
+    canonical_application_selection,
+    create_application_token,
+    load_application_token,
+)
 from app.rules.evaluation import (
     CompiledWorkspaceRule,
     CompiledWorkspaceRuleSet,
@@ -49,6 +59,7 @@ from app.tags.service import tag_ids_with_subscription
 MAX_RULE_NAME_LENGTH = 120
 MAX_MERCHANT_NAME_LENGTH = 255
 MAX_PREVIEW_EXAMPLES = 20
+HISTORY_PAGE_SIZE = 200
 PREVIEW_LIMITATION_PROVIDER_UNAVAILABLE = "historical_provider_unavailable"
 
 
@@ -62,6 +73,10 @@ class RuleResourceNotFoundError(LookupError):
 
 class RuleConflictError(RuntimeError):
     """Raised when an optimistic-lock version is no longer current."""
+
+
+class StaleRuleApplicationError(RuleConflictError):
+    """Raised when signed historical preview state is no longer current."""
 
 
 class RuleValidationError(ValueError):
@@ -154,6 +169,56 @@ class RuleDeletionPreview:
 
 
 @dataclass(frozen=True)
+class HistoryFilters:
+    """Allowlisted filters for one bounded historical application preview."""
+
+    date_from: date | str | None = None
+    date_to: date | str | None = None
+    account_id: int | None = None
+    category_id: int | None = None
+    direction: str | None = "all"
+
+
+@dataclass(frozen=True)
+class HistoricalApplicationPreview:
+    """Redacted counts, bounded selectable IDs, and signed confirmation state."""
+
+    run_id: int
+    token: str
+    state_digest: str
+    rule_id: int
+    rule_name: str
+    normalized_merchant: str | None
+    category_id: int | None
+    tag_ids: tuple[int, ...]
+    is_subscription: bool
+    billing_period_months: int | None
+    normalized_filters: Mapping[str, object]
+    matched_count: int
+    would_change_count: int
+    unchanged_count: int
+    manual_skip_count: int
+    conflict_skip_count: int
+    not_matched_count: int
+    unavailable_count: int
+    invalid_count: int
+    eligible_transaction_ids: tuple[int, ...]
+    selected_transaction_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class HistoricalApplicationResult:
+    """Stable confirmed audit outcome returned by first use and every retry."""
+
+    run_id: int
+    matched_count: int
+    changed_count: int
+    unchanged_count: int
+    manual_skip_count: int
+    conflict_skip_count: int
+
+
+@dataclass(frozen=True)
 class _PreviewTransaction:
     id: int
     transaction_date: datetime
@@ -180,6 +245,891 @@ class _ValidatedDraft:
     tags: tuple[Tag, ...]
     is_subscription: bool
     billing_period_months: int | None
+
+
+@dataclass(frozen=True)
+class _HistoryTransaction:
+    id: int
+    transaction_date: datetime
+    description: str
+    normalized_merchant: str | None
+    amount_cents: int
+    category_id: int | None
+    categorization_source: str
+    is_subscription: bool
+    billing_period_months: int | None
+    merchant_rule_id: int | None
+    account_id: int | None
+    tag_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _CategorizationState:
+    normalized_merchant: str | None
+    category_id: int | None
+    tag_ids: tuple[int, ...]
+    is_subscription: bool
+    billing_period_months: int | None
+    categorization_source: str
+    merchant_rule_id: int | None
+
+
+@dataclass(frozen=True)
+class _SelectedHistoryState:
+    transaction_id: int
+    current: _CategorizationState
+    resulting: _CategorizationState
+
+
+@dataclass(frozen=True)
+class _HistoryEvaluation:
+    matched_count: int
+    would_change_count: int
+    unchanged_count: int
+    manual_skip_count: int
+    conflict_skip_count: int
+    not_matched_count: int
+    unavailable_count: int
+    invalid_count: int
+    eligible_transaction_ids: tuple[int, ...]
+    selected_states: tuple[_SelectedHistoryState, ...]
+
+
+@dataclass(frozen=True)
+class _HistoricalApplicationRule:
+    id: int
+    condition: ConditionNode | None
+    compiled: CompiledWorkspaceRule | None
+    invalid_action: bool
+
+
+def preview_historical_application(
+    session: Session,
+    workspace_id: int,
+    rule_id: int,
+    filters: HistoryFilters,
+    *,
+    selected_transaction_ids: tuple[int, ...] | list[int] | None = None,
+    user_id: int | None = None,
+    secret_key: str | None = None,
+) -> HistoricalApplicationPreview:
+    """Create a redacted audit preview and signed, bounded confirmation token."""
+    rule = get_rule(session, workspace_id, rule_id)
+    normalized_filters = _normalize_history_filters(session, workspace_id, filters)
+    requested_ids = _normalize_selected_transaction_ids(selected_transaction_ids)
+    initiated_by_user_id = _application_user_id(session, workspace_id, user_id)
+    rules, target = _historical_rule_plan(session, workspace_id, rule_id)
+    evaluation = _evaluate_historical_application(
+        session,
+        workspace_id,
+        rules,
+        target,
+        normalized_filters,
+        requested_ids=requested_ids,
+    )
+    selected_states = evaluation.selected_states
+    selected_ids = tuple(item.transaction_id for item in selected_states)
+    state_digest = _historical_state_digest(
+        workspace_id,
+        rule_id,
+        rule.lock_version,
+        normalized_filters,
+        selected_states,
+    )
+    payload = ApplicationTokenPayload(
+        workspace_id=workspace_id,
+        merchant_rule_id=rule_id,
+        rule_lock_version=rule.lock_version,
+        selected_transaction_ids=selected_ids,
+        state_digest=state_digest,
+        normalized_filters=normalized_filters,
+    )
+    token = create_application_token(_application_secret(secret_key), payload)
+    run = RuleApplicationRun(
+        workspace_id=workspace_id,
+        merchant_rule_id=rule_id,
+        initiated_by_user_id=initiated_by_user_id,
+        rule_name_snapshot=rule.name,
+        rule_lock_version=rule.lock_version,
+        status="previewed",
+        selection_json=canonical_application_selection(payload),
+        preview_digest=state_digest,
+        matched_count=evaluation.matched_count,
+        changed_count=len(selected_ids),
+        unchanged_count=evaluation.unchanged_count,
+        manual_skip_count=evaluation.manual_skip_count,
+        conflict_skip_count=evaluation.conflict_skip_count,
+    )
+    session.add(run)
+    session.flush()
+    return HistoricalApplicationPreview(
+        run_id=run.id,
+        token=token,
+        state_digest=state_digest,
+        rule_id=rule.id,
+        rule_name=rule.name,
+        normalized_merchant=(
+            target.compiled.normalized_merchant if target.compiled is not None else None
+        ),
+        category_id=(target.compiled.category_id if target.compiled is not None else None),
+        tag_ids=(tuple(sorted(target.compiled.tag_ids)) if target.compiled is not None else ()),
+        is_subscription=(target.compiled.is_subscription if target.compiled is not None else False),
+        billing_period_months=(
+            target.compiled.billing_period_months if target.compiled is not None else None
+        ),
+        normalized_filters=dict(normalized_filters),
+        matched_count=evaluation.matched_count,
+        would_change_count=evaluation.would_change_count,
+        unchanged_count=evaluation.unchanged_count,
+        manual_skip_count=evaluation.manual_skip_count,
+        conflict_skip_count=evaluation.conflict_skip_count,
+        not_matched_count=evaluation.not_matched_count,
+        unavailable_count=evaluation.unavailable_count,
+        invalid_count=evaluation.invalid_count,
+        eligible_transaction_ids=evaluation.eligible_transaction_ids,
+        selected_transaction_ids=selected_ids,
+    )
+
+
+def confirm_historical_application(
+    session: Session,
+    workspace_id: int,
+    token: str,
+    user_id: int,
+    *,
+    secret_key: str | None = None,
+) -> HistoricalApplicationResult:
+    """Recompute signed state under locks and atomically apply one bounded selection."""
+    payload = load_application_token(_application_secret(secret_key), token)
+    if payload.workspace_id != workspace_id:
+        raise StaleRuleApplicationError("The application preview changed; reload and try again.")
+    _application_user_id(session, workspace_id, user_id)
+    _serialize_workspace_ordering(session, workspace_id)
+
+    selection = canonical_application_selection(payload)
+    confirmed = _confirmed_application_run(
+        session,
+        workspace_id,
+        payload.state_digest,
+        selection,
+        payload.rule_lock_version,
+    )
+    if confirmed is not None:
+        return _historical_application_result(confirmed)
+
+    preview_run = _preview_application_run(
+        session,
+        workspace_id,
+        payload.state_digest,
+        selection,
+    )
+    if preview_run is None:
+        raise StaleRuleApplicationError("The application preview changed; reload and try again.")
+
+    try:
+        rule = _locked_rule(session, workspace_id, payload.merchant_rule_id)
+        if rule.lock_version != payload.rule_lock_version:
+            _mark_application_stale(session, preview_run)
+        normalized_filters = _normalize_history_filters(
+            session,
+            workspace_id,
+            _history_filters_from_mapping(payload.normalized_filters),
+        )
+        if normalized_filters != dict(payload.normalized_filters):
+            _mark_application_stale(session, preview_run)
+        rules, target = _historical_rule_plan(
+            session,
+            workspace_id,
+            payload.merchant_rule_id,
+        )
+        if target.compiled is None:
+            _mark_application_stale(session, preview_run)
+        evaluation = _evaluate_historical_application(
+            session,
+            workspace_id,
+            rules,
+            target,
+            normalized_filters,
+            requested_ids=payload.selected_transaction_ids,
+            restrict_ids=payload.selected_transaction_ids,
+            lock_rows=True,
+        )
+    except (RuleNotFoundError, RuleResourceNotFoundError, RuleValidationError):
+        _mark_application_stale(session, preview_run)
+
+    recomputed_digest = _historical_state_digest(
+        workspace_id,
+        payload.merchant_rule_id,
+        rule.lock_version,
+        normalized_filters,
+        evaluation.selected_states,
+    )
+    if recomputed_digest != payload.state_digest:
+        _mark_application_stale(session, preview_run)
+
+    with session.begin_nested():
+        assert target.compiled is not None
+        _apply_historical_states(
+            session,
+            workspace_id,
+            target.compiled,
+            evaluation.selected_states,
+        )
+        preview_run.status = "confirmed"
+        preview_run.changed_count = len(evaluation.selected_states)
+        preview_run.confirmed_at = datetime.now(UTC)
+        session.flush()
+    return _historical_application_result(preview_run)
+
+
+def _normalize_history_filters(
+    session: Session,
+    workspace_id: int,
+    filters: HistoryFilters,
+) -> dict[str, object]:
+    if type(filters) is not HistoryFilters:
+        raise RuleValidationError({"filters": "Choose valid history filters."})
+    errors: dict[str, str] = {}
+    date_from = _normalize_history_date(filters.date_from, "date_from", errors)
+    date_to = _normalize_history_date(filters.date_to, "date_to", errors)
+    account_id = _normalize_history_resource_id(filters.account_id, "account_id", errors)
+    category_id = _normalize_history_resource_id(filters.category_id, "category_id", errors)
+    if filters.direction is None:
+        direction = "all"
+    elif isinstance(filters.direction, str):
+        direction = filters.direction.strip().casefold() or "all"
+    else:
+        direction = ""
+        errors["direction"] = "Choose a valid transaction direction."
+    if direction not in {"all", "expense", "income", "zero"}:
+        errors["direction"] = "Choose a valid transaction direction."
+    if date_from is not None and date_to is not None and date_from > date_to:
+        errors["date_to"] = "End date must be on or after start date."
+    if errors:
+        raise RuleValidationError(errors)
+
+    if (
+        account_id is not None
+        and session.scalar(
+            select(Account.id).where(
+                Account.id == account_id,
+                Account.workspace_id == workspace_id,
+            )
+        )
+        is None
+    ):
+        raise RuleResourceNotFoundError("Rule resource not found.")
+    if (
+        category_id is not None
+        and session.scalar(
+            select(Category.id).where(
+                Category.id == category_id,
+                or_(Category.workspace_id.is_(None), Category.workspace_id == workspace_id),
+            )
+        )
+        is None
+    ):
+        raise RuleResourceNotFoundError("Rule resource not found.")
+    return {
+        "account_id": account_id,
+        "category_id": category_id,
+        "date_from": date_from,
+        "date_to": date_to,
+        "direction": direction,
+    }
+
+
+def _normalize_history_date(
+    value: date | str | None,
+    field: str,
+    errors: dict[str, str],
+) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        errors[field] = "Choose a valid date."
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            return date.fromisoformat(normalized).isoformat()
+        except ValueError:
+            pass
+    errors[field] = "Choose a valid date."
+    return None
+
+
+def _normalize_history_resource_id(
+    value: int | None,
+    field: str,
+    errors: dict[str, str],
+) -> int | None:
+    if value is None:
+        return None
+    if type(value) is int and value > 0:
+        return value
+    errors[field] = "Choose a valid resource."
+    return None
+
+
+def _normalize_selected_transaction_ids(
+    selected_ids: tuple[int, ...] | list[int] | None,
+) -> tuple[int, ...] | None:
+    if selected_ids is None:
+        return None
+    valid = (
+        type(selected_ids) in {tuple, list}
+        and len(selected_ids) <= MAX_SELECTED_TRANSACTION_IDS
+        and all(
+            type(transaction_id) is int and transaction_id > 0 for transaction_id in selected_ids
+        )
+        and len(selected_ids) == len(set(selected_ids))
+    )
+    if not valid:
+        raise RuleValidationError(
+            {"selected_transaction_ids": "Choose at most 500 valid transactions."}
+        )
+    return tuple(sorted(selected_ids))
+
+
+def _application_user_id(
+    session: Session,
+    workspace_id: int,
+    user_id: int | None,
+) -> int:
+    workspace = session.scalar(select(Workspace).where(Workspace.id == workspace_id))
+    if workspace is None:
+        raise RuleNotFoundError("Rule not found.")
+    selected_user_id = workspace.owner_id if user_id is None else user_id
+    if type(selected_user_id) is not int or selected_user_id <= 0:
+        raise RuleNotFoundError("Rule not found.")
+    authorized = session.scalar(
+        select(WorkspaceMembership.id).where(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.user_id == selected_user_id,
+        )
+    )
+    if authorized is None:
+        raise RuleNotFoundError("Rule not found.")
+    return selected_user_id
+
+
+def _application_secret(secret_key: str | None) -> str:
+    if secret_key is None:
+        from app.core.config import settings
+
+        return settings.secret_key or ""
+    return secret_key
+
+
+def _historical_rule_plan(
+    session: Session,
+    workspace_id: int,
+    rule_id: int,
+) -> tuple[tuple[_HistoricalApplicationRule, ...], _HistoricalApplicationRule]:
+    compiled = load_compiled_rule_set(session, workspace_id)
+    compiled_by_id = {rule.id: rule for rule in compiled.rules}
+    diagnostics_by_id = {item.rule_id: item.reason for item in compiled.diagnostics}
+    planned: list[_HistoricalApplicationRule] = []
+    for raw_rule in list_rules(session, workspace_id):
+        if not raw_rule.enabled:
+            continue
+        compiled_rule = compiled_by_id.get(raw_rule.id)
+        diagnostic = diagnostics_by_id.get(raw_rule.id)
+        condition: ConditionNode | None
+        if compiled_rule is not None:
+            condition = compiled_rule.condition
+        elif diagnostic == "invalid_condition":
+            condition = None
+        else:
+            try:
+                condition = parse_condition(_persisted_condition_payload(raw_rule))
+            except RuleConditionValidationError:
+                condition = None
+        planned.append(
+            _HistoricalApplicationRule(
+                id=raw_rule.id,
+                condition=condition,
+                compiled=compiled_rule,
+                invalid_action=compiled_rule is None and condition is not None,
+            )
+        )
+    rules = tuple(planned)
+    target = next((rule for rule in rules if rule.id == rule_id), None)
+    if target is None:
+        raise RuleResourceNotFoundError("Rule resource not found.")
+    if target.condition is None:
+        raise RuleValidationError({"condition": "Choose a valid rule condition."})
+    return rules, target
+
+
+def _evaluate_historical_application(
+    session: Session,
+    workspace_id: int,
+    rules: tuple[_HistoricalApplicationRule, ...],
+    target: _HistoricalApplicationRule,
+    normalized_filters: Mapping[str, object],
+    *,
+    requested_ids: tuple[int, ...] | None,
+    restrict_ids: tuple[int, ...] | None = None,
+    lock_rows: bool = False,
+) -> _HistoryEvaluation:
+    requested_set = set(requested_ids) if requested_ids is not None else None
+    selected: dict[int, _SelectedHistoryState] = {}
+    eligible_ids: list[int] = []
+    matched_count = 0
+    would_change_count = 0
+    unchanged_count = 0
+    manual_skip_count = 0
+    conflict_skip_count = 0
+    not_matched_count = 0
+    unavailable_count = 0
+    invalid_count = 0
+
+    for transaction in _history_transactions(
+        session,
+        workspace_id,
+        normalized_filters,
+        restrict_ids=restrict_ids,
+        lock_rows=lock_rows,
+    ):
+        context = _history_rule_context(transaction)
+        assert target.condition is not None
+        target_outcome = _evaluate_historical_condition(target.condition, context)
+        if target_outcome is None:
+            unavailable_count += 1
+            continue
+        if not target_outcome:
+            not_matched_count += 1
+            continue
+        matched_count += 1
+        if transaction.categorization_source == CategorizationSource.MANUAL.value:
+            manual_skip_count += 1
+            continue
+
+        winner, ambiguous = _historical_application_winner(rules, target.id, context)
+        if ambiguous or winner is None:
+            unavailable_count += 1
+            continue
+        if winner.invalid_action:
+            invalid_count += 1
+            continue
+        if winner.id != target.id:
+            conflict_skip_count += 1
+            continue
+        assert target.compiled is not None
+
+        current = _current_categorization_state(transaction)
+        resulting = _resulting_categorization_state(transaction, target.compiled)
+        if current == resulting:
+            unchanged_count += 1
+            continue
+
+        would_change_count += 1
+        snapshot = _SelectedHistoryState(transaction.id, current, resulting)
+        if len(eligible_ids) < MAX_SELECTED_TRANSACTION_IDS:
+            eligible_ids.append(transaction.id)
+        if requested_set is None:
+            if len(selected) < MAX_SELECTED_TRANSACTION_IDS:
+                selected[transaction.id] = snapshot
+        elif transaction.id in requested_set:
+            selected[transaction.id] = snapshot
+
+    if requested_ids is not None and set(selected) != set(requested_ids):
+        raise RuleNotFoundError("Transaction not found.")
+    ordered_selected = tuple(selected[transaction_id] for transaction_id in sorted(selected))
+    return _HistoryEvaluation(
+        matched_count=matched_count,
+        would_change_count=would_change_count,
+        unchanged_count=unchanged_count,
+        manual_skip_count=manual_skip_count,
+        conflict_skip_count=conflict_skip_count,
+        not_matched_count=not_matched_count,
+        unavailable_count=unavailable_count,
+        invalid_count=invalid_count,
+        eligible_transaction_ids=tuple(eligible_ids),
+        selected_states=ordered_selected,
+    )
+
+
+def _historical_application_winner(
+    rules: tuple[_HistoricalApplicationRule, ...],
+    target_id: int,
+    context: RuleContext,
+) -> tuple[_HistoricalApplicationRule | None, bool]:
+    unknown_before_winner = False
+    for rule in rules:
+        if rule.condition is not None:
+            outcome = _evaluate_historical_condition(rule.condition, context)
+            if outcome is None:
+                unknown_before_winner = True
+            elif outcome:
+                return (None, True) if unknown_before_winner else (rule, False)
+        if rule.id == target_id:
+            break
+    return None, unknown_before_winner
+
+
+def _history_transactions(
+    session: Session,
+    workspace_id: int,
+    normalized_filters: Mapping[str, object],
+    *,
+    restrict_ids: tuple[int, ...] | None,
+    lock_rows: bool,
+) -> Iterator[_HistoryTransaction]:
+    last_id = 0
+    while True:
+        id_statement = (
+            select(Transaction.id)
+            .select_from(Transaction)
+            .outerjoin(
+                ImportJob,
+                and_(
+                    ImportJob.id == Transaction.import_job_id,
+                    ImportJob.workspace_id == workspace_id,
+                ),
+            )
+            .outerjoin(
+                Account,
+                and_(
+                    Account.id == ImportJob.account_id,
+                    Account.workspace_id == workspace_id,
+                ),
+            )
+            .where(Transaction.workspace_id == workspace_id, Transaction.id > last_id)
+            .order_by(Transaction.id)
+            .limit(HISTORY_PAGE_SIZE)
+        )
+        id_statement = _apply_history_filters(id_statement, normalized_filters)
+        if restrict_ids is not None:
+            if not restrict_ids:
+                return
+            id_statement = id_statement.where(Transaction.id.in_(restrict_ids))
+        if lock_rows:
+            id_statement = id_statement.with_for_update(of=Transaction)
+        page_ids = tuple(session.scalars(id_statement))
+        if not page_ids:
+            return
+
+        projection = (
+            select(
+                Transaction.id,
+                Transaction.date,
+                Transaction.description,
+                Transaction.normalized_merchant,
+                Transaction.amount_cents,
+                Transaction.category_id,
+                Transaction.categorization_source,
+                Transaction.is_subscription,
+                Transaction.billing_period_months,
+                Transaction.merchant_rule_id,
+                Account.id.label("account_id"),
+            )
+            .select_from(Transaction)
+            .outerjoin(
+                ImportJob,
+                and_(
+                    ImportJob.id == Transaction.import_job_id,
+                    ImportJob.workspace_id == workspace_id,
+                ),
+            )
+            .outerjoin(
+                Account,
+                and_(
+                    Account.id == ImportJob.account_id,
+                    Account.workspace_id == workspace_id,
+                ),
+            )
+            .where(
+                Transaction.workspace_id == workspace_id,
+                Transaction.id.in_(page_ids),
+            )
+            .order_by(Transaction.id)
+        )
+        if lock_rows:
+            projection = projection.with_for_update(of=Transaction)
+        rows = tuple(session.execute(projection).mappings())
+        tags_by_transaction: dict[int, list[int]] = {
+            transaction_id: [] for transaction_id in page_ids
+        }
+        for transaction_id, tag_id in session.execute(
+            select(transaction_tags.c.transaction_id, transaction_tags.c.tag_id)
+            .where(transaction_tags.c.transaction_id.in_(page_ids))
+            .order_by(transaction_tags.c.transaction_id, transaction_tags.c.tag_id)
+        ):
+            tags_by_transaction[int(transaction_id)].append(int(tag_id))
+        for row in rows:
+            transaction_date = row["date"]
+            assert isinstance(transaction_date, datetime)
+            transaction_id = int(row["id"])
+            yield _HistoryTransaction(
+                id=transaction_id,
+                transaction_date=transaction_date,
+                description=str(row["description"]),
+                normalized_merchant=(
+                    str(row["normalized_merchant"])
+                    if row["normalized_merchant"] is not None
+                    else None
+                ),
+                amount_cents=int(row["amount_cents"]),
+                category_id=(int(row["category_id"]) if row["category_id"] is not None else None),
+                categorization_source=str(row["categorization_source"]),
+                is_subscription=bool(row["is_subscription"]),
+                billing_period_months=(
+                    int(row["billing_period_months"])
+                    if row["billing_period_months"] is not None
+                    else None
+                ),
+                merchant_rule_id=(
+                    int(row["merchant_rule_id"]) if row["merchant_rule_id"] is not None else None
+                ),
+                account_id=(int(row["account_id"]) if row["account_id"] is not None else None),
+                tag_ids=tuple(tags_by_transaction[transaction_id]),
+            )
+        last_id = page_ids[-1]
+
+
+def _apply_history_filters(statement, filters: Mapping[str, object]):
+    date_from = filters["date_from"]
+    date_to = filters["date_to"]
+    account_id = filters["account_id"]
+    category_id = filters["category_id"]
+    direction = filters["direction"]
+    if isinstance(date_from, str):
+        statement = statement.where(
+            Transaction.date >= datetime.combine(date.fromisoformat(date_from), time.min, UTC)
+        )
+    if isinstance(date_to, str):
+        statement = statement.where(
+            Transaction.date <= datetime.combine(date.fromisoformat(date_to), time.max, UTC)
+        )
+    if type(account_id) is int:
+        statement = statement.where(Account.id == account_id)
+    if type(category_id) is int:
+        statement = statement.where(Transaction.category_id == category_id)
+    if direction == "income":
+        statement = statement.where(Transaction.amount_cents > 0)
+    elif direction == "expense":
+        statement = statement.where(Transaction.amount_cents < 0)
+    elif direction == "zero":
+        statement = statement.where(Transaction.amount_cents == 0)
+    return statement
+
+
+def _history_rule_context(transaction: _HistoryTransaction) -> RuleContext:
+    return RuleContext(
+        description=transaction.description,
+        merchant_key=merchant_key(transaction.description),
+        amount_cents=transaction.amount_cents,
+        transaction_date=transaction.transaction_date.date(),
+        direction=(
+            "income"
+            if transaction.amount_cents > 0
+            else "expense"
+            if transaction.amount_cents < 0
+            else "zero"
+        ),
+        account_id=transaction.account_id,
+        provider_key=None,
+    )
+
+
+def _current_categorization_state(transaction: _HistoryTransaction) -> _CategorizationState:
+    return _CategorizationState(
+        normalized_merchant=transaction.normalized_merchant,
+        category_id=transaction.category_id,
+        tag_ids=tuple(sorted(transaction.tag_ids)),
+        is_subscription=transaction.is_subscription,
+        billing_period_months=transaction.billing_period_months,
+        categorization_source=transaction.categorization_source,
+        merchant_rule_id=transaction.merchant_rule_id,
+    )
+
+
+def _resulting_categorization_state(
+    transaction: _HistoryTransaction,
+    target: CompiledWorkspaceRule,
+) -> _CategorizationState:
+    return _CategorizationState(
+        normalized_merchant=target.normalized_merchant
+        or merchant_display_fallback(transaction.description),
+        category_id=target.category_id,
+        tag_ids=tuple(sorted(target.tag_ids)),
+        is_subscription=target.is_subscription,
+        billing_period_months=target.billing_period_months,
+        categorization_source=CategorizationSource.WORKSPACE_RULE.value,
+        merchant_rule_id=target.id,
+    )
+
+
+def _historical_state_digest(
+    workspace_id: int,
+    rule_id: int,
+    rule_lock_version: int,
+    normalized_filters: Mapping[str, object],
+    selected_states: tuple[_SelectedHistoryState, ...],
+) -> str:
+    state = {
+        "workspace_id": workspace_id,
+        "merchant_rule_id": rule_id,
+        "rule_lock_version": rule_lock_version,
+        "normalized_filters": dict(sorted(normalized_filters.items())),
+        "selected_transaction_ids": [item.transaction_id for item in selected_states],
+        "transactions": [
+            {
+                "id": item.transaction_id,
+                "current": _categorization_state_json(item.current),
+                "resulting": _categorization_state_json(item.resulting),
+            }
+            for item in selected_states
+        ],
+    }
+    encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _categorization_state_json(state: _CategorizationState) -> dict[str, object]:
+    return {
+        "normalized_merchant": state.normalized_merchant,
+        "category_id": state.category_id,
+        "tag_ids": list(sorted(state.tag_ids)),
+        "is_subscription": state.is_subscription,
+        "billing_period_months": state.billing_period_months,
+        "categorization_source": state.categorization_source,
+        "merchant_rule_id": state.merchant_rule_id,
+    }
+
+
+def _confirmed_application_run(
+    session: Session,
+    workspace_id: int,
+    digest: str,
+    selection: Mapping[str, object],
+    rule_lock_version: int,
+) -> RuleApplicationRun | None:
+    runs = session.scalars(
+        select(RuleApplicationRun)
+        .where(
+            RuleApplicationRun.workspace_id == workspace_id,
+            RuleApplicationRun.preview_digest == digest,
+            RuleApplicationRun.status == "confirmed",
+            RuleApplicationRun.rule_lock_version == rule_lock_version,
+        )
+        .order_by(RuleApplicationRun.id)
+        .with_for_update()
+    )
+    return next((run for run in runs if run.selection_json == selection), None)
+
+
+def _preview_application_run(
+    session: Session,
+    workspace_id: int,
+    digest: str,
+    selection: Mapping[str, object],
+) -> RuleApplicationRun | None:
+    runs = session.scalars(
+        select(RuleApplicationRun)
+        .where(
+            RuleApplicationRun.workspace_id == workspace_id,
+            RuleApplicationRun.preview_digest == digest,
+            RuleApplicationRun.status == "previewed",
+        )
+        .order_by(RuleApplicationRun.id)
+        .with_for_update()
+    )
+    return next((run for run in runs if run.selection_json == selection), None)
+
+
+def _locked_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
+    rule = session.scalar(
+        select(MerchantRule)
+        .where(
+            MerchantRule.id == rule_id,
+            MerchantRule.workspace_id == workspace_id,
+        )
+        .with_for_update()
+    )
+    if rule is None:
+        raise RuleNotFoundError("Rule not found.")
+    return rule
+
+
+def _history_filters_from_mapping(filters: Mapping[str, object]) -> HistoryFilters:
+    return HistoryFilters(
+        date_from=filters.get("date_from"),
+        date_to=filters.get("date_to"),
+        account_id=filters.get("account_id"),  # type: ignore[arg-type]
+        category_id=filters.get("category_id"),  # type: ignore[arg-type]
+        direction=filters.get("direction"),  # type: ignore[arg-type]
+    )
+
+
+def _mark_application_stale(session: Session, run: RuleApplicationRun) -> None:
+    run.status = "stale"
+    run.confirmed_at = None
+    session.flush()
+    raise StaleRuleApplicationError("The application preview changed; reload and try again.")
+
+
+def _apply_historical_states(
+    session: Session,
+    workspace_id: int,
+    target: CompiledWorkspaceRule,
+    states: tuple[_SelectedHistoryState, ...],
+) -> None:
+    if not states:
+        return
+    transaction_ids = tuple(item.transaction_id for item in states)
+    normalized_merchants = {
+        item.transaction_id: item.resulting.normalized_merchant for item in states
+    }
+    result = session.execute(
+        update(Transaction)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.id.in_(transaction_ids),
+        )
+        .values(
+            normalized_merchant=case(normalized_merchants, value=Transaction.id),
+            category_id=target.category_id,
+            is_subscription=target.is_subscription,
+            billing_period_months=target.billing_period_months,
+            categorization_source=CategorizationSource.WORKSPACE_RULE.value,
+            merchant_rule_id=target.id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != len(transaction_ids):
+        raise StaleRuleApplicationError("The application preview changed; reload and try again.")
+    session.execute(
+        delete(transaction_tags).where(transaction_tags.c.transaction_id.in_(transaction_ids))
+    )
+    tag_ids = tuple(sorted(target.tag_ids))
+    if tag_ids:
+        session.execute(
+            insert(transaction_tags),
+            [
+                {"transaction_id": transaction_id, "tag_id": tag_id}
+                for transaction_id in transaction_ids
+                for tag_id in tag_ids
+            ],
+        )
+
+
+def _historical_application_result(run: RuleApplicationRun) -> HistoricalApplicationResult:
+    return HistoricalApplicationResult(
+        run_id=run.id,
+        matched_count=run.matched_count,
+        changed_count=run.changed_count,
+        unchanged_count=run.unchanged_count,
+        manual_skip_count=run.manual_skip_count,
+        conflict_skip_count=run.conflict_skip_count,
+    )
 
 
 def simulate_rules(session: Session, workspace_id: int, context: RuleContext) -> RuleSimulation:
@@ -697,6 +1647,7 @@ def update_rule(
     expected_lock_version: int,
 ) -> MerchantRule:
     """Atomically replace mutable rule values when the submitted version is current."""
+    _serialize_workspace_ordering(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     _validate_lock_version(expected_lock_version)
     values = _validated_draft(session, workspace_id, draft)
@@ -735,6 +1686,7 @@ def set_rule_enabled(
     expected_lock_version: int,
 ) -> MerchantRule:
     """Enable or disable one rule under an optimistic-lock check."""
+    _serialize_workspace_ordering(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     _validate_lock_version(expected_lock_version)
     if type(enabled) is not bool:
