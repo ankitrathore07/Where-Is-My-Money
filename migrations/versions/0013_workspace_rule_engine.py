@@ -26,6 +26,17 @@ def _legacy_condition(merchant_pattern: str) -> dict[str, object]:
     }
 
 
+def _legacy_rule_name(merchant_pattern: str | None, rule_id: int) -> str:
+    if merchant_pattern:
+        return merchant_pattern[:120]
+    return f"Legacy rule {rule_id}"
+
+
+def _downgrade_pattern(rule_id: int, suffix: int = 0) -> str:
+    suffix_part = f"_{suffix}" if suffix else ""
+    return f"__workspace_rule_{rule_id}{suffix_part}__"
+
+
 def upgrade():
     op.add_column(
         "merchant_rules",
@@ -69,11 +80,13 @@ def upgrade():
         workspace_id = row["workspace_id"]
         priority = priorities.get(workspace_id, 0)
         priorities[workspace_id] = priority + 1
-        values: dict[str, object] = {"priority": priority}
         merchant_pattern = row["merchant_pattern"]
+        values: dict[str, object] = {
+            "name": _legacy_rule_name(merchant_pattern, row["id"]),
+            "priority": priority,
+        }
         if merchant_pattern:
             values.update(
-                name=merchant_pattern,
                 condition_version=1,
                 condition_json=json.dumps(
                     _legacy_condition(merchant_pattern), separators=(",", ":"), sort_keys=True
@@ -82,7 +95,7 @@ def upgrade():
         connection.execute(
             sa.text(
                 "update merchant_rules set "
-                "name = coalesce(:name, name), "
+                "name = :name, "
                 "priority = :priority, "
                 "condition_version = coalesce(:condition_version, condition_version), "
                 "condition_json = coalesce(:condition_json, condition_json) "
@@ -135,6 +148,35 @@ def downgrade():
         batch_op.drop_index("ix_transactions_merchant_rule_id")
         batch_op.drop_constraint("fk_transactions_merchant_rule_id", type_="foreignkey")
         batch_op.drop_column("merchant_rule_id")
+
+    connection = op.get_bind()
+    existing_patterns = {
+        (row["workspace_id"], row["merchant_pattern"])
+        for row in connection.execute(
+            sa.text(
+                "select workspace_id, merchant_pattern from merchant_rules "
+                "where merchant_pattern is not null"
+            )
+        ).mappings()
+    }
+    rows = connection.execute(
+        sa.text(
+            "select id, workspace_id from merchant_rules where merchant_pattern is null order by id"
+        )
+    ).mappings()
+    for row in rows:
+        suffix = 0
+        merchant_pattern = _downgrade_pattern(row["id"], suffix)
+        while (row["workspace_id"], merchant_pattern) in existing_patterns:
+            suffix += 1
+            merchant_pattern = _downgrade_pattern(row["id"], suffix)
+        connection.execute(
+            sa.text(
+                "update merchant_rules set merchant_pattern = :merchant_pattern where id = :id"
+            ),
+            {"id": row["id"], "merchant_pattern": merchant_pattern},
+        )
+        existing_patterns.add((row["workspace_id"], merchant_pattern))
 
     op.drop_index("ix_merchant_rules_workspace_enabled_priority", table_name="merchant_rules")
     with op.batch_alter_table("merchant_rules") as batch_op:
