@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session, selectinload
+from collections import defaultdict
 
-from app.db.models import Account, Category, MerchantRule
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
+
+from app.db.models import Account, Category, MerchantRule, Tag, merchant_rule_tags
 from app.rules.evaluation import (
     CompiledWorkspaceRule,
     CompiledWorkspaceRuleSet,
@@ -30,10 +32,27 @@ def load_compiled_rule_set(session: Session, workspace_id: int) -> CompiledWorks
                 MerchantRule.workspace_id == workspace_id,
                 MerchantRule.enabled.is_(True),
             )
-            .options(selectinload(MerchantRule.tags))
             .order_by(MerchantRule.priority, MerchantRule.id)
         )
     )
+    tags_by_rule: defaultdict[int, list[tuple[int, int | None]]] = defaultdict(list)
+    tag_rows = session.execute(
+        select(
+            merchant_rule_tags.c.merchant_rule_id,
+            Tag.id,
+            Tag.workspace_id,
+        )
+        .select_from(merchant_rule_tags)
+        .join(MerchantRule, MerchantRule.id == merchant_rule_tags.c.merchant_rule_id)
+        .join(Tag, Tag.id == merchant_rule_tags.c.tag_id)
+        .where(
+            MerchantRule.workspace_id == workspace_id,
+            MerchantRule.enabled.is_(True),
+        )
+        .order_by(merchant_rule_tags.c.merchant_rule_id, Tag.name_key, Tag.id)
+    )
+    for rule_id, tag_id, tag_workspace_id in tag_rows:
+        tags_by_rule[rule_id].append((tag_id, tag_workspace_id))
 
     parsed: list[tuple[MerchantRule, ConditionNode]] = []
     diagnostics: list[RuleCompilationDiagnostic] = []
@@ -84,6 +103,7 @@ def load_compiled_rule_set(session: Session, workspace_id: int) -> CompiledWorks
             workspace_id=workspace_id,
             category_ids=accessible_category_ids,
             account_ids=accessible_account_ids,
+            tags=tags_by_rule[rule.id],
         )
         if reason is not None:
             diagnostics.append(RuleCompilationDiagnostic(rule.id, reason))
@@ -97,7 +117,7 @@ def load_compiled_rule_set(session: Session, workspace_id: int) -> CompiledWorks
                 category_id=rule.category_id,
                 is_subscription=rule.is_subscription,
                 billing_period_months=rule.billing_period_months,
-                tag_ids=tuple(tag.id for tag in rule.tags),
+                tag_ids=tuple(tag_id for tag_id, _workspace_id in tags_by_rule[rule.id]),
                 condition=condition,
             )
         )
@@ -140,10 +160,11 @@ def _authorization_failure(
     workspace_id: int,
     category_ids: set[int],
     account_ids: set[int],
+    tags: list[tuple[int, int | None]],
 ) -> str | None:
     if rule.category_id is None or rule.category_id not in category_ids:
         return "inaccessible_category"
-    if any(tag.workspace_id not in {None, workspace_id} for tag in rule.tags):
+    if any(tag_workspace_id not in {None, workspace_id} for _tag_id, tag_workspace_id in tags):
         return "inaccessible_tag"
     if any(account_id not in account_ids for account_id in _referenced_account_ids(condition)):
         return "inaccessible_account"

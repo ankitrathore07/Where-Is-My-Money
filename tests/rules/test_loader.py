@@ -216,6 +216,50 @@ def test_loading_rule_set_query_count_is_constant(session: Session, workspace: W
     assert count.value <= 4
 
 
+def test_loading_tagged_rule_set_stays_within_four_queries_above_selectin_batch(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if tag loading adds a query after SQLAlchemy's 500-parent batch boundary."""
+    category = _category(session, workspace.id)
+    account = Account(
+        workspace_id=workspace.id,
+        name="Bulk account",
+        account_type="checking",
+        institution_key="other",
+        institution="Local",
+        is_liability=False,
+    )
+    tag = Tag(workspace_id=workspace.id, name="Bulk tag")
+    session.add_all([account, tag])
+    session.flush()
+    workspace_id = workspace.id
+    account_id = account.id
+    rules = [
+        _rule(
+            workspace_id,
+            category.id,
+            name=f"Bulk rule {index}",
+            priority=index,
+            condition_json=_condition("account_id", account_id, "equal"),
+        )
+        for index in range(501)
+    ]
+    for rule in rules:
+        rule.tags = [tag]
+    session.add_all(rules)
+    session.commit()
+    expected_tag_id = tag.id
+    assert session.bind is not None
+
+    with _query_counter(session.bind) as count:
+        compiled = load_compiled_rule_set(session, workspace_id)
+        match = compiled.match(_context(account_id=account_id))
+
+    assert match is not None
+    assert match.rule.tag_ids == (expected_tag_id,)
+    assert count.value <= 4
+
+
 def test_compiled_match_keeps_immutable_actions_without_session_queries(
     session: Session, workspace: Workspace
 ) -> None:

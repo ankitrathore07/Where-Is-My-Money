@@ -33,6 +33,7 @@ from app.imports.types import (
     ReviewRow,
     RowEdit,
 )
+from app.rules.evaluation import CompiledWorkspaceRuleSet
 from app.rules.loader import load_compiled_rule_set
 from app.tags.service import (
     TagNotFoundError,
@@ -71,6 +72,13 @@ class UploadResult:
 class ParsedSource:
     document: CsvDocument
     provider_key: str | None
+
+
+@dataclass(frozen=True)
+class _ImportCategorizationContext:
+    provider_key: str | None
+    account_id: int | None
+    workspace_rules: CompiledWorkspaceRuleSet
 
 
 class ReviewValidationError(ValueError):
@@ -456,24 +464,29 @@ def build_review(
     extractor: TransactionSourceExtractor | None = None,
     *,
     categorization_graph: CompiledCategorizationGraph | None = None,
+    _source: ParsedSource | None = None,
+    _categorization_context: _ImportCategorizationContext | None = None,
 ) -> ImportReview:
     """Reparse a mapped source into editable review rows without writing data."""
     if job.status != "reviewing":
         raise ImportStateError(
             "not_ready_for_review", "Prepare the transaction statement before reviewing it."
         )
-    source = _load_source(store, job, extractor)
+    source = _source or _load_source(store, job, extractor)
     document = source.document
     if not isinstance(job.column_mapping, dict):
         raise ImportStateError(
             "mapping_missing", "Prepare the transaction statement before reviewing it."
         )
     mapping = mapping_from_json(document.headers, job.column_mapping)
-    provider_key = source.provider_key
+    categorization_context = _categorization_context or _ImportCategorizationContext(
+        provider_key=source.provider_key,
+        account_id=job.account_id,
+        workspace_rules=load_compiled_rule_set(session, job.workspace_id),
+    )
     ai_categories = _ai_categories(session) if categorization_graph is not None else ()
     ai_categories_by_name = {category.name: category for category in ai_categories}
     suggestion_cache: dict[str, CategorySuggestion | None] = {}
-    workspace_rules = load_compiled_rule_set(session, job.workspace_id)
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
     errors_by_row: dict[int, dict[str, str]] = {}
@@ -502,9 +515,9 @@ def build_review(
                     session,
                     job.workspace_id,
                     normalized,
-                    provider_key=provider_key,
-                    account_id=job.account_id,
-                    workspace_rules=workspace_rules,
+                    provider_key=categorization_context.provider_key,
+                    account_id=categorization_context.account_id,
+                    workspace_rules=categorization_context.workspace_rules,
                 )
                 decision = _apply_ai_suggestion(
                     normalized,
@@ -581,6 +594,7 @@ def _reviewed_fields(
     candidate: NormalizedTransaction,
     review_row: ReviewRow,
     edit: RowEdit,
+    categorization_context: _ImportCategorizationContext,
 ) -> tuple[str, int, bool, str, tuple[int, ...], int | None]:
     if (
         review_row.category_id is None
@@ -588,7 +602,14 @@ def _reviewed_fields(
         or review_row.is_subscription is None
         or review_row.categorization_source is None
     ):
-        decision = categorize_candidate(session, workspace_id, candidate)
+        decision = categorize_candidate(
+            session,
+            workspace_id,
+            candidate,
+            provider_key=categorization_context.provider_key,
+            account_id=categorization_context.account_id,
+            workspace_rules=categorization_context.workspace_rules,
+        )
         fallback_merchant = decision.normalized_merchant
         fallback_category_id = decision.category_id
         fallback_subscription = decision.is_subscription
@@ -740,7 +761,20 @@ def commit_import(
             "not_ready_to_commit", "Review the transaction statement before committing it."
         )
 
-    review = build_review(session, store, job, extractor)
+    source = _load_source(store, job, extractor)
+    categorization_context = _ImportCategorizationContext(
+        provider_key=source.provider_key,
+        account_id=job.account_id,
+        workspace_rules=load_compiled_rule_set(session, job.workspace_id),
+    )
+    review = build_review(
+        session,
+        store,
+        job,
+        extractor,
+        _source=source,
+        _categorization_context=categorization_context,
+    )
     expected_rows = tuple(row.row_number for row in review.rows)
     submitted_rows = tuple(edit.row_number for edit in edits)
     if submitted_rows != expected_rows or len(set(submitted_rows)) != len(submitted_rows):
@@ -770,6 +804,7 @@ def commit_import(
                 candidate,
                 review_by_row[edit.row_number],
                 edit,
+                categorization_context,
             )
         except RowValidationError as exc:
             row_errors[edit.row_number] = exc.field_errors

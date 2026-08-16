@@ -618,6 +618,116 @@ def test_import_compiles_typed_workspace_rules_once_and_supplies_account_context
     assert len(rule_queries) <= 2
 
 
+def test_commit_corrected_invalid_rows_reuses_account_and_provider_rule_context(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    """Break if corrected rows drop import context or compile workspace rules per row."""
+    _seed_builtins(session)
+    store = LocalUploadStore(tmp_path)
+    job = _chase_job(
+        session,
+        workspace,
+        store,
+        b"DEBIT,NOT-A-DATE,CORRECTED ACCOUNT MERCHANT ONE,-10.00,ACH,-10.00,\n"
+        b"DEBIT,STILL-NOT-A-DATE,CORRECTED ACCOUNT MERCHANT TWO,-20.00,ACH,-30.00,\n",
+    )
+    category = Category(
+        workspace_id=workspace.id,
+        name="Corrected account rule",
+        name_key="corrected account rule",
+        kind="expense",
+    )
+    session.add(category)
+    session.flush()
+    assert job.account_id is not None
+    session.add(
+        MerchantRule(
+            workspace_id=workspace.id,
+            name="Corrected Chase account",
+            priority=0,
+            condition_json={
+                "version": 1,
+                "type": "all",
+                "children": [
+                    {
+                        "type": "predicate",
+                        "field": "description",
+                        "operator": "contains",
+                        "value": "CORRECTED ACCOUNT MERCHANT",
+                    },
+                    {
+                        "type": "predicate",
+                        "field": "account_id",
+                        "operator": "equal",
+                        "value": job.account_id,
+                    },
+                    {
+                        "type": "predicate",
+                        "field": "provider_key",
+                        "operator": "equal",
+                        "value": "chase_bank_csv",
+                    },
+                ],
+            },
+            normalized_merchant="Corrected account merchant",
+            category=category,
+        )
+    )
+    session.commit()
+    assert session.bind is not None
+    rule_loads: list[str] = []
+
+    def capture_rule_load(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        normalized = " ".join(statement.casefold().split())
+        if "from merchant_rules" in normalized and "merchant_rule_tags" not in normalized:
+            rule_loads.append(normalized)
+
+    event.listen(session.bind, "before_cursor_execute", capture_rule_load)
+    try:
+        commit_import(
+            session,
+            store,
+            job,
+            (
+                RowEdit(
+                    2,
+                    True,
+                    "2026-08-01",
+                    "CORRECTED ACCOUNT MERCHANT ONE",
+                    "-10.00",
+                ),
+                RowEdit(
+                    3,
+                    True,
+                    "2026-08-02",
+                    "CORRECTED ACCOUNT MERCHANT TWO",
+                    "-20.00",
+                ),
+            ),
+        )
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_rule_load)
+    transactions = tuple(session.scalars(select(Transaction).order_by(Transaction.id)))
+
+    assert [transaction.category_id for transaction in transactions] == [category.id, category.id]
+    assert [transaction.normalized_merchant for transaction in transactions] == [
+        "Corrected account merchant",
+        "Corrected account merchant",
+    ]
+    assert [transaction.categorization_source for transaction in transactions] == [
+        "manual",
+        "manual",
+    ]
+    assert len(rule_loads) == 1
+
+
 def test_commit_preserves_preview_decision_even_if_rule_changes(
     session: Session, workspace: Workspace, tmp_path: Path
 ) -> None:
