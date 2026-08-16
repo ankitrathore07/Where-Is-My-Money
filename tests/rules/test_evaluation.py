@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -10,6 +11,7 @@ from app.rules.types import (
     PredicateCondition,
     RuleContext,
 )
+from app.rules.validation import parse_condition
 
 
 def sample_context() -> RuleContext:
@@ -78,6 +80,26 @@ def test_evaluate_condition_normalizes_unicode_text_without_exposing_values() ->
     assert result.matched is True
     assert "Nétflix" not in result.explanation
     assert "streaming" not in result.explanation.casefold()
+
+
+@pytest.mark.parametrize("field", ["description", "merchant_key"])
+def test_evaluate_condition_accepts_task_two_valid_unicode_expanding_text(field: str) -> None:
+    """Break if evaluator length checks reject a parsed condition after case-fold expansion."""
+    value = "\N{LATIN SMALL LETTER SHARP S}" * 255
+    node = parse_condition(
+        {
+            "version": 1,
+            "type": "predicate",
+            "field": field,
+            "operator": "exact",
+            "value": value,
+        }
+    )
+    context = replace(sample_context(), **{field: value})
+
+    result = evaluate_condition(node, context)
+
+    assert result.matched is True
 
 
 def test_evaluate_condition_short_circuits_all_after_first_non_match() -> None:

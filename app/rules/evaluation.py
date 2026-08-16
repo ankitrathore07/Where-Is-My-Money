@@ -203,19 +203,28 @@ def _compare_provider_key(actual: str | None, operator: object, expected: object
 
 
 def _normalize_text(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+    return _normalized_text(value).casefold()
+
+
+def _normalized_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).split())
 
 
 def _is_valid_predicate(node: PredicateCondition) -> bool:
     if not isinstance(node.field, str) or not isinstance(node.operator, str):
         return False
-    if node.field in {"description", "merchant_key"}:
+    if node.field == "description":
         return (
             node.operator in _TEXT_OPERATORS
             and isinstance(node.value, str)
-            and bool(_normalize_text(node.value))
-            and len(_normalize_text(node.value)) <= 255
-            and (node.field != "merchant_key" or bool(merchant_key(node.value)))
+            and bool(_normalized_text(node.value))
+            and len(_normalized_text(node.value)) <= 255
+        )
+    if node.field == "merchant_key":
+        return (
+            node.operator in _TEXT_OPERATORS
+            and isinstance(node.value, str)
+            and bool(merchant_key(node.value))
         )
     if node.field == "amount_cents":
         return node.operator in _AMOUNT_OPERATORS and _is_int(node.value)
