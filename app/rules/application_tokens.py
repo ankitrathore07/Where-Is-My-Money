@@ -155,7 +155,9 @@ class ApplicationSelectionJSON(TypeDecorator):
 
     def process_result_value(
         self, value: object, _dialect: object
-    ) -> _CanonicalApplicationSelection:
+    ) -> _CanonicalApplicationSelection | None:
+        if value is None:
+            return None
         return _canonicalize_application_selection(value)
 
 

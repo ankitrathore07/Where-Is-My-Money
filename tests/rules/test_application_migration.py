@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, event, insert, inspect, text
+from sqlalchemy import Engine, create_engine, event, insert, inspect, select, text
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
@@ -341,12 +341,13 @@ def test_application_run_migration_rejects_invalid_foreign_references(
         {"normalized_filters": {}, "selected_transaction_ids": [True]},
         {"normalized_filters": {}, "selected_transaction_ids": [0]},
         {"normalized_filters": {}, "selected_transaction_ids": list(range(1, 502))},
+        None,
     ],
 )
 def test_application_run_model_rejects_unvalidated_selection_json(
     session: Session,
     workspace: Workspace,
-    selection_json: dict[str, object],
+    selection_json: object,
 ) -> None:
     """Break if direct ORM assignment can bypass validation at the final bind boundary."""
     rule = _model_rule(session, workspace)
@@ -421,6 +422,23 @@ def test_application_selection_stays_immutable_after_flush_and_reload(
         run.selection_json["normalized_filters"]["description"] = "PRIVATE"
     with pytest.raises(TypeError):
         run.selection_json["selected_transaction_ids"][0] = 99
+
+
+def test_application_selection_outer_join_without_run_returns_none(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if SQL NULL from an absent outer-joined audit row is parsed as selection JSON."""
+    row = session.execute(
+        select(Workspace.id, RuleApplicationRun.selection_json)
+        .outerjoin(
+            RuleApplicationRun,
+            RuleApplicationRun.workspace_id == Workspace.id,
+        )
+        .where(Workspace.id == workspace.id)
+    ).one()
+
+    assert row.id == workspace.id
+    assert row.selection_json is None
 
 
 def test_application_selection_mutation_after_assignment_is_rejected_on_flush(
