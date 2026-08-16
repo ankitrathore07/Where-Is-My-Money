@@ -71,6 +71,14 @@ def upgrade() -> None:
             "(status <> 'confirmed' AND confirmed_at IS NULL)",
             name="ck_rule_application_runs_confirmation_state",
         ),
+        sa.CheckConstraint(
+            "length(preview_digest) = 64",
+            name="ck_rule_application_runs_preview_digest_length",
+        ),
+        sa.CheckConstraint(
+            "preview_digest = lower(preview_digest)",
+            name="ck_rule_application_runs_preview_digest_lowercase",
+        ),
     )
     op.create_index(
         "ix_rule_application_runs_workspace_id",

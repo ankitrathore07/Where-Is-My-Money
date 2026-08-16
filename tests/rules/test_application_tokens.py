@@ -4,6 +4,7 @@ import pytest
 from itsdangerous import URLSafeTimedSerializer
 from itsdangerous.timed import TimestampSigner
 
+from app.rules import application_tokens
 from app.rules.application_tokens import (
     APPLICATION_TOKEN_SALT,
     ApplicationTokenPayload,
@@ -75,6 +76,40 @@ def test_application_token_round_trips_canonical_payload_and_rejects_tampering()
     )
     with pytest.raises(RuleApplicationTokenError):
         load_application_token(SECRET, token + "tampered")
+
+
+def test_application_selection_is_canonical_and_contains_only_approved_state() -> None:
+    """Break if audit selection can retain browser order or any state beyond filters and IDs."""
+    selection = application_tokens.canonical_application_selection(
+        preview_payload(
+            selected_transaction_ids=(11, 3),
+            normalized_filters={"direction": "expense", "account_id": 5},
+        )
+    )
+
+    assert selection == {
+        "normalized_filters": {"account_id": 5, "direction": "expense"},
+        "selected_transaction_ids": [3, 11],
+    }
+
+
+@pytest.mark.parametrize(
+    "sensitive_filters",
+    [
+        {"description": "PRIVATE MERCHANT"},
+        {"amount_cents": -1_250},
+        {"token": "signed-preview-token"},
+        {"condition_json": {"field": "description"}},
+    ],
+)
+def test_application_selection_rejects_sensitive_or_nested_state(
+    sensitive_filters: dict[str, object],
+) -> None:
+    """Break if prohibited financial, token, or condition data can enter audit selection."""
+    with pytest.raises(RuleApplicationTokenError):
+        application_tokens.canonical_application_selection(
+            preview_payload(normalized_filters=sensitive_filters)
+        )
 
 
 def test_application_token_canonicalization_is_deterministic(

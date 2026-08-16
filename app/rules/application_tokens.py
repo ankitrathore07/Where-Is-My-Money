@@ -34,6 +34,15 @@ class RuleApplicationTokenError(ValueError):
     """Raised when historical application preview state cannot be trusted."""
 
 
+def validate_application_digest(value: object) -> str:
+    """Return an exact lowercase SHA-256-style digest or reject the value."""
+    if type(value) is not str or _DIGEST_PATTERN.fullmatch(value) is None:
+        raise RuleApplicationTokenError(
+            "Application preview could not be verified; reload and try again."
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class ApplicationTokenPayload:
     workspace_id: int
@@ -42,6 +51,45 @@ class ApplicationTokenPayload:
     selected_transaction_ids: tuple[int, ...]
     state_digest: str
     normalized_filters: Mapping[str, NormalizedFilterValue]
+
+
+class _ImmutableDict(dict[str, object]):
+    """JSON-serializable dict that cannot change after validated construction."""
+
+    def _immutable(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("Canonical application selections are immutable.")
+
+    __delitem__ = _immutable
+    __setitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
+class _ImmutableList(list[int]):
+    """JSON-serializable integer list that cannot change after validated construction."""
+
+    def _immutable(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("Canonical application selections are immutable.")
+
+    __delitem__ = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+    __setitem__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+
+
+class _CanonicalApplicationSelection(_ImmutableDict):
+    """Marker for selection JSON created from a validated signed payload."""
 
 
 def _positive_int(value: object) -> bool:
@@ -86,7 +134,7 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
     merchant_rule_id = raw["merchant_rule_id"]
     rule_lock_version = raw["rule_lock_version"]
     selected_ids = raw["selected_transaction_ids"]
-    state_digest = raw["state_digest"]
+    state_digest = validate_application_digest(raw["state_digest"])
     filters = _canonical_filters(raw["normalized_filters"])
     valid = (
         type(version) is int
@@ -98,8 +146,6 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
         and len(selected_ids) <= MAX_SELECTED_TRANSACTION_IDS
         and all(_positive_int(transaction_id) for transaction_id in selected_ids)
         and len(selected_ids) == len(set(selected_ids))
-        and type(state_digest) is str
-        and _DIGEST_PATTERN.fullmatch(state_digest) is not None
         and filters is not None
     )
     if not valid:
@@ -113,6 +159,33 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
         selected_transaction_ids=tuple(sorted(selected_ids)),
         state_digest=state_digest,
         normalized_filters=filters,
+    )
+
+
+def canonical_application_selection(
+    payload: ApplicationTokenPayload,
+) -> dict[str, object]:
+    """Return the only selection JSON shape supported by application audit persistence."""
+    if type(payload) is not ApplicationTokenPayload:
+        raise RuleApplicationTokenError(
+            "Application preview could not be verified; reload and try again."
+        )
+    validated = _validated_payload(
+        {
+            "v": APPLICATION_TOKEN_VERSION,
+            "workspace_id": payload.workspace_id,
+            "merchant_rule_id": payload.merchant_rule_id,
+            "rule_lock_version": payload.rule_lock_version,
+            "selected_transaction_ids": list(payload.selected_transaction_ids),
+            "state_digest": payload.state_digest,
+            "normalized_filters": payload.normalized_filters,
+        }
+    )
+    return _CanonicalApplicationSelection(
+        {
+            "normalized_filters": _ImmutableDict(validated.normalized_filters),
+            "selected_transaction_ids": _ImmutableList(validated.selected_transaction_ids),
+        }
     )
 
 

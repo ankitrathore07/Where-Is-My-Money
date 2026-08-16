@@ -20,7 +20,12 @@ from sqlalchemy import (
     text,
     true,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+
+from app.rules.application_tokens import (
+    _CanonicalApplicationSelection,
+    validate_application_digest,
+)
 
 
 class Base(DeclarativeBase):
@@ -479,6 +484,14 @@ class RuleApplicationRun(Base):
             "(status <> 'confirmed' AND confirmed_at IS NULL)",
             name="ck_rule_application_runs_confirmation_state",
         ),
+        CheckConstraint(
+            "length(preview_digest) = 64",
+            name="ck_rule_application_runs_preview_digest_length",
+        ),
+        CheckConstraint(
+            "preview_digest = lower(preview_digest)",
+            name="ck_rule_application_runs_preview_digest_lowercase",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -507,6 +520,16 @@ class RuleApplicationRun(Base):
     initiated_by_user: Mapped["User"] = relationship(
         back_populates="initiated_rule_application_runs"
     )
+
+    @validates("selection_json")
+    def _validate_selection_json(self, _key: str, value: object) -> dict[str, object]:
+        if type(value) is not _CanonicalApplicationSelection:
+            raise ValueError("Use canonical_application_selection() for audit selection JSON.")
+        return value
+
+    @validates("preview_digest")
+    def _validate_preview_digest(self, _key: str, value: object) -> str:
+        return validate_application_digest(value)
 
 
 class Payslip(Base):
