@@ -54,6 +54,26 @@ def test_describe_actions_includes_every_rule_action() -> None:
 
     assert summary == (
         "set merchant to \u201cCoffee Club\u201d; set category to \u201cDining & Drinks\u201d; "
-        "add tags \u201cCoffee\u201d, \u201cRecurring\u201d; mark as subscription; "
+        "replace tags with \u201cCoffee\u201d, \u201cRecurring\u201d; mark as subscription; "
         "repeat every 3 months"
+    )
+
+
+def test_describe_actions_explicitly_describes_fallback_and_cleared_values() -> None:
+    """Break if a replacement/clear action is presented as preserving existing values."""
+    draft = RuleDraft(
+        name="Reset categorization",
+        condition=PredicateCondition("description", "contains", "SHOP"),
+        normalized_merchant=None,
+        category_id=4,
+        tag_ids=(),
+        is_subscription=False,
+        billing_period_months=None,
+    )
+
+    summary = describe_actions(draft, category_name="Shopping", tag_names=())
+
+    assert summary == (
+        "derive merchant from transaction description; set category to \u201cShopping\u201d; "
+        "clear all tags; mark as not a subscription; clear billing cadence"
     )

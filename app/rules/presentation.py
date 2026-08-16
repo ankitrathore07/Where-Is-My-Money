@@ -104,7 +104,7 @@ def describe_actions(
     """Return a complete THEN summary for a typed rule action."""
     parts = []
     if actions.normalized_merchant is None:
-        parts.append("keep the detected merchant")
+        parts.append("derive merchant from transaction description")
     else:
         parts.append(f"set merchant to {_quote(actions.normalized_merchant)}")
     category_label = category_name or f"category {actions.category_id}"
@@ -116,7 +116,9 @@ def describe_actions(
         else tuple(f"tag {tag_id}" for tag_id in actions.tag_ids)
     )
     if labels:
-        parts.append("add tags " + ", ".join(_quote(label) for label in labels))
+        parts.append("replace tags with " + ", ".join(_quote(label) for label in labels))
+    else:
+        parts.append("clear all tags")
     parts.append(
         "mark as subscription" if actions.is_subscription else "mark as not a subscription"
     )
@@ -124,6 +126,8 @@ def describe_actions(
         cadence = actions.billing_period_months
         unit = "month" if cadence == 1 else "months"
         parts.append(f"repeat every {cadence} {unit}")
+    else:
+        parts.append("clear billing cadence")
     return "; ".join(parts)
 
 

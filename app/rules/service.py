@@ -49,6 +49,7 @@ from app.tags.service import tag_ids_with_subscription
 MAX_RULE_NAME_LENGTH = 120
 MAX_MERCHANT_NAME_LENGTH = 255
 MAX_PREVIEW_EXAMPLES = 20
+PREVIEW_LIMITATION_PROVIDER_UNAVAILABLE = "historical_provider_unavailable"
 
 
 class RuleNotFoundError(LookupError):
@@ -134,6 +135,8 @@ class RuleImpactPreview:
     manual_skip_count: int
     conflict_skip_count: int
     not_matched_count: int
+    unavailable_count: int
+    limitation_codes: tuple[str, ...]
     category_counts: tuple[PreviewGroupCount, ...]
     account_counts: tuple[PreviewGroupCount, ...]
     conflicts: tuple[PreviewConflict, ...]
@@ -246,46 +249,53 @@ def preview_rule_impact(
         manual_skip_count = 0
         conflict_skip_count = 0
         not_matched_count = 0
+        unavailable_count = 0
+        limitation_codes: set[str] = set()
         category_counter: Counter[tuple[int | None, str]] = Counter()
         account_counter: Counter[tuple[int | None, str]] = Counter()
         conflict_counter: Counter[tuple[int, str]] = Counter()
         examples: list[PreviewExample] = []
+        higher_rules = tuple(rule for rule in active_rules if rule.id in higher_rule_ids)
 
         for transaction in _preview_transactions(session, workspace_id):
-            draft_result = evaluate_condition(draft_rule.condition, _rule_context(transaction))
-            if not draft_result.matched:
+            context = _rule_context(transaction)
+            draft_outcome = _evaluate_historical_condition(draft_rule.condition, context)
+            if draft_outcome is None:
+                unavailable_count += 1
+                limitation_codes.add(PREVIEW_LIMITATION_PROVIDER_UNAVAILABLE)
+                continue
+            if not draft_outcome:
                 not_matched_count += 1
                 continue
 
             matched_count += 1
             category_counter[(transaction.category_id, transaction.category_label)] += 1
             account_counter[(transaction.account_id, transaction.account_label)] += 1
-            matching_existing = tuple(
-                rule
-                for rule in active_rules
-                if evaluate_condition(rule.condition, _rule_context(transaction)).matched
-            )
-            winning_conflict = next(
-                (rule for rule in matching_existing if rule.id in higher_rule_ids),
-                None,
-            )
 
             outcome: str
             winning_rule_id: int | None = None
             if transaction.categorization_source == CategorizationSource.MANUAL.value:
                 manual_skip_count += 1
                 outcome = "manual_protected"
-            elif winning_conflict is not None:
-                conflict_skip_count += 1
-                winning_rule_id = winning_conflict.id
-                conflict_counter[(winning_conflict.id, winning_conflict.name)] += 1
-                outcome = "shadowed"
-            elif _actions_are_identical(transaction, draft_rule):
-                unchanged_count += 1
-                outcome = "unchanged"
             else:
-                would_change_count += 1
-                outcome = "would_change"
+                winning_conflict, conflict_unknown = _historical_conflict_winner(
+                    higher_rules, context
+                )
+                if conflict_unknown:
+                    unavailable_count += 1
+                    limitation_codes.add(PREVIEW_LIMITATION_PROVIDER_UNAVAILABLE)
+                    continue
+                if winning_conflict is not None:
+                    conflict_skip_count += 1
+                    winning_rule_id = winning_conflict.id
+                    conflict_counter[(winning_conflict.id, winning_conflict.name)] += 1
+                    outcome = "shadowed"
+                elif _actions_are_identical(transaction, draft_rule):
+                    unchanged_count += 1
+                    outcome = "unchanged"
+                else:
+                    would_change_count += 1
+                    outcome = "would_change"
 
             if len(examples) < MAX_PREVIEW_EXAMPLES:
                 examples.append(
@@ -311,11 +321,57 @@ def preview_rule_impact(
             manual_skip_count=manual_skip_count,
             conflict_skip_count=conflict_skip_count,
             not_matched_count=not_matched_count,
+            unavailable_count=unavailable_count,
+            limitation_codes=tuple(sorted(limitation_codes)),
             category_counts=_group_counts(category_counter),
             account_counts=_group_counts(account_counter),
             conflicts=conflicts,
             examples=tuple(examples),
         )
+
+
+def _evaluate_historical_condition(node: ConditionNode, context: RuleContext) -> bool | None:
+    """Evaluate with unknown provider provenance preserved through boolean operators."""
+    if isinstance(node, PredicateCondition):
+        if node.field == "provider_key":
+            return None
+        return evaluate_condition(node, context).matched
+    if isinstance(node, AllCondition):
+        unknown = False
+        for child in node.children:
+            outcome = _evaluate_historical_condition(child, context)
+            if outcome is False:
+                return False
+            unknown = unknown or outcome is None
+        return None if unknown else True
+    if isinstance(node, AnyCondition):
+        unknown = False
+        for child in node.children:
+            outcome = _evaluate_historical_condition(child, context)
+            if outcome is True:
+                return True
+            unknown = unknown or outcome is None
+        return None if unknown else False
+    if isinstance(node, NotCondition):
+        outcome = _evaluate_historical_condition(node.child, context)
+        return None if outcome is None else not outcome
+    return False
+
+
+def _historical_conflict_winner(
+    higher_rules: tuple[CompiledWorkspaceRule, ...],
+    context: RuleContext,
+) -> tuple[CompiledWorkspaceRule | None, bool]:
+    unknown_before_winner = False
+    for rule in higher_rules:
+        outcome = _evaluate_historical_condition(rule.condition, context)
+        if outcome is None:
+            unknown_before_winner = True
+        elif outcome:
+            if unknown_before_winner:
+                return None, True
+            return rule, False
+    return None, unknown_before_winner
 
 
 def _higher_priority_rule_ids(
@@ -344,11 +400,15 @@ def _preview_transactions(session: Session, workspace_id: int) -> Iterator[_Prev
             Transaction.description,
             Transaction.normalized_merchant,
             Transaction.amount_cents,
+            Transaction.category_id.label("stored_category_id"),
             Category.id.label("category_id"),
             Category.name.label("category_name"),
             Transaction.categorization_source,
             Transaction.is_subscription,
             Transaction.billing_period_months,
+            Transaction.import_job_id.label("stored_import_job_id"),
+            ImportJob.id.label("accessible_import_job_id"),
+            ImportJob.account_id.label("stored_account_id"),
             Account.id.label("account_id"),
             Account.name.label("account_name"),
             transaction_tags.c.tag_id,
@@ -399,6 +459,12 @@ def _preview_transactions(session: Session, workspace_id: int) -> Iterator[_Prev
 def _projected_transaction(values: dict[str, object], tag_ids: list[int]) -> _PreviewTransaction:
     transaction_date = values["transaction_date"]
     assert isinstance(transaction_date, datetime)
+    category_unavailable = (
+        values["stored_category_id"] is not None and values["category_id"] is None
+    )
+    account_unavailable = (
+        values["stored_import_job_id"] is not None and values["accessible_import_job_id"] is None
+    ) or (values["stored_account_id"] is not None and values["account_id"] is None)
     return _PreviewTransaction(
         id=int(values["transaction_id"]),
         transaction_date=transaction_date,
@@ -411,7 +477,11 @@ def _projected_transaction(values: dict[str, object], tag_ids: list[int]) -> _Pr
         amount_cents=int(values["amount_cents"]),
         category_id=(int(values["category_id"]) if values["category_id"] is not None else None),
         category_label=(
-            str(values["category_name"]) if values["category_name"] is not None else "Uncategorized"
+            "Unavailable category"
+            if category_unavailable
+            else str(values["category_name"])
+            if values["category_name"] is not None
+            else "Uncategorized"
         ),
         categorization_source=str(values["categorization_source"]),
         is_subscription=bool(values["is_subscription"]),
@@ -422,7 +492,11 @@ def _projected_transaction(values: dict[str, object], tag_ids: list[int]) -> _Pr
         ),
         account_id=(int(values["account_id"]) if values["account_id"] is not None else None),
         account_label=(
-            str(values["account_name"]) if values["account_name"] is not None else "No account"
+            "Unavailable account"
+            if account_unavailable
+            else str(values["account_name"])
+            if values["account_name"] is not None
+            else "No account"
         ),
         tag_ids=tuple(tag_ids),
     )

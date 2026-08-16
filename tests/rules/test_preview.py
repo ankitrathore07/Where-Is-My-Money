@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 
+import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,15 @@ from app.db.models import (
     Workspace,
 )
 from app.rules.service import RuleDraft, preview_rule_impact, simulate_rules
-from app.rules.types import PredicateCondition, RuleContext
+from app.rules.types import (
+    AllCondition,
+    AnyCondition,
+    ConditionNode,
+    NotCondition,
+    PredicateCondition,
+    RuleContext,
+)
+from app.rules.validation import condition_to_json
 
 
 def _category(session: Session, workspace_id: int, name: str) -> Category:
@@ -34,7 +44,7 @@ def _category(session: Session, workspace_id: int, name: str) -> Category:
 
 def _rule(
     workspace_id: int,
-    category_id: int,
+    category_id: int | None,
     *,
     name: str,
     priority: int,
@@ -53,6 +63,25 @@ def _rule(
             "operator": operator,
             "value": value,
         },
+        normalized_merchant=name,
+        category_id=category_id,
+    )
+
+
+def _typed_rule(
+    workspace_id: int,
+    category_id: int,
+    *,
+    name: str,
+    priority: int,
+    condition: ConditionNode,
+) -> MerchantRule:
+    return MerchantRule(
+        workspace_id=workspace_id,
+        name=name,
+        enabled=True,
+        priority=priority,
+        condition_json=json.loads(condition_to_json(condition)),
         normalized_merchant=name,
         category_id=category_id,
     )
@@ -251,6 +280,156 @@ def test_preview_caps_examples_without_capping_exact_counts(
 
     assert preview.would_change_count == 25
     assert len(preview.examples) == 20
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        PredicateCondition("provider_key", "equal", "generic_csv"),
+        NotCondition(PredicateCondition("provider_key", "equal", "generic_csv")),
+        AllCondition(
+            (
+                PredicateCondition("description", "contains", "COFFEE"),
+                NotCondition(PredicateCondition("provider_key", "equal", "generic_csv")),
+            )
+        ),
+    ],
+)
+def test_preview_surfaces_unknown_provider_in_draft_without_false_matches(
+    session: Session,
+    workspace: Workspace,
+    condition: ConditionNode,
+) -> None:
+    """Break if direct or negated unknown provider provenance becomes true or false."""
+    current = _category(session, workspace.id, "Current")
+    target = _category(session, workspace.id, "Target")
+    session.add(_transaction(workspace.id, description="COFFEE", category_id=current.id))
+    session.commit()
+    draft = RuleDraft(
+        name="Provider draft", condition=condition, normalized_merchant=None, category_id=target.id
+    )
+
+    preview = preview_rule_impact(session, workspace.id, draft, exclude_rule_id=None)
+
+    assert preview.matched_count == 0
+    assert preview.not_matched_count == 0
+    assert preview.unavailable_count == 1
+    assert preview.limitation_codes == ("historical_provider_unavailable",)
+    assert preview.would_change_count == 0
+    assert preview.conflict_skip_count == 0
+    assert preview.examples == ()
+
+
+@pytest.mark.parametrize(
+    "higher_condition",
+    [
+        PredicateCondition("provider_key", "equal", "generic_csv"),
+        NotCondition(PredicateCondition("provider_key", "equal", "generic_csv")),
+        AnyCondition(
+            (
+                PredicateCondition("description", "exact", "NEVER"),
+                NotCondition(PredicateCondition("provider_key", "equal", "generic_csv")),
+            )
+        ),
+    ],
+)
+def test_preview_does_not_guess_higher_priority_provider_conflict_winner(
+    session: Session,
+    workspace: Workspace,
+    higher_condition: ConditionNode,
+) -> None:
+    """Break if an unknown higher rule is ignored or reported as a definite winner."""
+    current = _category(session, workspace.id, "Current")
+    target = _category(session, workspace.id, "Target")
+    session.add(
+        _typed_rule(
+            workspace.id,
+            current.id,
+            name="Unknown higher",
+            priority=0,
+            condition=higher_condition,
+        )
+    )
+    session.add(_transaction(workspace.id, description="COFFEE", category_id=current.id))
+    session.commit()
+    draft = RuleDraft(
+        name="Coffee draft",
+        condition=PredicateCondition("description", "contains", "COFFEE"),
+        normalized_merchant="Coffee",
+        category_id=target.id,
+    )
+
+    preview = preview_rule_impact(session, workspace.id, draft, exclude_rule_id=None)
+
+    assert preview.matched_count == 1
+    assert preview.unavailable_count == 1
+    assert preview.limitation_codes == ("historical_provider_unavailable",)
+    assert preview.would_change_count == 0
+    assert preview.conflict_skip_count == 0
+    assert preview.conflicts == ()
+    assert preview.examples == ()
+
+
+def test_preview_keeps_inaccessible_aggregates_separate_without_exposing_resources(
+    session: Session, workspace: Workspace, other_workspace: Workspace
+) -> None:
+    """Break if corrupt foreign references merge with legitimate empty aggregate buckets."""
+    target = _category(session, workspace.id, "Target")
+    foreign_category = _category(session, other_workspace.id, "Secret foreign category")
+    foreign_account = Account(
+        workspace_id=other_workspace.id,
+        name="Secret foreign account",
+        account_type="checking",
+        institution_key="other",
+        institution="Elsewhere",
+        is_liability=False,
+    )
+    session.add(foreign_account)
+    session.flush()
+    corrupt_job = ImportJob(
+        workspace_id=workspace.id,
+        account_id=foreign_account.id,
+        status="committed",
+    )
+    session.add(corrupt_job)
+    session.flush()
+    session.add_all(
+        [
+            _transaction(
+                workspace.id,
+                description="COFFEE FOREIGN REFERENCES",
+                category_id=foreign_category.id,
+                account_job_id=corrupt_job.id,
+            ),
+            _transaction(
+                workspace.id,
+                description="COFFEE LEGITIMATE EMPTY",
+                category_id=None,
+            ),
+        ]
+    )
+    session.commit()
+    draft = RuleDraft(
+        name="Coffee draft",
+        condition=PredicateCondition("description", "contains", "COFFEE"),
+        normalized_merchant="Coffee",
+        category_id=target.id,
+    )
+
+    preview = preview_rule_impact(session, workspace.id, draft, exclude_rule_id=None)
+
+    assert {item.label: item.count for item in preview.category_counts} == {
+        "Uncategorized": 1,
+        "Unavailable category": 1,
+    }
+    assert {item.label: item.count for item in preview.account_counts} == {
+        "No account": 1,
+        "Unavailable account": 1,
+    }
+    assert all(item.group_id is None for item in preview.category_counts)
+    assert all(item.group_id is None for item in preview.account_counts)
+    assert "Secret foreign category" not in repr(preview)
+    assert "Secret foreign account" not in repr(preview)
 
 
 def test_edit_preview_replaces_rule_at_its_priority_and_ignores_lower_matches(
