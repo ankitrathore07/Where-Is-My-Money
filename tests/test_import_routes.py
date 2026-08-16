@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import func, select
 
 from app.categorization.ai_graph import build_categorization_graph
@@ -10,12 +11,14 @@ from app.db.models import (
     Account,
     Category,
     ImportJob,
+    MerchantRule,
     Tag,
     Transaction,
     UploadedFile,
     User,
     Workspace,
 )
+from app.imports.review_tokens import REVIEW_TOKEN_SALT, ReviewTokenError, load_review_token
 from tests.route_helpers import (
     build_route_test_app,
     complete_sign_in,
@@ -37,6 +40,38 @@ class ShoppingClassifier:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+def _signed_review_token(version: int, merchant_rule_id: object = None) -> str:
+    return URLSafeTimedSerializer("review-secret", salt=REVIEW_TOKEN_SALT).dumps(
+        {
+            "v": version,
+            "job_id": 17,
+            "row_number": 2,
+            "normalized_merchant": "Example Market",
+            "category_id": 3,
+            "is_subscription": False,
+            "categorization_source": "workspace_rule",
+            "tag_ids": [],
+            "billing_period_months": None,
+            "merchant_rule_id": merchant_rule_id,
+        }
+    )
+
+
+def test_review_token_rejects_previous_payload_version() -> None:
+    token = _signed_review_token(2, 5)
+
+    with pytest.raises(ReviewTokenError):
+        load_review_token("review-secret", token, 17, 2)
+
+
+@pytest.mark.parametrize("merchant_rule_id", [0, -1, True, "5"])
+def test_review_token_rejects_invalid_merchant_rule_ids(merchant_rule_id: object) -> None:
+    token = _signed_review_token(3, merchant_rule_id)
+
+    with pytest.raises(ReviewTokenError):
+        load_review_token("review-secret", token, 17, 2)
 
 
 @pytest.mark.anyio
@@ -644,6 +679,84 @@ async def test_review_commit_rejects_tampered_preview_token(tmp_path: Path) -> N
     assert response.status_code == 400
     assert "Review data could not be verified" in response.text
     assert transaction_count == 0
+
+
+@pytest.mark.anyio
+async def test_review_token_preserves_workspace_rule_id_for_unchanged_commit(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            token = await csrf_token(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                assert workspace is not None
+                category = Category(
+                    workspace_id=workspace.id,
+                    name="Reviewed streaming",
+                    name_key="reviewed streaming",
+                    kind="expense",
+                )
+                rule = MerchantRule(
+                    workspace_id=workspace.id,
+                    merchant_pattern="EXAMPLE MARKET",
+                    name="Reviewed streaming",
+                    normalized_merchant="Example Market",
+                    category=category,
+                )
+                session.add(rule)
+                session.commit()
+                workspace_id = workspace.id
+                category_id = category.id
+                rule_id = rule.id
+            uploaded = await client.post(
+                f"/workspaces/{workspace_id}/imports",
+                data={"retention_choice": "retain", "csrf_token": token},
+                files={"statement": ("synthetic.csv", CSV_BYTES, "text/csv")},
+                follow_redirects=False,
+            )
+            import_id = int(uploaded.headers["location"].split("/")[-2])
+            mapped = await client.post(
+                uploaded.headers["location"],
+                data={
+                    "csrf_token": token,
+                    "date_column": "Date",
+                    "description_column": "Description",
+                    "amount_mode": "single",
+                    "amount_column": "Amount",
+                    "date_format": "mdy",
+                    "amount_sign": "as_is",
+                },
+            )
+            review = await client.get(mapped.headers["location"])
+            baseline_token = review_token(review.text, 2)
+            response = await client.post(
+                f"/workspaces/{workspace_id}/imports/{import_id}/commit",
+                data={
+                    "csrf_token": token,
+                    "row_numbers": "2",
+                    "include_2": "on",
+                    "date_2": "2026-08-01",
+                    "description_2": "Example Market",
+                    "amount_2": "-12.34",
+                    "normalized_merchant_2": "Example Market",
+                    "category_2": str(category_id),
+                    "review_token_2": baseline_token,
+                },
+                follow_redirects=False,
+            )
+        with factory() as session:
+            transaction = session.scalar(select(Transaction))
+            assert transaction is not None
+            assert transaction.merchant_rule_id == rule_id
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 303
 
 
 @pytest.mark.anyio

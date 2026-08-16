@@ -141,18 +141,35 @@ git commit -m "feat: migrate workspace rules to typed conditions"
 
 ```python
 def test_parse_condition_normalizes_a_typed_group() -> None:
-    node = parse_condition({
-        "version": 1,
-        "type": "all",
-        "children": [
-            {"type": "predicate", "field": "description", "operator": "contains", "value": "  Café  "},
-            {"type": "not", "child": {"type": "predicate", "field": "amount_cents", "operator": "less_than", "value": 0}},
-        ],
-    })
+    node = parse_condition(
+        {
+            "version": 1,
+            "type": "all",
+            "children": [
+                {
+                    "type": "predicate",
+                    "field": "description",
+                    "operator": "contains",
+                    "value": "  Café  ",
+                },
+                {
+                    "type": "not",
+                    "child": {
+                        "type": "predicate",
+                        "field": "amount_cents",
+                        "operator": "less_than",
+                        "value": 0,
+                    },
+                },
+            ],
+        }
+    )
     assert condition_to_payload(node)["children"][0]["value"] == "Café"
 
 
-@pytest.mark.parametrize("payload", [too_deep_tree(), too_many_predicates(), unknown_version(), empty_all_group()])
+@pytest.mark.parametrize(
+    "payload", [too_deep_tree(), too_many_predicates(), unknown_version(), empty_all_group()]
+)
 def test_parse_condition_rejects_unbounded_or_unknown_payloads(payload: object) -> None:
     with pytest.raises(RuleConditionValidationError):
         parse_condition(payload)
@@ -322,7 +339,9 @@ def test_workspace_rule_id_survives_review_token_and_commit(session, workspace, 
     assert transaction.merchant_rule_id == rule.id
 
 
-def test_import_rule_queries_do_not_scale_with_rows(session, workspace, store, query_counter) -> None:
+def test_import_rule_queries_do_not_scale_with_rows(
+    session, workspace, store, query_counter
+) -> None:
     job = mapped_job_with_many_rows(session, workspace, store, count=250)
     with query_counter(session.bind, table="merchant_rules") as count:
         build_review(session, store, job)
@@ -392,7 +411,9 @@ def test_move_rule_compacts_workspace_priorities_atomically(session, workspace) 
     rules = seed_rules(session, workspace.id, count=3)
     move_rule(session, workspace.id, rules[2].id, new_index=0)
     assert [(rule.id, rule.priority) for rule in list_rules(session, workspace.id)] == [
-        (rules[2].id, 0), (rules[0].id, 1), (rules[1].id, 2)
+        (rules[2].id, 0),
+        (rules[0].id, 1),
+        (rules[1].id, 2),
     ]
 ```
 
@@ -596,7 +617,9 @@ def test_confirm_history_protects_manual_and_rejects_stale_digest(session, works
     automatic.category_id = another_category(session).id
     session.flush()
     with pytest.raises(StaleRuleApplicationError):
-        confirm_historical_application(session, workspace.id, preview.token, user_id=workspace.owner_id)
+        confirm_historical_application(
+            session, workspace.id, preview.token, user_id=workspace.owner_id
+        )
     session.refresh(manual)
     assert manual.categorization_source == "manual"
 
@@ -604,7 +627,9 @@ def test_confirm_history_protects_manual_and_rejects_stale_digest(session, works
 def test_confirm_history_is_idempotent_and_all_or_nothing(session, workspace) -> None:
     preview = seeded_history_preview(session, workspace.id, eligible_count=3)
     first = confirm_historical_application(session, workspace.id, preview.token, workspace.owner_id)
-    second = confirm_historical_application(session, workspace.id, preview.token, workspace.owner_id)
+    second = confirm_historical_application(
+        session, workspace.id, preview.token, workspace.owner_id
+    )
     assert second.run_id == first.run_id
     assert second.changed_count == 3
 ```
@@ -643,13 +668,18 @@ git commit -m "feat: safely apply rules to transaction history"
 - [ ] **Step 1: Write failing route and browser tests**
 
 ```python
-async def test_history_confirmation_rejects_foreign_selection_and_preserves_rows(tmp_path: Path) -> None:
+async def test_history_confirmation_rejects_foreign_selection_and_preserves_rows(
+    tmp_path: Path,
+) -> None:
     app, factory, engine = build_route_test_app(tmp_path)
     local, foreign = seed_cross_workspace_transactions(factory)
     async with signed_in_client(app) as client:
         response = await client.post(
             history_confirm_url(local.workspace_id),
-            data={"transaction_ids": [local.id, foreign.id], "csrf_token": await csrf_token(client)},
+            data={
+                "transaction_ids": [local.id, foreign.id],
+                "csrf_token": await csrf_token(client),
+            },
         )
     assert response.status_code == 404
     assert unchanged(factory, local.id, foreign.id)
@@ -803,7 +833,9 @@ git commit -m "feat: explain and measure workspace rules"
 def test_rules_pages_have_no_horizontal_overflow(page, live_server, signed_in_workspace) -> None:
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{live_server}/workspaces/{signed_in_workspace.id}/rules")
-    overflow = page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth")
+    overflow = page.evaluate(
+        "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+    )
     assert overflow is False
 ```
 

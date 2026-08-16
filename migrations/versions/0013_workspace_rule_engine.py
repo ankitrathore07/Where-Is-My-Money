@@ -116,9 +116,7 @@ def upgrade():
             existing_type=sa.String(length=255),
             nullable=True,
         )
-        batch_op.create_check_constraint(
-            "ck_merchant_rules_priority_nonnegative", "priority >= 0"
-        )
+        batch_op.create_check_constraint("ck_merchant_rules_priority_nonnegative", "priority >= 0")
         batch_op.create_check_constraint(
             "ck_merchant_rules_lock_version_positive", "lock_version > 0"
         )

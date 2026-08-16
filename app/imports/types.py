@@ -78,6 +78,7 @@ class ReviewRow:
     categorization_source: str | None = None
     tag_ids: tuple[int, ...] = ()
     billing_period_months: int | None = None
+    merchant_rule_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -109,3 +110,4 @@ class RowEdit:
     original_categorization_source: str | None = None
     original_tag_ids: tuple[int, ...] | None = None
     original_billing_period_months: int | None = None
+    merchant_rule_id: int | None = None

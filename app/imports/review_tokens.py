@@ -22,13 +22,14 @@ class ReviewBaseline:
     categorization_source: str | None
     tag_ids: tuple[int, ...]
     billing_period_months: int | None
+    merchant_rule_id: int | None
 
 
 def create_review_token(secret_key: str, job_id: int, row: ReviewRow) -> str:
     serializer = URLSafeTimedSerializer(secret_key, salt=REVIEW_TOKEN_SALT)
     return serializer.dumps(
         {
-            "v": 2,
+            "v": 3,
             "job_id": job_id,
             "row_number": row.row_number,
             "normalized_merchant": row.normalized_merchant,
@@ -37,6 +38,7 @@ def create_review_token(secret_key: str, job_id: int, row: ReviewRow) -> str:
             "categorization_source": row.categorization_source,
             "tag_ids": list(row.tag_ids),
             "billing_period_months": row.billing_period_months,
+            "merchant_rule_id": row.merchant_rule_id,
         }
     )
 
@@ -61,8 +63,9 @@ def load_review_token(
     source = payload.get("categorization_source")
     tag_ids = payload.get("tag_ids")
     billing_period_months = payload.get("billing_period_months")
+    merchant_rule_id = payload.get("merchant_rule_id")
     valid = (
-        payload.get("v") == 2
+        payload.get("v") == 3
         and payload.get("job_id") == job_id
         and payload.get("row_number") == row_number
         and (merchant is None or isinstance(merchant, str))
@@ -76,6 +79,7 @@ def load_review_token(
             billing_period_months is None
             or (type(billing_period_months) is int and 1 <= billing_period_months <= 120)
         )
+        and (merchant_rule_id is None or (type(merchant_rule_id) is int and merchant_rule_id > 0))
     )
     if not valid:
         raise ReviewTokenError("Review data could not be verified; reload and try again.")
@@ -86,4 +90,5 @@ def load_review_token(
         source,
         tuple(tag_ids),
         billing_period_months,
+        merchant_rule_id,
     )

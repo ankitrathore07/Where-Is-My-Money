@@ -201,9 +201,7 @@ def test_parse_condition_accepts_the_exact_depth_and_predicate_limits() -> None:
         PredicateCondition("description", "contains", "x" * 256),
         NotCondition(
             NotCondition(
-                NotCondition(
-                    NotCondition(PredicateCondition("description", "contains", "coffee"))
-                )
+                NotCondition(NotCondition(PredicateCondition("description", "contains", "coffee")))
             )
         ),
     ],

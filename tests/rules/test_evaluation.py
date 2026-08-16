@@ -108,7 +108,7 @@ def test_evaluate_condition_short_circuits_all_after_first_non_match() -> None:
         AllCondition(
             (
                 predicate("amount_cents", "greater_than", 0),
-                    predicate("description", "contains", "NÉTFLIX"),
+                predicate("description", "contains", "NÉTFLIX"),
             )
         ),
         sample_context(),

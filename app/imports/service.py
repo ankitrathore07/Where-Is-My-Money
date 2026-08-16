@@ -553,6 +553,7 @@ def build_review(
                         else ()
                     ),
                     billing_period_months=(decision.billing_period_months if decision else None),
+                    merchant_rule_id=decision.merchant_rule_id if decision else None,
                 )
             )
         else:
@@ -595,7 +596,7 @@ def _reviewed_fields(
     review_row: ReviewRow,
     edit: RowEdit,
     categorization_context: _ImportCategorizationContext,
-) -> tuple[str, int, bool, str, tuple[int, ...], int | None]:
+) -> tuple[str, int, bool, str, tuple[int, ...], int | None, int | None]:
     if (
         review_row.category_id is None
         or review_row.normalized_merchant is None
@@ -616,6 +617,7 @@ def _reviewed_fields(
         fallback_source = decision.source.value
         fallback_tag_ids = decision.tag_ids
         fallback_billing_period_months = decision.billing_period_months
+        fallback_merchant_rule_id = decision.merchant_rule_id
     else:
         fallback_merchant = review_row.normalized_merchant
         fallback_category_id = review_row.category_id
@@ -623,6 +625,7 @@ def _reviewed_fields(
         fallback_source = review_row.categorization_source
         fallback_tag_ids = review_row.tag_ids
         fallback_billing_period_months = review_row.billing_period_months
+        fallback_merchant_rule_id = review_row.merchant_rule_id
 
     merchant = (
         edit.normalized_merchant if edit.normalized_merchant is not None else fallback_merchant
@@ -730,6 +733,24 @@ def _reviewed_fields(
         or edit.description_value != review_row.description_value
         or edit.amount_value != review_row.amount_value
     )
+    baseline_merchant_rule_id = edit.merchant_rule_id if has_original else fallback_merchant_rule_id
+    current_decision = (
+        review_row.normalized_merchant,
+        review_row.category_id,
+        review_row.is_subscription,
+        review_row.categorization_source,
+        tuple(sorted(review_row.tag_ids)),
+        review_row.billing_period_months,
+    )
+    merchant_rule_id = (
+        baseline_merchant_rule_id
+        if not changed
+        and current_decision == baseline
+        and source == CategorizationSource.WORKSPACE_RULE.value
+        and baseline_merchant_rule_id is not None
+        and baseline_merchant_rule_id == review_row.merchant_rule_id
+        else None
+    )
     return (
         merchant,
         category_id,
@@ -737,6 +758,7 @@ def _reviewed_fields(
         CategorizationSource.MANUAL.value if changed else source,
         tag_ids,
         billing_period_months,
+        merchant_rule_id,
     )
 
 
@@ -783,7 +805,9 @@ def commit_import(
         )
 
     normalized: list[NormalizedTransaction] = []
-    reviewed_fields: dict[int, tuple[str, int, bool, str, tuple[int, ...], int | None]] = {}
+    reviewed_fields: dict[
+        int, tuple[str, int, bool, str, tuple[int, ...], int | None, int | None]
+    ] = {}
     review_by_row = {row.row_number: row for row in review.rows}
     row_errors: dict[int, dict[str, str]] = {}
     for edit in edits:
@@ -835,9 +859,15 @@ def commit_import(
 
     for item in new_items:
         transaction = item.transaction
-        merchant, category_id, is_subscription, source, tag_ids, billing_period_months = (
-            reviewed_fields[transaction.row_number]
-        )
+        (
+            merchant,
+            category_id,
+            is_subscription,
+            source,
+            tag_ids,
+            billing_period_months,
+            merchant_rule_id,
+        ) = reviewed_fields[transaction.row_number]
         persisted = Transaction(
             workspace_id=job.workspace_id,
             date=datetime.combine(transaction.transaction_date, time.min, tzinfo=UTC),
@@ -845,6 +875,7 @@ def commit_import(
             normalized_merchant=merchant,
             amount_cents=transaction.amount_cents,
             category_id=category_id,
+            merchant_rule_id=merchant_rule_id,
             categorization_source=source,
             is_subscription=is_subscription,
             billing_period_months=billing_period_months,

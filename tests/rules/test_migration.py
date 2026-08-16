@@ -142,12 +142,16 @@ def test_workspace_rule_migration_preserves_actions_and_workspace_priority(tmp_p
         upgrade(engine, "0013_workspace_rule_engine")
 
         with engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    "select id, priority, normalized_merchant, category_id, is_subscription, "
-                    "billing_period_months from merchant_rules order by id"
+            rows = (
+                connection.execute(
+                    text(
+                        "select id, priority, normalized_merchant, category_id, is_subscription, "
+                        "billing_period_months from merchant_rules order by id"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             assert [(row["id"], row["priority"]) for row in rows] == [(1, 1), (2, 0), (3, 0)]
             assert dict(rows[0]) == {
                 "id": 1,
@@ -157,12 +161,15 @@ def test_workspace_rule_migration_preserves_actions_and_workspace_priority(tmp_p
                 "is_subscription": 1,
                 "billing_period_months": 12,
             }
-            assert connection.scalar(
-                text(
-                    "select t.name from merchant_rule_tags mrt "
-                    "join tags t on t.id = mrt.tag_id where mrt.merchant_rule_id = 1"
+            assert (
+                connection.scalar(
+                    text(
+                        "select t.name from merchant_rule_tags mrt "
+                        "join tags t on t.id = mrt.tag_id where mrt.merchant_rule_id = 1"
+                    )
                 )
-            ) == "Recurring"
+                == "Recurring"
+            )
     finally:
         engine.dispose()
 
@@ -204,9 +211,12 @@ def test_workspace_rule_downgrade_backfills_typed_only_merchant_pattern(tmp_path
         downgrade(engine, "0012_tax_refund_and_installment_tags")
 
         with engine.connect() as connection:
-            assert connection.scalar(
-                text("select merchant_pattern from merchant_rules where id = :id"),
-                {"id": typed_rule_id},
-            ) == f"__workspace_rule_{typed_rule_id}__"
+            assert (
+                connection.scalar(
+                    text("select merchant_pattern from merchant_rules where id = :id"),
+                    {"id": typed_rule_id},
+                )
+                == f"__workspace_rule_{typed_rule_id}__"
+            )
     finally:
         engine.dispose()
