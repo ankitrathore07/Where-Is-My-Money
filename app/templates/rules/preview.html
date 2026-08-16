@@ -12,15 +12,16 @@
       <p><strong>If:</strong> {{ condition_summary }}</p>
       <p><strong>Then:</strong> {{ action_summary }}</p>
     </article>
+    {% if deferred_until_enabled %}<div class="notice" role="status"><p><strong>This rule is disabled. No transactions will change now.</strong></p><p>The impact below is potential impact only and applies after the rule is enabled.</p></div>{% endif %}
     <section class="rule-impact-grid" aria-label="Impact summary">
-      <article><strong>{{ preview.matched_count }}</strong><span>transactions match</span></article>
-      <article><strong>{{ preview.would_change_count }}</strong><span>transactions would change</span></article>
+      <article><strong>{{ preview.matched_count }}</strong><span>transactions match{% if deferred_until_enabled %} once enabled{% endif %}</span></article>
+      <article><strong>{{ preview.would_change_count }}</strong><span>transactions would change{% if deferred_until_enabled %} once enabled{% endif %}</span></article>
       <article><strong>{{ preview.unchanged_count }}</strong><span>already have these actions</span></article>
       <article><strong>{{ preview.manual_skip_count }}</strong><span>manual choices stay protected</span></article>
       <article><strong>{{ preview.conflict_skip_count }}</strong><span>shadowed by earlier rules</span></article>
       {% if preview.unavailable_count %}<article><strong>{{ preview.unavailable_count }}</strong><span>could not be evaluated safely</span></article>{% endif %}
     </section>
-    <p class="rule-impact-sentence"><strong>{{ preview.would_change_count }} transactions would change</strong> if this rule is saved.</p>
+    {% if deferred_until_enabled %}<p class="rule-impact-sentence"><strong>{{ preview.would_change_count }} transactions would change once enabled</strong>; saving this edit keeps the rule disabled.</p>{% else %}<p class="rule-impact-sentence"><strong>{{ preview.would_change_count }} transactions would change</strong> if this rule is saved.</p>{% endif %}
     {% if preview.conflicts %}<section class="panel"><h2>Higher-priority conflicts</h2><ul>{% for conflict in preview.conflicts %}<li>{{ conflict.winning_rule_name }} wins for {{ conflict.count }} matching transaction{% if conflict.count != 1 %}s{% endif %}.</li>{% endfor %}</ul></section>{% endif %}
     <div class="rule-preview-groups">
       <section class="panel"><h2>Current categories</h2>{% if preview.category_counts %}<ul>{% for group in preview.category_counts %}<li>{{ group.label }}: {{ group.count }}</li>{% endfor %}</ul>{% else %}<p>No matching categories.</p>{% endif %}</section>
@@ -30,7 +31,7 @@
     <form action="/workspaces/{{ workspace.id }}/rules{% if rule %}/{{ rule.id }}{% endif %}" method="post" class="rule-confirm-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="confirmation_token" value="{{ confirmation_token }}">
-      <button class="button" type="submit">Confirm and save rule</button>
+      <button class="button" type="submit">Confirm and save{% if deferred_until_enabled %} disabled{% endif %} rule</button>
       <a href="/workspaces/{{ workspace.id }}/rules/{% if rule %}{{ rule.id }}/edit{% else %}new{% endif %}">Go back and edit</a>
     </form>
   </section>

@@ -586,6 +586,7 @@ def _render_preview(
             rule=rule,
             draft=draft,
             preview=preview,
+            deferred_until_enabled=rule is not None and not rule.enabled,
             confirmation_token=token,
             condition_summary=describe_condition(draft.condition, account_names=account_names),
             action_summary=describe_actions(
@@ -603,6 +604,8 @@ def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
     category_names = {
         category.id: category.name for category in (*categories.workspace, *categories.builtin)
     }
+    tags = list_accessible_tags(session, workspace_id)
+    tag_names = {tag.id: tag.name for tag in (*tags.workspace, *tags.builtin)}
     account_names = {
         account.id: account.name for account in list_workspace_accounts(session, workspace_id)
     }
@@ -626,17 +629,17 @@ def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
     for rule in rules:
         condition_key: str | None = None
         try:
-            draft = _rule_draft(rule)
+            draft = normalize_rule_draft(session, workspace_id, _rule_draft(rule))
             condition_key = condition_to_json(draft.condition)
             condition_summary = describe_condition(draft.condition, account_names=account_names)
             action_summary = describe_actions(
                 draft,
                 category_name=category_names.get(draft.category_id),
-                tag_names=tuple(tag.name for tag in rule.tags),
+                tag_names=tuple(tag_names[tag_id] for tag_id in draft.tag_ids),
             )
             repair_error = None
-        except RuleValidationError:
-            condition_summary = "This saved condition needs repair before it can run."
+        except (RuleValidationError, RuleResourceNotFoundError):
+            condition_summary = "This saved rule needs repair before it can run."
             action_summary = "Action details are unavailable until the rule is repaired."
             repair_error = "Needs repair"
         linked_count, last_used = usage.get(rule.id, (0, None))
@@ -995,6 +998,7 @@ async def rule_edit_confirm(
     del user
     form = await request.form()
     try:
+        get_rule(session, workspace.id, rule_id)
         confirmation = _load_confirmation_token(
             request,
             str(form.get("confirmation_token", "")),
@@ -1055,6 +1059,7 @@ async def rule_move(
 ) -> RedirectResponse:
     form = await request.form()
     try:
+        get_rule(session, workspace.id, rule_id)
         new_index = int(str(form.get("new_index", "")))
         lock_version = int(str(form.get("lock_version", "")))
         move_rule(
@@ -1089,6 +1094,7 @@ async def rule_enabled(
 ) -> RedirectResponse:
     form = await request.form()
     try:
+        get_rule(session, workspace.id, rule_id)
         lock_version = int(str(form.get("lock_version", "")))
         enabled_text = str(form.get("enabled", ""))
         if enabled_text not in {"true", "false"}:
@@ -1155,6 +1161,7 @@ async def rule_delete_confirm(
 ) -> RedirectResponse:
     form = await request.form()
     try:
+        get_rule(session, workspace.id, rule_id)
         lock_version = int(str(form.get("lock_version", "")))
         delete_rule(
             session,

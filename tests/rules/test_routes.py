@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from itsdangerous.timed import TimestampSigner
 from sqlalchemy import select
 
-from app.db.models import Category, MerchantRule, Transaction, User, Workspace
+from app.db.models import Category, MerchantRule, Tag, Transaction, User, Workspace
 from app.rules.service import RuleDraft, create_rule
 from app.rules.types import AllCondition, AnyCondition, NotCondition, PredicateCondition
 from tests.route_helpers import build_route_test_app, complete_sign_in, csrf_token
@@ -250,6 +251,40 @@ async def test_confirmation_rejects_tampering_and_edit_staleness(tmp_path: Path)
 
 
 @pytest.mark.anyio
+async def test_confirmation_rejects_expired_signed_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Break if a signed preview can be confirmed after its one-hour lifetime."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with signed_in_client(application) as client:
+            workspace_id = workspace_id_for(factory)
+            category_id = _seed_rule_choices(factory, workspace_id)
+            preview = await client.post(
+                f"/workspaces/{workspace_id}/rules/preview",
+                data=valid_rule_form(csrf=await csrf_token(client), category_id=category_id),
+            )
+            current_timestamp = TimestampSigner.get_timestamp
+            monkeypatch.setattr(
+                TimestampSigner,
+                "get_timestamp",
+                lambda signer: current_timestamp(signer) + 3_601,
+            )
+            expired = await client.post(
+                f"/workspaces/{workspace_id}/rules",
+                data=confirmation_form(preview.text, csrf=await csrf_token(client)),
+            )
+        with factory() as session:
+            persisted_rule_id = session.scalar(select(MerchantRule.id))
+    finally:
+        engine.dispose()
+
+    assert preview.status_code == 200
+    assert expired.status_code == 409
+    assert persisted_rule_id is None
+
+
+@pytest.mark.anyio
 async def test_edit_preview_confirmation_replaces_typed_values_and_increments_lock(
     tmp_path: Path,
 ) -> None:
@@ -301,6 +336,55 @@ async def test_edit_preview_confirmation_replaces_typed_values_and_increments_lo
         },
         2,
     )
+
+
+@pytest.mark.anyio
+async def test_disabled_rule_edit_preview_defers_impact_until_enabled_and_is_read_only(
+    tmp_path: Path,
+) -> None:
+    """Break if editing a disabled rule claims it will immediately change transactions."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with signed_in_client(application) as client:
+            workspace_id = workspace_id_for(factory)
+            category_id = _seed_rule_choices(factory, workspace_id, transactions=2)
+            rule_id = _seed_rule(factory, workspace_id, category_id)
+            with factory() as session:
+                rule = session.get(MerchantRule, rule_id)
+                assert rule is not None
+                rule.enabled = False
+                session.commit()
+            form = valid_rule_form(csrf=await csrf_token(client), category_id=category_id)
+            form.update({"name": "Disabled coffee", "lock_version": "1"})
+            preview = await client.post(
+                f"/workspaces/{workspace_id}/rules/{rule_id}/preview", data=form
+            )
+            with factory() as session:
+                rule = session.get(MerchantRule, rule_id)
+                assert rule is not None
+                preview_state = (rule.name, rule.enabled, rule.lock_version)
+            confirmed = await client.post(
+                f"/workspaces/{workspace_id}/rules/{rule_id}",
+                data=confirmation_form(preview.text, csrf=await csrf_token(client)),
+                follow_redirects=False,
+            )
+        with factory() as session:
+            rule = session.get(MerchantRule, rule_id)
+            assert rule is not None
+            transaction_merchants = tuple(
+                session.scalars(select(Transaction.normalized_merchant).order_by(Transaction.id))
+            )
+            state = (rule.name, rule.enabled, rule.lock_version, transaction_merchants)
+    finally:
+        engine.dispose()
+
+    assert preview.status_code == 200
+    assert "This rule is disabled" in preview.text
+    assert "No transactions will change now" in preview.text
+    assert "2 transactions would change once enabled" in preview.text
+    assert preview_state == ("Coffee", False, 1)
+    assert confirmed.status_code == 303
+    assert state == ("Disabled coffee", False, 2, ("Old merchant", "Old merchant"))
 
 
 @pytest.mark.anyio
@@ -652,6 +736,55 @@ async def test_duplicate_with_inaccessible_saved_resource_returns_generic_not_fo
 
 
 @pytest.mark.anyio
+async def test_list_maps_inaccessible_saved_tags_to_fixed_repair_state(tmp_path: Path) -> None:
+    """Break if list presentation reads foreign tag names from a corrupt association."""
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with signed_in_client(application) as client:
+            workspace_id = workspace_id_for(factory)
+            category_id = _seed_rule_choices(factory, workspace_id)
+            rule_id = _seed_rule(factory, workspace_id, category_id)
+            with factory() as session:
+                owner = User(
+                    google_sub="foreign-tag-owner",
+                    email="foreign-tag@example.com",
+                    display_name="Foreign tag owner",
+                )
+                session.add(owner)
+                session.flush()
+                foreign_workspace = Workspace(
+                    name="Foreign tags", is_personal=True, owner_id=owner.id
+                )
+                session.add(foreign_workspace)
+                session.flush()
+                foreign_tag = Tag(
+                    workspace_id=foreign_workspace.id,
+                    name="PRIVATE PAYROLL TAG",
+                    name_key="private payroll tag",
+                )
+                session.add(foreign_tag)
+                session.flush()
+                rule = session.get(MerchantRule, rule_id)
+                assert rule is not None
+                rule.tags.append(foreign_tag)
+                session.commit()
+                foreign_tag_id = foreign_tag.id
+            response = await client.get(f"/workspaces/{workspace_id}/rules")
+        with factory() as session:
+            rule = session.get(MerchantRule, rule_id)
+            assert rule is not None
+            persisted_tag_ids = tuple(tag.id for tag in rule.tags)
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert "PRIVATE PAYROLL TAG" not in response.text
+    assert "Needs repair" in response.text
+    assert "Action details are unavailable until the rule is repaired" in response.text
+    assert persisted_tag_ids == (foreign_tag_id,)
+
+
+@pytest.mark.anyio
 async def test_list_warns_only_for_an_identical_earlier_enabled_condition(tmp_path: Path) -> None:
     """Break if ordinary rule ordering is mislabeled as a detected conflict."""
     application, factory, engine = build_route_test_app(tmp_path)
@@ -733,6 +866,26 @@ async def test_foreign_rule_ids_return_not_found_for_every_lifecycle_route(tmp_p
                     f"/workspaces/{workspace_id}/rules/{foreign_rule_id}/duplicate",
                     data={"csrf_token": token},
                 ),
+                await client.post(
+                    f"/workspaces/{workspace_id}/rules/{foreign_rule_id}/preview",
+                    data={"csrf_token": token},
+                ),
+                await client.post(
+                    f"/workspaces/{workspace_id}/rules/{foreign_rule_id}",
+                    data={"csrf_token": token, "confirmation_token": "not-a-token"},
+                ),
+                await client.post(
+                    f"/workspaces/{workspace_id}/rules/{foreign_rule_id}/move",
+                    data={"csrf_token": token},
+                ),
+                await client.post(
+                    f"/workspaces/{workspace_id}/rules/{foreign_rule_id}/enabled",
+                    data={"csrf_token": token},
+                ),
+                await client.post(
+                    f"/workspaces/{workspace_id}/rules/{foreign_rule_id}/delete",
+                    data={"csrf_token": token},
+                ),
             ]
         with factory() as session:
             foreign = session.get(MerchantRule, foreign_rule_id)
@@ -741,6 +894,6 @@ async def test_foreign_rule_ids_return_not_found_for_every_lifecycle_route(tmp_p
     finally:
         engine.dispose()
 
-    assert [response.status_code for response in responses] == [404, 404, 404]
+    assert [response.status_code for response in responses] == [404] * 8
     assert all("Secret foreign rule" not in response.text for response in responses)
     assert foreign_name == "Secret foreign rule"
