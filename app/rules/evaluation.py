@@ -38,6 +38,56 @@ class ConditionResult:
     children: tuple[ConditionResult, ...] = ()
 
 
+@dataclass(frozen=True)
+class CompiledWorkspaceRule:
+    """A validated rule and its condition tree, ready for in-memory evaluation."""
+
+    id: int
+    name: str
+    normalized_merchant: str | None
+    category_id: int
+    is_subscription: bool
+    billing_period_months: int | None
+    tag_ids: tuple[int, ...]
+    condition: ConditionNode
+
+
+@dataclass(frozen=True)
+class RuleCompilationDiagnostic:
+    """A value-free reason that a persisted rule was excluded from evaluation."""
+
+    rule_id: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class WorkspaceRuleMatch:
+    """The first deterministic workspace-rule match and its safe explanation tree."""
+
+    rule: CompiledWorkspaceRule
+    result: ConditionResult
+
+    @property
+    def explanation(self) -> str:
+        return self.result.explanation
+
+
+@dataclass(frozen=True)
+class CompiledWorkspaceRuleSet:
+    """An immutable, workspace-scoped rule snapshot evaluated without database access."""
+
+    workspace_id: int
+    rules: tuple[CompiledWorkspaceRule, ...]
+    diagnostics: tuple[RuleCompilationDiagnostic, ...] = ()
+
+    def match(self, context: RuleContext) -> WorkspaceRuleMatch | None:
+        for compiled in self.rules:
+            result = evaluate_condition(compiled.condition, context)
+            if result.matched:
+                return WorkspaceRuleMatch(compiled, result)
+        return None
+
+
 def evaluate_condition(node: ConditionNode, context: RuleContext) -> ConditionResult:
     """Evaluate a validated condition tree without exposing context values in results."""
     if not _is_valid_tree(node, depth=1, predicate_count=[0]):
@@ -232,9 +282,7 @@ def _is_valid_predicate(node: PredicateCondition) -> bool:
         return node.operator in _DATE_OPERATORS and _is_iso_date(node.value)
     if node.field == "direction":
         return (
-            node.operator == "equal"
-            and isinstance(node.value, str)
-            and node.value in _DIRECTIONS
+            node.operator == "equal" and isinstance(node.value, str) and node.value in _DIRECTIONS
         )
     if node.field == "account_id":
         return node.operator == "equal" and _is_int(node.value) and node.value > 0
@@ -254,9 +302,13 @@ def _is_valid_tree(node: object, *, depth: int, predicate_count: list[int]) -> b
         predicate_count[0] += 1
         return predicate_count[0] <= MAX_PREDICATES and _is_valid_predicate(node)
     if isinstance(node, (AllCondition, AnyCondition)):
-        return isinstance(node.children, tuple) and bool(node.children) and all(
-            _is_valid_tree(child, depth=depth + 1, predicate_count=predicate_count)
-            for child in node.children
+        return (
+            isinstance(node.children, tuple)
+            and bool(node.children)
+            and all(
+                _is_valid_tree(child, depth=depth + 1, predicate_count=predicate_count)
+                for child in node.children
+            )
         )
     if isinstance(node, NotCondition):
         return _is_valid_tree(node.child, depth=depth + 1, predicate_count=predicate_count)

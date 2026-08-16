@@ -25,3 +25,5 @@ class CategorizationDecision:
     source: CategorizationSource
     tag_ids: tuple[int, ...] = ()
     billing_period_months: int | None = None
+    merchant_rule_id: int | None = None
+    explanation: str | None = None

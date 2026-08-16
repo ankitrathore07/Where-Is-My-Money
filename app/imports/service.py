@@ -33,6 +33,7 @@ from app.imports.types import (
     ReviewRow,
     RowEdit,
 )
+from app.rules.loader import load_compiled_rule_set
 from app.tags.service import (
     TagNotFoundError,
     accessible_tags_by_id,
@@ -472,6 +473,7 @@ def build_review(
     ai_categories = _ai_categories(session) if categorization_graph is not None else ()
     ai_categories_by_name = {category.name: category for category in ai_categories}
     suggestion_cache: dict[str, CategorySuggestion | None] = {}
+    workspace_rules = load_compiled_rule_set(session, job.workspace_id)
 
     normalized_by_row: dict[int, NormalizedTransaction] = {}
     errors_by_row: dict[int, dict[str, str]] = {}
@@ -501,6 +503,8 @@ def build_review(
                     job.workspace_id,
                     normalized,
                     provider_key=provider_key,
+                    account_id=job.account_id,
+                    workspace_rules=workspace_rules,
                 )
                 decision = _apply_ai_suggestion(
                     normalized,

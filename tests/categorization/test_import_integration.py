@@ -2,7 +2,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.categorization.ai_graph import build_categorization_graph
@@ -519,6 +519,105 @@ def test_workspace_rule_overrides_builtin_without_cross_workspace_leakage(
     assert row.categorization_source == "workspace_rule"
 
 
+def test_import_compiles_typed_workspace_rules_once_and_supplies_account_context(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    """Break if an import reloads rules per row or omits its authorized account context."""
+    _seed_builtins(session)
+    category = Category(
+        workspace_id=workspace.id,
+        name="Account streaming",
+        name_key="account streaming",
+        kind="expense",
+    )
+    account = Account(
+        workspace_id=workspace.id,
+        name="Streaming card",
+        account_type="credit_card",
+        institution_key="other",
+        institution="Local",
+        is_liability=True,
+    )
+    session.add_all([category, account])
+    session.flush()
+    session.add(
+        MerchantRule(
+            workspace_id=workspace.id,
+            name="Account-specific streaming",
+            priority=0,
+            condition_json={
+                "version": 1,
+                "type": "all",
+                "children": [
+                    {
+                        "type": "predicate",
+                        "field": "description",
+                        "operator": "contains",
+                        "value": "STREAMING TEST",
+                    },
+                    {
+                        "type": "predicate",
+                        "field": "account_id",
+                        "operator": "equal",
+                        "value": account.id,
+                    },
+                ],
+            },
+            normalized_merchant="Streaming test",
+            category=category,
+        )
+    )
+    session.commit()
+    store = LocalUploadStore(tmp_path)
+    rows = b"".join(
+        f"08/0{index}/2026,STREAMING TEST {index},-15.99\n".encode() for index in range(1, 6)
+    )
+    job = create_csv_import(
+        session,
+        store,
+        workspace,
+        BytesIO(b"Date,Description,Amount\n" + rows),
+        "retain",
+        account=account,
+    ).job
+    save_mapping(
+        session,
+        store,
+        job,
+        {
+            "date_column": "Date",
+            "description_column": "Description",
+            "amount_mode": "single",
+            "amount_column": "Amount",
+            "date_format": "mdy",
+            "amount_sign": "as_is",
+        },
+    )
+    assert session.bind is not None
+    rule_queries: list[str] = []
+
+    def capture_rule_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if "merchant_rules" in statement.casefold():
+            rule_queries.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", capture_rule_query)
+    try:
+        review = build_review(session, store, job)
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_rule_query)
+
+    assert [row.categorization_source for row in review.rows] == ["workspace_rule"] * 5
+    assert [row.category_id for row in review.rows] == [category.id] * 5
+    assert len(rule_queries) <= 2
+
+
 def test_commit_preserves_preview_decision_even_if_rule_changes(
     session: Session, workspace: Workspace, tmp_path: Path
 ) -> None:
@@ -607,6 +706,71 @@ def test_review_override_commits_as_manual_without_creating_rule(
     assert transaction.is_subscription is False
     assert transaction.categorization_source == "manual"
     assert session.scalar(select(MerchantRule)) is None
+
+
+def test_manual_review_override_beats_matching_typed_workspace_rule(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    """Break if a typed workspace match can retain authority over a manual review edit."""
+    categories = _seed_builtins(session)
+    workspace_category = Category(
+        workspace_id=workspace.id,
+        name="Typed streaming",
+        name_key="typed streaming",
+        kind="expense",
+    )
+    session.add(workspace_category)
+    session.flush()
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        name="Typed Netflix",
+        priority=0,
+        condition_json={
+            "version": 1,
+            "type": "predicate",
+            "field": "merchant_key",
+            "operator": "exact",
+            "value": "NETFLIX COM",
+        },
+        normalized_merchant="Typed Netflix",
+        category=workspace_category,
+    )
+    session.add(rule)
+    session.commit()
+    store = LocalUploadStore(tmp_path)
+    job = _mapped_job(session, workspace, store)
+    row = build_review(session, store, job).rows[0]
+    assert row.categorization_source == "workspace_rule"
+
+    commit_import(
+        session,
+        store,
+        job,
+        (
+            RowEdit(
+                row.row_number,
+                True,
+                row.date_value,
+                row.description_value,
+                row.amount_value,
+                normalized_merchant="Manual movie night",
+                category_id=categories["Shopping"].id,
+                is_subscription=False,
+                categorization_source=row.categorization_source,
+                original_normalized_merchant=row.normalized_merchant,
+                original_category_id=row.category_id,
+                original_is_subscription=row.is_subscription,
+                original_categorization_source=row.categorization_source,
+            ),
+        ),
+    )
+    transaction = session.scalar(select(Transaction))
+
+    assert transaction is not None
+    assert transaction.normalized_merchant == "Manual movie night"
+    assert transaction.category_id == categories["Shopping"].id
+    assert transaction.categorization_source == "manual"
+    assert session.get(MerchantRule, rule.id) is not None
 
 
 def test_review_commit_persists_multiple_tags_and_billing_cadence(
