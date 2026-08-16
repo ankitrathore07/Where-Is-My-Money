@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Apply rule to history · Where Is My Money?{% endblock %}
+{% block content %}
+  <section class="rule-page rule-preview">
+    <header class="page-heading rule-heading">
+      <p class="eyebrow">{{ workspace.name }} · Rules</p>
+      {% if preview %}<h1>Choose history changes</h1>{% else %}<h1>Apply {{ rule.name }} to transaction history</h1>{% endif %}
+      <p>Previewing does not change transactions. Manual categorization always stays protected.</p>
+    </header>
+
+    <article class="panel rule-summary">
+      <h2>{{ rule.name }}</h2>
+      <p><strong>Every selected transaction will:</strong> {{ action_summary }}</p>
+    </article>
+
+    {% if field_errors %}
+      <div class="alert" role="alert">
+        {% for message in field_errors.values() %}<p>{{ message }}</p>{% endfor %}
+      </div>
+    {% endif %}
+
+    <section class="panel" aria-labelledby="history-filters-heading">
+      <h2 id="history-filters-heading">Filter transaction history</h2>
+      <form action="/workspaces/{{ workspace.id }}/rules/{{ rule.id }}/apply/preview" method="post" class="rule-simulator-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="history-date-from">Date from</label>
+        <input id="history-date-from" name="date_from" type="date" value="{{ filter_values.date_from }}">
+        <label for="history-date-to">Date to</label>
+        <input id="history-date-to" name="date_to" type="date" value="{{ filter_values.date_to }}">
+        <label for="history-account">Account</label>
+        <select id="history-account" name="account_id">
+          <option value="">All accounts</option>
+          {% for account in accounts %}<option value="{{ account.id }}" {% if filter_values.account_id == account.id|string %}selected{% endif %}>{{ account.name }}</option>{% endfor %}
+        </select>
+        <label for="history-category">Current category</label>
+        <select id="history-category" name="category_id">
+          <option value="">All categories</option>
+          {% for category in categories %}<option value="{{ category.id }}" {% if filter_values.category_id == category.id|string %}selected{% endif %}>{{ category.name }}</option>{% endfor %}
+        </select>
+        <label for="history-direction">Direction</label>
+        <select id="history-direction" name="direction">
+          <option value="all" {% if filter_values.direction == "all" %}selected{% endif %}>All directions</option>
+          <option value="expense" {% if filter_values.direction == "expense" %}selected{% endif %}>Expense</option>
+          <option value="income" {% if filter_values.direction == "income" %}selected{% endif %}>Income</option>
+          <option value="zero" {% if filter_values.direction == "zero" %}selected{% endif %}>Zero amount</option>
+        </select>
+        <span></span><button class="button" type="submit">Preview eligible transactions</button>
+      </form>
+    </section>
+
+    {% if preview %}
+      <section class="rule-impact-grid" aria-label="Historical impact summary">
+        <article><strong>{{ preview.matched_count }}</strong><span>rule matches</span></article>
+        <article><strong>{{ preview.would_change_count }}</strong><span>would change</span></article>
+        <article><strong>{{ preview.unchanged_count }}</strong><span>already identical</span></article>
+        <article><strong>{{ preview.manual_skip_count }}</strong><span>manual choices protected</span></article>
+        <article><strong>{{ preview.conflict_skip_count }}</strong><span>higher-priority conflicts</span></article>
+        <article><strong>{{ preview.invalid_count }}</strong><span>invalid rule actions</span></article>
+        <article><strong>{{ preview.unavailable_count }}</strong><span>unavailable evaluations</span></article>
+        <article><strong>{{ preview.not_matched_count }}</strong><span>did not match</span></article>
+      </section>
+
+      {% if preview.would_change_count > max_selected_transactions %}
+        <div class="notice" role="status">
+          <p><strong>Only the first {{ max_selected_transactions }} eligible changes are shown.</strong></p>
+          <p>Narrow the filters or complete multiple confirmed runs to change the remaining transactions.</p>
+        </div>
+      {% endif %}
+
+      <section class="panel" aria-labelledby="eligible-history-heading">
+        <h2 id="eligible-history-heading">Eligible transactions</h2>
+        {% if eligible_rows %}
+          <p>Select between 1 and {{ max_selected_transactions }} rows. A fresh signed preview will verify this exact selection before anything changes.</p>
+          <form action="/workspaces/{{ workspace.id }}/rules/{{ rule.id }}/apply/confirm" method="post" class="rule-page">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="date_from" value="{{ filter_values.date_from }}">
+            <input type="hidden" name="date_to" value="{{ filter_values.date_to }}">
+            <input type="hidden" name="account_id" value="{{ filter_values.account_id }}">
+            <input type="hidden" name="category_id" value="{{ filter_values.category_id }}">
+            <input type="hidden" name="direction" value="{{ filter_values.direction }}">
+            <ul class="rule-list">
+              {% for row in eligible_rows %}
+                <li class="rule-card">
+                  <label>
+                    <input type="checkbox" name="transaction_ids" value="{{ row.id }}" {% if row.id in selected_transaction_ids %}checked{% endif %} aria-label="{{ row.description }}">
+                    <strong>{{ row.description }}</strong> · {{ row.date }} · {{ row.category_name }} · {{ row.source|replace("_", " ") }}
+                  </label>
+                </li>
+              {% endfor %}
+            </ul>
+            <div class="rule-confirm-form">
+              <button class="button" type="submit">Review selected transactions</button>
+              <a href="/workspaces/{{ workspace.id }}/rules">Cancel</a>
+            </div>
+          </form>
+        {% else %}
+          <p>No eligible transactions are available for these filters. Protected, conflicting, invalid, unavailable, identical, and nonmatching rows cannot be selected.</p>
+        {% endif %}
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

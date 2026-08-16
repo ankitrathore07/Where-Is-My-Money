@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ import uvicorn
 from playwright.sync_api import BrowserContext, Page, expect, sync_playwright
 from sqlalchemy import select
 
-from app.db.models import Category, Workspace
+from app.db.models import Category, Transaction, Workspace
+from app.rules.service import RuleDraft, create_rule
+from app.rules.types import PredicateCondition
 from tests.route_helpers import build_route_test_app
 
 
@@ -116,6 +119,48 @@ def _fill_minimum_rule(page: Page) -> None:
     page.get_by_label("Category").select_option(label="Coffee")
 
 
+def _seed_history_browser_scenario(factory, workspace_id: int) -> tuple[int, int, int]:
+    with factory() as session:
+        target = session.scalar(
+            select(Category).where(
+                Category.workspace_id == workspace_id,
+                Category.name == "Coffee",
+            )
+        )
+        assert target is not None
+        current = Category(
+            workspace_id=workspace_id,
+            name="Current",
+            name_key="current",
+            kind="expense",
+        )
+        session.add(current)
+        session.flush()
+        rule = create_rule(
+            session,
+            workspace_id,
+            RuleDraft(
+                name="Browser coffee history",
+                condition=PredicateCondition("description", "contains", "COFFEE"),
+                normalized_merchant="Coffee Club",
+                category_id=target.id,
+            ),
+        )
+        transaction = Transaction(
+            workspace_id=workspace_id,
+            date=datetime(2026, 8, 15, tzinfo=UTC),
+            description="COFFEE BROWSER",
+            normalized_merchant="Old merchant",
+            amount_cents=-500,
+            category_id=current.id,
+            categorization_source="uncategorized",
+            is_subscription=False,
+        )
+        session.add(transaction)
+        session.commit()
+        return rule.id, transaction.id, target.id
+
+
 def test_keyboard_create_preview_confirmation_and_row_enhancement(
     live_rules_app: tuple[str, object],
 ) -> None:
@@ -163,6 +208,49 @@ def test_no_javascript_rule_creation_remains_complete(live_rules_app: tuple[str,
         expect(page.get_by_text("Keyboard coffee", exact=True)).to_be_visible()
 
     _run_browser_scenario(scenario, java_script_enabled=False)
+
+
+@pytest.mark.parametrize("java_script_enabled", [True, False])
+def test_history_preview_selection_and_confirmation_work_in_a_real_browser(
+    live_rules_app: tuple[str, object],
+    java_script_enabled: bool,
+) -> None:
+    """Break if the signed historical flow depends on JavaScript or skips confirmation."""
+
+    def scenario(page: Page, context: BrowserContext) -> None:
+        base_url, workspace_id = _sign_in_and_seed(page, context, live_rules_app)
+        _, factory = live_rules_app
+        rule_id, transaction_id, target_category_id = _seed_history_browser_scenario(
+            factory, workspace_id
+        )
+        page.goto(f"{base_url}/workspaces/{workspace_id}/rules")
+        apply_link = page.get_by_role("link", name="Apply Browser coffee history to history")
+        expect(apply_link).to_be_visible()
+        apply_link.click()
+
+        expect(
+            page.get_by_role("heading", name="Apply Browser coffee history to transaction history")
+        ).to_be_visible()
+        page.get_by_role("button", name="Preview eligible transactions").click()
+        expect(page.get_by_role("heading", name="Choose history changes")).to_be_visible()
+        expect(page.get_by_label("COFFEE BROWSER")).to_be_checked()
+        page.get_by_role("button", name="Review selected transactions").click()
+        expect(page.get_by_role("heading", name="Confirm historical changes")).to_be_visible()
+        page.get_by_role("button", name="Apply 1 transaction").click()
+        expect(page.get_by_role("heading", name="History application complete")).to_be_visible()
+        expect(page.get_by_text("transaction changed", exact=True)).to_be_visible()
+
+        with factory() as session:
+            transaction = session.get(Transaction, transaction_id)
+            assert transaction is not None
+            assert (
+                transaction.normalized_merchant,
+                transaction.category_id,
+                transaction.categorization_source,
+                transaction.merchant_rule_id,
+            ) == ("Coffee Club", target_category_id, "workspace_rule", rule_id)
+
+    _run_browser_scenario(scenario, java_script_enabled=java_script_enabled)
 
 
 @pytest.mark.parametrize(

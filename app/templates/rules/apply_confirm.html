@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{% if result %}History application complete{% else %}Confirm history changes{% endif %} · Where Is My Money?{% endblock %}
+{% block content %}
+  <section class="rule-page rule-preview">
+    {% if result %}
+      <header class="page-heading rule-heading">
+        <p class="eyebrow">{{ workspace.name }} · Rules</p>
+        <h1>History application complete</h1>
+        <p>Audit run {{ result.run_id }} records this result. Retrying the same signed confirmation returns this same outcome.</p>
+      </header>
+      <section class="rule-impact-grid" aria-label="Confirmed historical result">
+        <article><strong>{{ result.changed_count }}</strong><span>transaction{% if result.changed_count != 1 %}s{% endif %} changed</span></article>
+        <article><strong>{{ result.matched_count }}</strong><span>rule matches</span></article>
+        <article><strong>{{ result.unchanged_count }}</strong><span>already identical</span></article>
+        <article><strong>{{ result.manual_skip_count }}</strong><span>manual choices protected</span></article>
+        <article><strong>{{ result.conflict_skip_count }}</strong><span>higher-priority conflicts</span></article>
+      </section>
+      <p><a class="button" href="/workspaces/{{ workspace.id }}/rules">Return to rules</a></p>
+    {% else %}
+      <header class="page-heading rule-heading">
+        <p class="eyebrow">{{ workspace.name }} · Rules</p>
+        <h1>Confirm historical changes</h1>
+        <p>Audit run {{ preview.run_id }} is a signed preview of this exact selection. Confirm only after reviewing the effects and rows.</p>
+      </header>
+
+      <article class="panel rule-summary">
+        <h2>{{ preview.rule_name }}</h2>
+        <p><strong>Each selected transaction will:</strong> {{ action_summary }}</p>
+        <p><strong>Preserved fields:</strong> date, description, amount, import job, and duplicate fingerprint stay unchanged.</p>
+        <p>Manual categorizations remain protected. The selected rows will receive the displayed merchant, category, tags, subscription state, billing cadence, workspace-rule source, and rule link.</p>
+      </article>
+
+      <section class="rule-impact-grid" aria-label="Historical confirmation summary">
+        <article><strong>{{ preview.selected_transaction_ids|length }}</strong><span>selected changes</span></article>
+        <article><strong>{{ preview.matched_count }}</strong><span>rule matches</span></article>
+        <article><strong>{{ preview.unchanged_count }}</strong><span>already identical</span></article>
+        <article><strong>{{ preview.manual_skip_count }}</strong><span>manual choices protected</span></article>
+        <article><strong>{{ preview.conflict_skip_count }}</strong><span>higher-priority conflicts</span></article>
+        <article><strong>{{ preview.invalid_count }}</strong><span>invalid rule actions</span></article>
+        <article><strong>{{ preview.unavailable_count }}</strong><span>unavailable evaluations</span></article>
+      </section>
+
+      <section class="panel" aria-labelledby="selected-history-heading">
+        <h2 id="selected-history-heading">Selected eligible transactions</h2>
+        <ul>
+          {% for row in selected_rows %}<li><strong>{{ row.description }}</strong> · {{ row.date }} · {{ row.category_name }}</li>{% endfor %}
+        </ul>
+      </section>
+
+      <form action="/workspaces/{{ workspace.id }}/rules/history/confirm" method="post" class="rule-confirm-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="confirmation_token" value="{{ preview.token }}">
+        <button class="button" type="submit">Apply {{ preview.selected_transaction_ids|length }} transaction{% if preview.selected_transaction_ids|length != 1 %}s{% endif %}</button>
+        <a href="/workspaces/{{ workspace.id }}/rules/{{ preview.rule_id }}/apply">Cancel</a>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}
