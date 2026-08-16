@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import Account, Category, MerchantRule, Tag
+from app.db.models import Account, Category, MerchantRule, Tag, Workspace
 from app.rules.types import (
     AllCondition,
     AnyCondition,
@@ -96,6 +96,7 @@ def get_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
 
 def create_rule(session: Session, workspace_id: int, draft: RuleDraft) -> MerchantRule:
     """Validate, append, flush, and return a new enabled workspace rule."""
+    _serialize_workspace_ordering(session, workspace_id)
     values = _validated_draft(session, workspace_id, draft)
     existing = list(list_rules(session, workspace_id))
     _assign_compact_priorities(existing)
@@ -195,6 +196,7 @@ def move_rule(
     expected_lock_version: int | None = None,
 ) -> MerchantRule:
     """Move a rule and compact all priorities inside the caller's transaction."""
+    _serialize_workspace_ordering(session, workspace_id)
     moved = get_rule(session, workspace_id, rule_id)
     ordered = list(list_rules(session, workspace_id))
     if type(new_index) is not int or not 0 <= new_index < len(ordered):
@@ -223,6 +225,7 @@ def move_rule(
 
 def duplicate_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
     """Copy a scoped rule and insert the copy immediately after its source."""
+    _serialize_workspace_ordering(session, workspace_id)
     source = get_rule(session, workspace_id, rule_id)
     try:
         source_condition = parse_condition(_persisted_condition_payload(source))
@@ -274,6 +277,7 @@ def delete_rule(
     expected_lock_version: int | None = None,
 ) -> None:
     """Delete a scoped rule and compact remaining priorities without committing."""
+    _serialize_workspace_ordering(session, workspace_id)
     rule = get_rule(session, workspace_id, rule_id)
     if expected_lock_version is not None:
         _validate_lock_version(expected_lock_version)
@@ -427,6 +431,28 @@ def _condition_account_ids(condition: ConditionNode) -> tuple[int, ...]:
 def _assign_compact_priorities(rules: list[MerchantRule]) -> None:
     for priority, rule in enumerate(rules):
         rule.priority = priority
+
+
+def _serialize_workspace_ordering(session: Session, workspace_id: int) -> None:
+    """Lock the workspace before reading or rewriting its ordered rule collection."""
+    bind = session.get_bind()
+    if bind.dialect.name == "sqlite":
+        result = session.execute(
+            update(Workspace)
+            .where(Workspace.id == workspace_id)
+            .values(name=Workspace.name)
+            .execution_options(synchronize_session=False)
+        )
+        found = result.rowcount == 1
+    else:
+        found = (
+            session.scalar(
+                select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
+            )
+            is not None
+        )
+    if not found:
+        raise RuleNotFoundError("Rule not found.")
 
 
 def _validate_lock_version(version: int) -> None:
