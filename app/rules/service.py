@@ -5,24 +5,50 @@ from __future__ import annotations
 import copy
 import json
 import unicodedata
+from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import Account, Category, MerchantRule, Tag, Workspace
+from app.categorization.normalization import merchant_display_fallback, merchant_key
+from app.categorization.sanitization import sanitize_transaction_description
+from app.categorization.service import categorize_candidate
+from app.categorization.types import CategorizationDecision, CategorizationSource
+from app.db.models import (
+    Account,
+    Category,
+    ImportJob,
+    MerchantRule,
+    Tag,
+    Transaction,
+    Workspace,
+    transaction_tags,
+)
+from app.imports.types import NormalizedTransaction
+from app.rules.evaluation import (
+    CompiledWorkspaceRule,
+    CompiledWorkspaceRuleSet,
+    WorkspaceRuleMatch,
+    evaluate_condition,
+)
+from app.rules.loader import load_compiled_rule_set
 from app.rules.types import (
     AllCondition,
     AnyCondition,
     ConditionNode,
     NotCondition,
     PredicateCondition,
+    RuleContext,
 )
 from app.rules.validation import RuleConditionValidationError, condition_to_json, parse_condition
 from app.tags.service import tag_ids_with_subscription
 
 MAX_RULE_NAME_LENGTH = 120
 MAX_MERCHANT_NAME_LENGTH = 255
+MAX_PREVIEW_EXAMPLES = 20
 
 
 class RuleNotFoundError(LookupError):
@@ -59,6 +85,79 @@ class RuleDraft:
 
 
 @dataclass(frozen=True)
+class RuleSimulation:
+    """Every workspace match plus the established winning categorization decision."""
+
+    matches: tuple[WorkspaceRuleMatch, ...]
+    decision: CategorizationDecision
+
+    @property
+    def winner(self) -> WorkspaceRuleMatch | None:
+        return self.matches[0] if self.matches else None
+
+
+@dataclass(frozen=True)
+class PreviewGroupCount:
+    """An aggregate for one authorized category or account."""
+
+    group_id: int | None
+    label: str
+    count: int
+
+
+@dataclass(frozen=True)
+class PreviewConflict:
+    """A higher-priority winner that shadows the draft for one or more rows."""
+
+    winning_rule_id: int
+    winning_rule_name: str
+    count: int
+
+
+@dataclass(frozen=True)
+class PreviewExample:
+    """One authorized, sanitized example with no amount or source payload."""
+
+    transaction_id: int
+    description: str
+    outcome: str
+    winning_rule_id: int | None = None
+
+
+@dataclass(frozen=True)
+class RuleImpactPreview:
+    """Exact aggregate impact with a bounded, privacy-safe example collection."""
+
+    matched_count: int
+    would_change_count: int
+    unchanged_count: int
+    manual_skip_count: int
+    conflict_skip_count: int
+    not_matched_count: int
+    category_counts: tuple[PreviewGroupCount, ...]
+    account_counts: tuple[PreviewGroupCount, ...]
+    conflicts: tuple[PreviewConflict, ...]
+    examples: tuple[PreviewExample, ...]
+
+
+@dataclass(frozen=True)
+class _PreviewTransaction:
+    id: int
+    transaction_date: datetime
+    description: str
+    normalized_merchant: str | None
+    amount_cents: int
+    category_id: int | None
+    category_label: str
+    categorization_source: str
+    is_subscription: bool
+    billing_period_months: int | None
+    account_id: int | None
+    account_label: str
+    tag_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class _ValidatedDraft:
     name: str
     condition: ConditionNode
@@ -68,6 +167,323 @@ class _ValidatedDraft:
     tags: tuple[Tag, ...]
     is_subscription: bool
     billing_period_months: int | None
+
+
+def simulate_rules(session: Session, workspace_id: int, context: RuleContext) -> RuleSimulation:
+    """Evaluate every workspace rule and established fallback without changing state."""
+    with session.no_autoflush:
+        compiled = load_compiled_rule_set(session, workspace_id)
+        matches = tuple(
+            WorkspaceRuleMatch(rule, result)
+            for rule in compiled.rules
+            if (result := evaluate_condition(rule.condition, context)).matched
+        )
+        if matches:
+            winner = matches[0]
+            rule = winner.rule
+            decision = CategorizationDecision(
+                normalized_merchant=rule.normalized_merchant
+                or merchant_display_fallback(context.description),
+                category_id=rule.category_id,
+                is_subscription=rule.is_subscription,
+                source=CategorizationSource.WORKSPACE_RULE,
+                tag_ids=rule.tag_ids,
+                billing_period_months=rule.billing_period_months,
+                merchant_rule_id=rule.id,
+                explanation=winner.explanation,
+            )
+        else:
+            candidate = NormalizedTransaction(
+                row_number=0,
+                transaction_date=context.transaction_date,
+                description=context.description,
+                normalized_merchant=merchant_display_fallback(context.description),
+                amount_cents=context.amount_cents,
+            )
+            decision = categorize_candidate(
+                session,
+                workspace_id,
+                candidate,
+                provider_key=context.provider_key,
+                account_id=context.account_id,
+                workspace_rules=CompiledWorkspaceRuleSet(workspace_id, ()),
+            )
+    return RuleSimulation(matches, decision)
+
+
+def preview_rule_impact(
+    session: Session,
+    workspace_id: int,
+    draft: RuleDraft,
+    *,
+    exclude_rule_id: int | None,
+) -> RuleImpactPreview:
+    """Analyze a draft against authorized history with no writes or raw examples."""
+    with session.no_autoflush:
+        values = _validated_draft(session, workspace_id, draft)
+        existing = load_compiled_rule_set(session, workspace_id)
+        active_rules = tuple(rule for rule in existing.rules if rule.id != exclude_rule_id)
+        higher_rule_ids = _higher_priority_rule_ids(
+            session,
+            workspace_id,
+            active_rules,
+            exclude_rule_id=exclude_rule_id,
+        )
+        draft_rule = CompiledWorkspaceRule(
+            id=0,
+            name=values.name,
+            normalized_merchant=values.normalized_merchant,
+            category_id=values.category_id,
+            is_subscription=values.is_subscription,
+            billing_period_months=values.billing_period_months,
+            tag_ids=tuple(tag.id for tag in values.tags),
+            condition=values.condition,
+        )
+
+        matched_count = 0
+        would_change_count = 0
+        unchanged_count = 0
+        manual_skip_count = 0
+        conflict_skip_count = 0
+        not_matched_count = 0
+        category_counter: Counter[tuple[int | None, str]] = Counter()
+        account_counter: Counter[tuple[int | None, str]] = Counter()
+        conflict_counter: Counter[tuple[int, str]] = Counter()
+        examples: list[PreviewExample] = []
+
+        for transaction in _preview_transactions(session, workspace_id):
+            draft_result = evaluate_condition(draft_rule.condition, _rule_context(transaction))
+            if not draft_result.matched:
+                not_matched_count += 1
+                continue
+
+            matched_count += 1
+            category_counter[(transaction.category_id, transaction.category_label)] += 1
+            account_counter[(transaction.account_id, transaction.account_label)] += 1
+            matching_existing = tuple(
+                rule
+                for rule in active_rules
+                if evaluate_condition(rule.condition, _rule_context(transaction)).matched
+            )
+            winning_conflict = next(
+                (rule for rule in matching_existing if rule.id in higher_rule_ids),
+                None,
+            )
+
+            outcome: str
+            winning_rule_id: int | None = None
+            if transaction.categorization_source == CategorizationSource.MANUAL.value:
+                manual_skip_count += 1
+                outcome = "manual_protected"
+            elif winning_conflict is not None:
+                conflict_skip_count += 1
+                winning_rule_id = winning_conflict.id
+                conflict_counter[(winning_conflict.id, winning_conflict.name)] += 1
+                outcome = "shadowed"
+            elif _actions_are_identical(transaction, draft_rule):
+                unchanged_count += 1
+                outcome = "unchanged"
+            else:
+                would_change_count += 1
+                outcome = "would_change"
+
+            if len(examples) < MAX_PREVIEW_EXAMPLES:
+                examples.append(
+                    PreviewExample(
+                        transaction_id=transaction.id,
+                        description=sanitize_transaction_description(transaction.description),
+                        outcome=outcome,
+                        winning_rule_id=winning_rule_id,
+                    )
+                )
+
+        conflicts = tuple(
+            PreviewConflict(rule_id, name, count)
+            for (rule_id, name), count in sorted(
+                conflict_counter.items(),
+                key=lambda item: _conflict_sort_key(item, active_rules),
+            )
+        )
+        return RuleImpactPreview(
+            matched_count=matched_count,
+            would_change_count=would_change_count,
+            unchanged_count=unchanged_count,
+            manual_skip_count=manual_skip_count,
+            conflict_skip_count=conflict_skip_count,
+            not_matched_count=not_matched_count,
+            category_counts=_group_counts(category_counter),
+            account_counts=_group_counts(account_counter),
+            conflicts=conflicts,
+            examples=tuple(examples),
+        )
+
+
+def _higher_priority_rule_ids(
+    session: Session,
+    workspace_id: int,
+    active_rules: tuple[CompiledWorkspaceRule, ...],
+    *,
+    exclude_rule_id: int | None,
+) -> frozenset[int]:
+    if exclude_rule_id is None:
+        return frozenset(rule.id for rule in active_rules)
+    target = get_rule(session, workspace_id, exclude_rule_id)
+    target_order = (target.priority, target.id)
+    return frozenset(
+        rule.id
+        for rule in list_rules(session, workspace_id)
+        if rule.enabled and rule.id != target.id and (rule.priority, rule.id) < target_order
+    )
+
+
+def _preview_transactions(session: Session, workspace_id: int) -> Iterator[_PreviewTransaction]:
+    statement = (
+        select(
+            Transaction.id.label("transaction_id"),
+            Transaction.date.label("transaction_date"),
+            Transaction.description,
+            Transaction.normalized_merchant,
+            Transaction.amount_cents,
+            Category.id.label("category_id"),
+            Category.name.label("category_name"),
+            Transaction.categorization_source,
+            Transaction.is_subscription,
+            Transaction.billing_period_months,
+            Account.id.label("account_id"),
+            Account.name.label("account_name"),
+            transaction_tags.c.tag_id,
+        )
+        .select_from(Transaction)
+        .outerjoin(
+            ImportJob,
+            and_(
+                ImportJob.id == Transaction.import_job_id,
+                ImportJob.workspace_id == workspace_id,
+            ),
+        )
+        .outerjoin(
+            Account,
+            and_(
+                Account.id == ImportJob.account_id,
+                Account.workspace_id == workspace_id,
+            ),
+        )
+        .outerjoin(
+            Category,
+            and_(
+                Category.id == Transaction.category_id,
+                or_(Category.workspace_id.is_(None), Category.workspace_id == workspace_id),
+            ),
+        )
+        .outerjoin(transaction_tags, transaction_tags.c.transaction_id == Transaction.id)
+        .where(Transaction.workspace_id == workspace_id)
+        .order_by(Transaction.id, transaction_tags.c.tag_id)
+        .execution_options(yield_per=500)
+    )
+    current: dict[str, object] | None = None
+    tag_ids: list[int] = []
+    for row in session.execute(statement).mappings():
+        transaction_id = int(row["transaction_id"])
+        if current is not None and transaction_id != current["transaction_id"]:
+            yield _projected_transaction(current, tag_ids)
+            current = None
+            tag_ids = []
+        if current is None:
+            current = dict(row)
+        if row["tag_id"] is not None:
+            tag_ids.append(int(row["tag_id"]))
+    if current is not None:
+        yield _projected_transaction(current, tag_ids)
+
+
+def _projected_transaction(values: dict[str, object], tag_ids: list[int]) -> _PreviewTransaction:
+    transaction_date = values["transaction_date"]
+    assert isinstance(transaction_date, datetime)
+    return _PreviewTransaction(
+        id=int(values["transaction_id"]),
+        transaction_date=transaction_date,
+        description=str(values["description"]),
+        normalized_merchant=(
+            str(values["normalized_merchant"])
+            if values["normalized_merchant"] is not None
+            else None
+        ),
+        amount_cents=int(values["amount_cents"]),
+        category_id=(int(values["category_id"]) if values["category_id"] is not None else None),
+        category_label=(
+            str(values["category_name"]) if values["category_name"] is not None else "Uncategorized"
+        ),
+        categorization_source=str(values["categorization_source"]),
+        is_subscription=bool(values["is_subscription"]),
+        billing_period_months=(
+            int(values["billing_period_months"])
+            if values["billing_period_months"] is not None
+            else None
+        ),
+        account_id=(int(values["account_id"]) if values["account_id"] is not None else None),
+        account_label=(
+            str(values["account_name"]) if values["account_name"] is not None else "No account"
+        ),
+        tag_ids=tuple(tag_ids),
+    )
+
+
+def _rule_context(transaction: _PreviewTransaction) -> RuleContext:
+    return RuleContext(
+        description=transaction.description,
+        merchant_key=merchant_key(transaction.description),
+        amount_cents=transaction.amount_cents,
+        transaction_date=transaction.transaction_date.date(),
+        direction=(
+            "income"
+            if transaction.amount_cents > 0
+            else "expense"
+            if transaction.amount_cents < 0
+            else "zero"
+        ),
+        account_id=transaction.account_id,
+        provider_key=None,
+    )
+
+
+def _actions_are_identical(
+    transaction: _PreviewTransaction, draft_rule: CompiledWorkspaceRule
+) -> bool:
+    expected_merchant = draft_rule.normalized_merchant or merchant_display_fallback(
+        transaction.description
+    )
+    return (
+        transaction.normalized_merchant == expected_merchant
+        and transaction.category_id == draft_rule.category_id
+        and transaction.is_subscription == draft_rule.is_subscription
+        and transaction.billing_period_months == draft_rule.billing_period_months
+        and tuple(sorted(transaction.tag_ids)) == tuple(sorted(draft_rule.tag_ids))
+    )
+
+
+def _group_counts(
+    counter: Counter[tuple[int | None, str]],
+) -> tuple[PreviewGroupCount, ...]:
+    return tuple(
+        PreviewGroupCount(group_id, label, count)
+        for (group_id, label), count in sorted(
+            counter.items(),
+            key=lambda item: (
+                -item[1],
+                item[0][1].casefold(),
+                -1 if item[0][0] is None else item[0][0],
+            ),
+        )
+    )
+
+
+def _conflict_sort_key(
+    item: tuple[tuple[int, str], int],
+    active_rules: tuple[CompiledWorkspaceRule, ...],
+) -> tuple[int, int]:
+    order = {rule.id: index for index, rule in enumerate(active_rules)}
+    (rule_id, _name), count = item
+    return (order.get(rule_id, len(active_rules)), -count)
 
 
 def list_rules(session: Session, workspace_id: int) -> tuple[MerchantRule, ...]:
