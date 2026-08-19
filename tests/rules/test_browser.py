@@ -278,6 +278,16 @@ def test_rules_pages_do_not_overflow_supported_viewports(
               .filter((element) => element.left < 0 || element.right > width)""",
             client_width,
         )
+        overflowing_rule_checks = page.locator(".rule-page .compact-check").evaluate_all(
+            """(elements) => elements
+              .filter((element) => element.scrollWidth > element.clientWidth)
+              .map((element) => ({
+                text: element.textContent.trim(),
+                clientWidth: element.clientWidth,
+                scrollWidth: element.scrollWidth,
+              }))"""
+        )
         assert scroll_width == client_width, overflowing
+        assert overflowing_rule_checks == []
 
     _run_browser_scenario(scenario, viewport=viewport)
