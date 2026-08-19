@@ -11,6 +11,7 @@ from app.categorization.service import (
 from app.categorization.types import CategorizationSource
 from app.db.models import Category, MerchantRule, Tag, User, Workspace
 from app.imports.types import NormalizedTransaction
+from app.rules.loader import load_compiled_rule_set
 
 
 def _seed_builtin_categories(session: Session) -> dict[str, Category]:
@@ -149,6 +150,53 @@ def test_workspace_rule_beats_provider_rule(session: Session, workspace: Workspa
     assert decision.source is CategorizationSource.WORKSPACE_RULE
     assert decision.category_id == custom.id
     assert decision.normalized_merchant == "My Reviewed Payment"
+
+
+def test_compiled_workspace_rule_returns_attribution_and_explanation_before_provider(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if typed workspace decisions lose attribution or provider precedence wins."""
+    _seed_builtin_categories(session)
+    custom = Category(
+        workspace_id=workspace.id,
+        name="Workspace transfer",
+        name_key="workspace transfer",
+        kind="transfer",
+    )
+    session.add(custom)
+    session.flush()
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        name="Known payment override",
+        enabled=True,
+        priority=0,
+        condition_json={
+            "version": 1,
+            "type": "predicate",
+            "field": "description",
+            "operator": "contains",
+            "value": "BEST BUY AUTO PYMT",
+        },
+        normalized_merchant="My typed payment",
+        category=custom,
+    )
+    session.add(rule)
+    session.commit()
+    compiled = load_compiled_rule_set(session, workspace.id)
+
+    decision = categorize_candidate(
+        session,
+        workspace.id,
+        _candidate("BEST BUY AUTO PYMT 240812 123456789", -2999),
+        provider_key="chase_bank_csv",
+        workspace_rules=compiled,
+    )
+
+    assert decision.source is CategorizationSource.WORKSPACE_RULE
+    assert decision.category_id == custom.id
+    assert decision.normalized_merchant == "My typed payment"
+    assert decision.merchant_rule_id == rule.id
+    assert decision.explanation == "predicate: match"
 
 
 def test_unconfirmed_chase_pattern_remains_uncategorized(

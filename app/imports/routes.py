@@ -468,6 +468,7 @@ async def commit_review(
                     original_categorization_source=baseline.categorization_source,
                     original_tag_ids=baseline.tag_ids,
                     original_billing_period_months=baseline.billing_period_months,
+                    merchant_rule_id=baseline.merchant_rule_id,
                 )
             )
     except ReviewTokenError as exc:

@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -31,7 +32,7 @@ from app.imports.service import (
     save_mapping,
 )
 from app.imports.storage import LocalUploadStore, UploadStorageError
-from app.imports.types import RowEdit
+from app.imports.types import ReviewRow, RowEdit
 
 CSV_BYTES = b"Date,Description,Amount\n08/01/2026,Example,-1.00\n"
 PDF_BYTES = b"%PDF-synthetic-transaction-statement"
@@ -702,6 +703,173 @@ def add_uncategorized(session: Session) -> Category:
     session.add(category)
     session.commit()
     return category
+
+
+def add_workspace_rule(
+    session: Session,
+    workspace: Workspace,
+    merchant_pattern: str = "NETFLIX COM",
+) -> MerchantRule:
+    category = Category(
+        workspace_id=workspace.id,
+        name="Streaming",
+        name_key="streaming",
+        kind="expense",
+    )
+    rule = MerchantRule(
+        workspace_id=workspace.id,
+        merchant_pattern=merchant_pattern,
+        name="Streaming merchant",
+        normalized_merchant="Netflix",
+        category=category,
+    )
+    session.add(rule)
+    session.commit()
+    return rule
+
+
+def unchanged_edit(row: ReviewRow) -> RowEdit:
+    return RowEdit(
+        row.row_number,
+        True,
+        row.date_value,
+        row.description_value,
+        row.amount_value,
+        normalized_merchant=row.normalized_merchant,
+        category_id=row.category_id,
+        is_subscription=row.is_subscription,
+        categorization_source=row.categorization_source,
+        tag_ids=row.tag_ids,
+        billing_period_months=row.billing_period_months,
+        billing_period_submitted=True,
+        original_normalized_merchant=row.normalized_merchant,
+        original_category_id=row.category_id,
+        original_is_subscription=row.is_subscription,
+        original_categorization_source=row.categorization_source,
+        original_tag_ids=row.tag_ids,
+        original_billing_period_months=row.billing_period_months,
+        merchant_rule_id=row.merchant_rule_id,
+    )
+
+
+def test_workspace_rule_id_survives_review_and_unchanged_commit(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    rule = add_workspace_rule(session, workspace)
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n",
+        retention="retain",
+    )
+
+    review = build_review(session, store, job)
+
+    assert review.rows[0].merchant_rule_id == rule.id
+    commit_import(session, store, job, (unchanged_edit(review.rows[0]),))
+    transaction = session.scalar(select(Transaction))
+    assert transaction is not None
+    assert transaction.merchant_rule_id == rule.id
+
+
+def test_manual_review_change_clears_workspace_rule_id(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    add_workspace_rule(session, workspace)
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n",
+        retention="retain",
+    )
+    row = build_review(session, store, job).rows[0]
+    edit = replace(unchanged_edit(row), normalized_merchant="Movie Night")
+
+    commit_import(session, store, job, (edit,))
+
+    transaction = session.scalar(select(Transaction))
+    assert transaction is not None
+    assert transaction.categorization_source == "manual"
+    assert transaction.merchant_rule_id is None
+
+
+def test_deleted_workspace_rule_clears_stale_review_attribution(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    rule = add_workspace_rule(session, workspace, "STREAMFLIX")
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,Streamflix,-15.99\n",
+        retention="retain",
+    )
+    row = build_review(session, store, job).rows[0]
+    session.delete(rule)
+    add_uncategorized(session)
+
+    commit_import(session, store, job, (unchanged_edit(row),))
+
+    transaction = session.scalar(select(Transaction))
+    assert transaction is not None
+    assert transaction.categorization_source == "workspace_rule"
+    assert transaction.merchant_rule_id is None
+
+
+def test_reconfigured_workspace_rule_clears_stale_review_attribution(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    rule = add_workspace_rule(session, workspace)
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n",
+        retention="retain",
+    )
+    row = build_review(session, store, job).rows[0]
+    rule.normalized_merchant = "Changed after review"
+    session.commit()
+
+    commit_import(session, store, job, (unchanged_edit(row),))
+
+    transaction = session.scalar(select(Transaction))
+    assert transaction is not None
+    assert transaction.normalized_merchant == "Netflix"
+    assert transaction.categorization_source == "workspace_rule"
+    assert transaction.merchant_rule_id is None
+
+
+def test_review_attribution_rejects_a_rule_id_from_another_workspace(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+    tmp_path: Path,
+) -> None:
+    add_workspace_rule(session, workspace)
+    other_rule = add_workspace_rule(session, other_workspace)
+    store = LocalUploadStore(tmp_path)
+    job = mapped_import(
+        session,
+        workspace,
+        store,
+        b"Date,Description,Amount\n08/01/2026,Netflix.com,-15.99\n",
+        retention="retain",
+    )
+    row = build_review(session, store, job).rows[0]
+    edit = replace(unchanged_edit(row), merchant_rule_id=other_rule.id)
+
+    commit_import(session, store, job, (edit,))
+
+    transaction = session.scalar(select(Transaction))
+    assert transaction is not None
+    assert transaction.merchant_rule_id is None
 
 
 def test_commit_uses_reviewed_edits_and_exclusions_atomically(

@@ -18,6 +18,7 @@ from sqlalchemy import (
     false,
     func,
     text,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -362,6 +363,7 @@ class Transaction(Base):
         Index("ix_workspace_transaction_date", "workspace_id", "date"),
         Index("ix_workspace_transaction_category", "workspace_id", "category_id"),
         Index("ix_workspace_normalized_merchant", "workspace_id", "normalized_merchant"),
+        Index("ix_transactions_merchant_rule_id", "merchant_rule_id"),
         CheckConstraint(
             "billing_period_months IS NULL OR "
             "(billing_period_months >= 1 AND billing_period_months <= 120)",
@@ -376,6 +378,9 @@ class Transaction(Base):
     normalized_merchant: Mapped[str | None] = mapped_column(String(255))
     amount_cents: Mapped[int] = mapped_column()
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
+    merchant_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("merchant_rules.id", ondelete="SET NULL")
+    )
     categorization_source: Mapped[str] = mapped_column(String(50), default="uncategorized")
     is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     billing_period_months: Mapped[int | None] = mapped_column(Integer)
@@ -385,6 +390,7 @@ class Transaction(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
+    merchant_rule: Mapped["MerchantRule | None"] = relationship(back_populates="transactions")
     import_job: Mapped["ImportJob | None"] = relationship(back_populates="transactions")
     tags: Mapped[list["Tag"]] = relationship(
         secondary=transaction_tags,
@@ -402,11 +408,26 @@ class MerchantRule(Base):
             "(billing_period_months >= 1 AND billing_period_months <= 120)",
             name="ck_merchant_rules_billing_period_months",
         ),
+        CheckConstraint("priority >= 0", name="ck_merchant_rules_priority_nonnegative"),
+        CheckConstraint("lock_version > 0", name="ck_merchant_rules_lock_version_positive"),
+        CheckConstraint("condition_version = 1", name="ck_merchant_rules_condition_version_one"),
+        Index(
+            "ix_merchant_rules_workspace_enabled_priority",
+            "workspace_id",
+            "enabled",
+            "priority",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
-    merchant_pattern: Mapped[str] = mapped_column(String(255))
+    merchant_pattern: Mapped[str | None] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(120), server_default=text("''"))
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=true())
+    priority: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    condition_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    condition_json: Mapped[dict] = mapped_column(JSON, server_default=text("'{}'"))
+    lock_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
     normalized_merchant: Mapped[str | None] = mapped_column(String(255))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
     is_subscription: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
@@ -417,6 +438,7 @@ class MerchantRule(Base):
     )
 
     workspace: Mapped["Workspace"] = relationship(back_populates="merchant_rules")
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="merchant_rule")
     category: Mapped["Category | None"] = relationship(back_populates="merchant_rules")
     tags: Mapped[list["Tag"]] = relationship(
         secondary=merchant_rule_tags,
