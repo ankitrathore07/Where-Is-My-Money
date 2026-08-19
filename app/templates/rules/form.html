@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% macro condition_row(row) %}
+  <fieldset class="rule-condition-row" data-condition-row>
+    <legend>Condition <span data-condition-number>{{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</span></legend>
+    <div class="rule-condition-grid">
+      <label for="condition-field-{{ row.index }}">Condition field {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+      <select id="condition-field-{{ row.index }}" name="condition_field_{{ row.index }}" data-condition-field>
+        <option value="description" {% if row.field == "description" %}selected{% endif %}>Description</option>
+        <option value="merchant_key" {% if row.field == "merchant_key" %}selected{% endif %}>Normalized merchant key</option>
+        <option value="amount_cents" {% if row.field == "amount_cents" %}selected{% endif %}>Amount</option>
+        <option value="transaction_date" {% if row.field == "transaction_date" %}selected{% endif %}>Transaction date</option>
+        <option value="direction" {% if row.field == "direction" %}selected{% endif %}>Direction</option>
+        <option value="account_id" {% if row.field == "account_id" %}selected{% endif %}>Account</option>
+        <option value="provider_key" {% if row.field == "provider_key" %}selected{% endif %}>Import provider</option>
+      </select>
+
+      <label for="condition-operator-{{ row.index }}">Condition operator {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+      <select id="condition-operator-{{ row.index }}" name="condition_operator_{{ row.index }}" data-condition-operator>
+        <optgroup label="Text comparisons" data-operator-kind="text">
+          {% for operator in text_operators %}<option value="{{ operator }}" {% if row.operator == operator %}selected{% endif %}>{{ operator|replace("_", " ") }}</option>{% endfor %}
+        </optgroup>
+        <optgroup label="Amount comparisons" data-operator-kind="amount">
+          {% for operator in amount_operators %}<option value="{{ operator }}" {% if row.operator == operator %}selected{% endif %}>{{ operator|replace("_", " ") }}</option>{% endfor %}
+        </optgroup>
+        <optgroup label="Date comparisons" data-operator-kind="date">
+          {% for operator in date_operators %}<option value="{{ operator }}" {% if row.operator == operator %}selected{% endif %}>{{ operator|replace("_", " ") }}</option>{% endfor %}
+        </optgroup>
+        <optgroup label="Identity comparison" data-operator-kind="identity">
+          <option value="equal" {% if row.operator == "equal" %}selected{% endif %}>is</option>
+        </optgroup>
+      </select>
+
+      <div data-value-kind="text">
+        <label for="condition-text-{{ row.index }}">Text value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+        <input id="condition-text-{{ row.index }}" name="condition_text_value_{{ row.index }}" value="{{ row.text_value }}" maxlength="255">
+      </div>
+      <div data-value-kind="amount">
+        <label for="condition-amount-{{ row.index }}">Amount value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }} in dollars</label>
+        <input id="condition-amount-{{ row.index }}" name="condition_amount_value_{{ row.index }}" value="{{ row.amount_value }}" inputmode="decimal" placeholder="-12.34">
+      </div>
+      <div data-value-kind="date">
+        <label for="condition-date-{{ row.index }}">Date value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+        <input id="condition-date-{{ row.index }}" name="condition_date_value_{{ row.index }}" value="{{ row.date_value }}" type="date">
+      </div>
+      <div data-value-kind="direction">
+        <label for="condition-direction-{{ row.index }}">Direction value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+        <select id="condition-direction-{{ row.index }}" name="condition_direction_value_{{ row.index }}">
+          {% for direction in ("expense", "income", "zero") %}<option value="{{ direction }}" {% if row.direction_value == direction %}selected{% endif %}>{{ direction }}</option>{% endfor %}
+        </select>
+      </div>
+      <div data-value-kind="account">
+        <label for="condition-account-{{ row.index }}">Account value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+        <select id="condition-account-{{ row.index }}" name="condition_account_value_{{ row.index }}">
+          <option value="">Choose an account</option>
+          {% for account in accounts %}<option value="{{ account.id }}" {% if row.account_value|string == account.id|string %}selected{% endif %}>{{ account.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div data-value-kind="provider">
+        <label for="condition-provider-{{ row.index }}">Provider value {{ (row.index|int + 1) if row.index != "__INDEX__" else "__NUMBER__" }}</label>
+        <select id="condition-provider-{{ row.index }}" name="condition_provider_value_{{ row.index }}">
+          <option value="">Choose a provider</option>
+          {% for key, label in providers %}<option value="{{ key }}" {% if row.provider_value == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <label class="compact-check"><input type="checkbox" name="condition_negated_{{ row.index }}" value="true" {% if row.negated %}checked{% endif %}> This condition must not match</label>
+    <label class="rule-remove-fallback"><input type="checkbox" name="condition_remove_{{ row.index }}" value="true"> Remove this condition when the form is submitted</label>
+    <button class="button button-secondary button-compact" type="button" data-remove-condition>Remove condition</button>
+  </fieldset>
+{% endmacro %}
+{% block title %}{{ "Edit" if rule else "New" }} rule · Where Is My Money?{% endblock %}
+{% block content %}
+  <section class="rule-page" data-rule-builder>
+    <header class="page-heading rule-heading">
+      <p class="eyebrow">{{ workspace.name }} · Rules</p>
+      <h1>{{ "Edit rule" if rule else "Create a rule" }}</h1>
+      <p>Define the transaction conditions and the categorization action, then review the impact before anything is saved.</p>
+    </header>
+    {% if field_errors %}<div class="alert" role="alert"><strong>Correct the rule details below.</strong>{% for message in field_errors.values() %}<p>{{ message }}</p>{% endfor %}</div>{% endif %}
+    <form action="/workspaces/{{ workspace.id }}/rules{% if rule %}/{{ rule.id }}{% endif %}/preview" method="post" class="rule-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if rule %}<input type="hidden" name="lock_version" value="{{ values.lock_version }}">{% endif %}
+      <fieldset class="panel rule-details">
+        <legend>Rule details</legend>
+        <label for="rule-name">Rule name</label>
+        <input id="rule-name" name="name" value="{{ values.name }}" maxlength="120" required aria-describedby="name-error">
+        {% if field_errors.name %}<span id="name-error" class="field-error">{{ field_errors.name }}</span>{% endif %}
+        <label for="group-mode">Match mode</label>
+        <select id="group-mode" name="group_mode">
+          <option value="all" {% if values.group_mode == "all" %}selected{% endif %}>All conditions must match</option>
+          <option value="any" {% if values.group_mode == "any" %}selected{% endif %}>Any condition may match</option>
+        </select>
+      </fieldset>
+
+      {% if preserved_condition_summary %}
+      <section class="panel rule-preserved-condition" aria-labelledby="condition-heading">
+        <h2 id="condition-heading">If</h2>
+        <p><strong>This condition uses nested groups that the visual builder cannot safely flatten.</strong></p>
+        <p>{{ preserved_condition_summary }}</p>
+        <p class="muted">You can edit the rule name and actions. The complete saved condition will be preserved exactly.</p>
+        <input type="hidden" name="preserve_condition" value="true">
+      </section>
+      {% else %}
+      <section class="rule-conditions" aria-labelledby="condition-heading">
+        <div class="rule-section-heading"><div><h2 id="condition-heading">If</h2><p>Use up to 20 conditions. Negation applies only to its row.</p></div></div>
+        <div data-condition-rows>{% for row in rows %}{{ condition_row(row) }}{% endfor %}</div>
+        <button class="button button-secondary" type="submit" name="builder_action" value="add_row" formnovalidate data-add-condition>Add condition</button>
+      </section>
+      {% endif %}
+
+      <fieldset class="panel rule-actions">
+        <legend>Then</legend>
+        <label for="normalized-merchant">Merchant name <span class="muted">(leave blank to derive it from the description)</span></label>
+        <input id="normalized-merchant" name="normalized_merchant" value="{{ values.normalized_merchant }}" maxlength="255">
+        <label for="category-id">Category</label>
+        <select id="category-id" name="category_id" required>
+          <option value="">Choose a category</option>
+          {% for category in categories %}<option value="{{ category.id }}" {% if values.category_id|string == category.id|string %}selected{% endif %}>{{ category.name }}</option>{% endfor %}
+        </select>
+        <fieldset class="rule-tags">
+          <legend>Replace tags with</legend>
+          {% if tags %}{% for tag in tags %}<label class="compact-check"><input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id|string in values.tag_ids %}checked{% endif %}> {{ tag.name }}</label>{% endfor %}{% else %}<p class="muted">No tags are available. Saving clears existing tags.</p>{% endif %}
+        </fieldset>
+        <label class="compact-check"><input type="checkbox" name="is_subscription" value="true" {% if values.is_subscription %}checked{% endif %}> Mark matching transactions as subscriptions</label>
+        <label for="billing-period">Billing cadence in months <span class="muted">(optional, 1–120)</span></label>
+        <input id="billing-period" name="billing_period_months" value="{{ values.billing_period_months }}" type="number" min="1" max="120">
+      </fieldset>
+      <div class="rule-form-actions">
+        <button class="button" type="submit">Preview rule</button>
+        <a href="/workspaces/{{ workspace.id }}/rules">Cancel</a>
+      </div>
+    </form>
+    {% if not preserved_condition_summary %}<template data-condition-template>{{ condition_row(empty_template_row) }}</template>{% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/rules.js') }}" defer></script>{% endblock %}

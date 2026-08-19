@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ rule.name }} · Where Is My Money?{% endblock %}
+{% block content %}
+  <section class="rule-page rule-delete">
+    <header class="page-heading rule-heading"><p class="eyebrow">{{ workspace.name }} · Rules</p><h1>Delete {{ rule.name }}?</h1><p>This removes the rule from future categorization. The action values already saved on transactions remain unchanged.</p></header>
+    <div class="alert" role="alert"><p><strong>{{ linked_count }} linked transaction{% if linked_count != 1 %}s{% endif %}</strong> will keep its merchant, category, tags, subscription state, and source, but its rule link will be cleared.</p><p><strong>{{ deletion_preview.fallback_match_count }} transaction{% if deletion_preview.fallback_match_count != 1 %}s{% endif %} would fall through to provider or built-in categorization</strong> after this rule is removed.</p>{% if deletion_preview.next_rule_match_count %}<p>{{ deletion_preview.next_rule_match_count }} transaction{% if deletion_preview.next_rule_match_count != 1 %}s{% endif %} would be won by a later workspace rule.</p>{% endif %}{% if deletion_preview.unavailable_count %}<p>{{ deletion_preview.unavailable_count }} transaction{% if deletion_preview.unavailable_count != 1 %}s{% endif %} could not be evaluated safely because historical provider provenance is unavailable.</p>{% endif %}</div>
+    <form action="/workspaces/{{ workspace.id }}/rules/{{ rule.id }}/delete" method="post" class="rule-confirm-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lock_version" value="{{ rule.lock_version }}"><button class="button rule-danger-button" type="submit">Delete rule</button><a href="/workspaces/{{ workspace.id }}/rules">Cancel</a></form>
+  </section>
+{% endblock %}

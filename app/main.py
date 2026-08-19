@@ -37,6 +37,7 @@ from app.payslips.extraction import DocumentExtractor, TesseractOcrEngine
 from app.payslips.routes import router as payslip_router
 from app.payslips.storage import PayslipUploadStore
 from app.planning.routes import router as planning_router
+from app.rules.routes import router as rule_router
 from app.statement_imports.body_limit import StatementUploadBodyLimitMiddleware
 from app.statement_imports.extraction import StatementDocumentExtractor
 from app.statement_imports.routes import router as statement_import_router
@@ -157,6 +158,7 @@ def create_app(
     application.include_router(category_router)
     application.include_router(tag_router)
     application.include_router(planning_router)
+    application.include_router(rule_router)
     application.include_router(document_router)
     application.include_router(import_router)
     application.include_router(payslip_router)

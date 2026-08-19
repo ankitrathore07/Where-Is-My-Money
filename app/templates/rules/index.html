@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Rules · Where Is My Money?{% endblock %}
+{% block content %}
+  <section class="rule-page">
+    <header class="page-heading rule-heading">
+      <p class="eyebrow">{{ workspace.name }}</p>
+      <div class="rule-heading-row"><div><h1>Rules</h1><p>Workspace rules run from top to bottom before provider and built-in categorization.</p></div><a class="button" href="/workspaces/{{ workspace.id }}/rules/new">Create rule</a></div>
+    </header>
+    {% if rule_views %}
+      <ol class="rule-list">
+        {% for item in rule_views %}
+          <li class="rule-card {% if not item.rule.enabled %}rule-disabled{% endif %}">
+            <div class="rule-card-heading"><div><span class="eyebrow">Priority {{ item.rule.priority + 1 }}</span><h2>{{ item.rule.name }}</h2></div><span class="badge {% if not item.rule.enabled %}badge-attention{% endif %}">{{ "Enabled" if item.rule.enabled else "Disabled" }}</span></div>
+            {% if item.repair_error %}<p class="alert">{{ item.repair_error }}</p>{% endif %}
+            <p><strong>If:</strong> {{ item.condition_summary }}</p>
+            <p><strong>Then:</strong> {{ item.action_summary }}</p>
+            {% if item.conflict_warning %}<p class="rule-warning">{{ item.conflict_warning }}</p>{% endif %}
+            <p class="muted">{{ item.linked_count }} linked transaction{% if item.linked_count != 1 %}s{% endif %}{% if item.last_used %} · Last committed use {{ item.last_used.strftime("%Y-%m-%d") }}{% else %} · Not used by a committed transaction yet{% endif %}</p>
+            <div class="rule-card-actions">
+              <a href="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/edit">Edit</a>
+              <a href="#simulator-heading">Test</a>
+              <form action="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/duplicate" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="link-button rule-link-button" type="submit">Duplicate</button></form>
+              {% if not loop.first %}<form action="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/move" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lock_version" value="{{ item.rule.lock_version }}"><input type="hidden" name="new_index" value="{{ item.rule.priority - 1 }}"><button class="link-button rule-link-button" type="submit" aria-label="Move {{ item.rule.name }} up">Move up</button></form>{% endif %}
+              {% if not loop.last %}<form action="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/move" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lock_version" value="{{ item.rule.lock_version }}"><input type="hidden" name="new_index" value="{{ item.rule.priority + 1 }}"><button class="link-button rule-link-button" type="submit" aria-label="Move {{ item.rule.name }} down">Move down</button></form>{% endif %}
+              <form action="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/enabled" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lock_version" value="{{ item.rule.lock_version }}"><input type="hidden" name="enabled" value="{{ "false" if item.rule.enabled else "true" }}"><button class="link-button rule-link-button" type="submit">{{ "Disable" if item.rule.enabled else "Enable" }}</button></form>
+              <a class="rule-delete-link" href="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/delete">Delete</a>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}<section class="notice"><h2>No rules yet</h2><p>Create a rule to make repeat categorization decisions explicit and explainable.</p></section>{% endif %}
+
+    <section class="panel rule-simulator" aria-labelledby="simulator-heading">
+      <div class="rule-section-heading"><div><p class="eyebrow">Read-only</p><h2 id="simulator-heading">Test the rule order</h2></div></div>
+      <p>Enter a synthetic transaction. Testing never changes rules, transactions, or usage statistics.</p>
+      {% if simulator_error %}<p class="alert" role="alert">{{ simulator_error }}</p>{% endif %}
+      <form action="/workspaces/{{ workspace.id }}/rules/simulate" method="post" class="rule-simulator-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="sim-description">Description</label><input id="sim-description" name="description" value="{{ simulator_values.description }}" required>
+        <label for="sim-amount">Amount in dollars</label><input id="sim-amount" name="amount" value="{{ simulator_values.amount }}" inputmode="decimal" placeholder="-12.34" required>
+        <label for="sim-date">Transaction date</label><input id="sim-date" name="transaction_date" value="{{ simulator_values.transaction_date }}" type="date" required>
+        <label for="sim-account">Account</label><select id="sim-account" name="account_id"><option value="">No account</option>{% for account in accounts %}<option value="{{ account.id }}" {% if simulator_values.account_id == account.id|string %}selected{% endif %}>{{ account.name }}</option>{% endfor %}</select>
+        <label for="sim-provider">Provider</label><select id="sim-provider" name="provider_key"><option value="">No provider</option>{% for key, label in providers %}<option value="{{ key }}" {% if simulator_values.provider_key == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+        <button class="button" type="submit">Test rules</button>
+      </form>
+      {% if simulation %}<div class="rule-simulation-result" aria-live="polite"><h3>{% if simulation.winner %}Winning workspace rule: {{ simulation.winner.rule.name }}{% else %}No workspace rule won{% endif %}</h3><p>Result source: {{ simulation.decision.source.value|replace("_", " ") }}</p><p><strong>Resulting actions:</strong> {{ simulation_view.result_actions }}</p>{% if simulation.matches %}<ol class="rule-match-list">{% for item in simulation_view.matches %}<li><strong>{{ item.match.rule.name }}</strong><ul class="rule-explanation-list">{% for line in item.lines %}<li class="rule-explanation-depth-{{ line.depth }}">{{ line.text }}</li>{% endfor %}</ul></li>{% endfor %}</ol>{% else %}<p>{{ simulation.decision.explanation or "The established fallback chose the result." }}</p>{% endif %}</div>{% endif %}
+    </section>
+  </section>
+{% endblock %}

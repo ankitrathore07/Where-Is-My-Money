@@ -1188,6 +1188,259 @@ select:focus-visible {
   letter-spacing: 0.12em;
 }
 
+/* Workspace rule management. */
+.rule-page,
+.rule-form,
+.rule-conditions,
+.rule-list,
+.rule-card,
+.rule-condition-row,
+.rule-actions,
+.rule-details,
+.rule-simulator-form {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.rule-heading h1 {
+  font-size: clamp(2.25rem, 5vw, 4rem);
+  margin-bottom: 0.75rem;
+}
+
+.rule-heading-row,
+.rule-section-heading,
+.rule-card-heading,
+.rule-card-actions,
+.rule-form-actions,
+.rule-confirm-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  justify-content: space-between;
+}
+
+.rule-heading-row > div,
+.rule-section-heading > div,
+.rule-card-heading > div {
+  min-width: 0;
+}
+
+.rule-heading-row .button,
+.rule-form-actions .button,
+.rule-confirm-form .button,
+.rule-simulator-form .button {
+  margin-top: 0;
+}
+
+.rule-list {
+  list-style: none;
+  margin: 1.5rem 0;
+  padding: 0;
+}
+
+.rule-card,
+.rule-condition-row {
+  background: #fff;
+  border: 1px solid #dbe3d7;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+
+.rule-card h2,
+.rule-section-heading h2,
+.rule-simulator h2,
+.rule-simulation-result h3 {
+  margin: 0;
+}
+
+.rule-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rule-disabled {
+  background: #f2f3ef;
+}
+
+.rule-warning {
+  border-left: 0.25rem solid #c17817;
+  color: #704c00;
+  padding-left: 0.75rem;
+}
+
+.rule-card-actions {
+  justify-content: flex-start;
+}
+
+.rule-card-actions form {
+  margin: 0;
+}
+
+.rule-link-button {
+  color: #173f2b;
+}
+
+.rule-delete-link {
+  color: #92351d;
+}
+
+.rule-details,
+.rule-actions,
+.rule-tags,
+.rule-condition-row {
+  margin: 0;
+}
+
+.rule-details > input,
+.rule-details > select,
+.rule-actions > input,
+.rule-actions > select,
+.rule-condition-grid input,
+.rule-condition-grid select,
+.rule-simulator-form input,
+.rule-simulator-form select {
+  border: 1px solid #aebbad;
+  border-radius: 0.4rem;
+  min-width: 0;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.rule-condition-grid,
+.rule-simulator-form {
+  display: grid;
+  gap: 0.5rem 1rem;
+  grid-template-columns: minmax(10rem, 0.55fr) minmax(0, 1fr);
+}
+
+.rule-condition-grid > div {
+  display: grid;
+  gap: 0.35rem;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.rule-condition-grid > div > label {
+  align-self: center;
+}
+
+.rule-remove-fallback {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.rule-page .compact-check {
+  white-space: normal;
+}
+
+.rule-builder-enhanced .rule-remove-fallback {
+  display: none;
+}
+
+.rule-builder-enhanced [data-value-kind][hidden] {
+  display: none;
+}
+
+.rule-impact-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+
+.rule-impact-grid article {
+  background: #173f2b;
+  border-radius: 0.75rem;
+  color: #f6fffa;
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+}
+
+.rule-impact-grid strong {
+  font-size: 1.75rem;
+}
+
+.rule-impact-grid span {
+  color: #d6e8e1;
+}
+
+.rule-preview-groups {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rule-simulator {
+  margin-top: 2rem;
+}
+
+.rule-simulation-result {
+  background: #eef7f0;
+  border-left: 0.3rem solid #1d6a42;
+  padding: 1rem;
+}
+
+.rule-explanation-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.rule-explanation-list li {
+  border-left: 0.2rem solid #b9d9c1;
+  margin-top: 0.35rem;
+  padding-left: 0.6rem;
+}
+
+.rule-explanation-depth-1 { margin-left: 1rem; }
+.rule-explanation-depth-2 { margin-left: 2rem; }
+.rule-explanation-depth-3 { margin-left: 3rem; }
+
+.rule-danger-button {
+  background: #92351d;
+}
+
+.rule-danger-button:hover,
+.rule-danger-button:focus-visible {
+  background: #702713;
+}
+
+@media (max-width: 42.5rem) {
+  .rule-heading-row,
+  .rule-section-heading,
+  .rule-card-heading,
+  .rule-form-actions,
+  .rule-confirm-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rule-heading-row .button,
+  .rule-form-actions .button,
+  .rule-confirm-form .button {
+    text-align: center;
+    width: 100%;
+  }
+
+  .rule-condition-grid,
+  .rule-condition-grid > div,
+  .rule-simulator-form,
+  .rule-preview-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .rule-condition-grid > div {
+    display: grid;
+  }
+
+  .rule-page,
+  .rule-page * {
+    min-width: 0;
+  }
+}
+
 .request-reference {
   color: #667268;
   font-size: 0.85rem;
