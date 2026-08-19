@@ -103,6 +103,9 @@ class Workspace(Base):
     rule_application_runs: Mapped[list["RuleApplicationRun"]] = relationship(
         back_populates="workspace"
     )
+    categorization_events: Mapped[list["TransactionCategorizationEvent"]] = relationship(
+        back_populates="workspace"
+    )
     payslips: Mapped[list["Payslip"]] = relationship(back_populates="workspace")
     income_records: Mapped[list["IncomeRecord"]] = relationship(back_populates="workspace")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="workspace")
@@ -406,6 +409,9 @@ class Transaction(Base):
         back_populates="transactions",
         order_by="Tag.name_key",
     )
+    categorization_events: Mapped[list["TransactionCategorizationEvent"]] = relationship(
+        back_populates="transaction"
+    )
 
 
 class MerchantRule(Base):
@@ -456,6 +462,14 @@ class MerchantRule(Base):
     )
     application_runs: Mapped[list["RuleApplicationRun"]] = relationship(
         back_populates="merchant_rule"
+    )
+    previous_categorization_events: Mapped[list["TransactionCategorizationEvent"]] = relationship(
+        foreign_keys="TransactionCategorizationEvent.previous_rule_id",
+        back_populates="previous_rule",
+    )
+    new_categorization_events: Mapped[list["TransactionCategorizationEvent"]] = relationship(
+        foreign_keys="TransactionCategorizationEvent.new_rule_id",
+        back_populates="new_rule",
     )
 
 
@@ -522,6 +536,67 @@ class RuleApplicationRun(Base):
     @validates("preview_digest")
     def _validate_preview_digest(self, _key: str, value: object) -> str:
         return validate_application_digest(value)
+
+
+class TransactionCategorizationEvent(Base):
+    """Redacted attribution change for one transaction categorization."""
+
+    __tablename__ = "transaction_categorization_events"
+    __table_args__ = (
+        CheckConstraint(
+            "previous_source IN ('manual', 'workspace_rule', 'provider_rule', "
+            "'builtin_rule', 'ai_suggestion', 'uncategorized')",
+            name="ck_transaction_categorization_events_previous_source",
+        ),
+        CheckConstraint(
+            "new_source IN ('manual', 'workspace_rule', 'provider_rule', "
+            "'builtin_rule', 'ai_suggestion', 'uncategorized')",
+            name="ck_transaction_categorization_events_new_source",
+        ),
+        CheckConstraint(
+            "reason IN ('manual_correction', 'import_commit', 'historical_application')",
+            name="ck_transaction_categorization_events_reason",
+        ),
+        CheckConstraint(
+            "previous_source <> new_source OR "
+            "coalesce(previous_rule_id, -1) <> coalesce(new_rule_id, -1)",
+            name="ck_transaction_categorization_events_changed",
+        ),
+        Index(
+            "ix_transaction_categorization_events_workspace_created",
+            "workspace_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    transaction_id: Mapped[int] = mapped_column(
+        ForeignKey("transactions.id", ondelete="CASCADE"), index=True
+    )
+    previous_source: Mapped[str] = mapped_column(String(50))
+    new_source: Mapped[str] = mapped_column(String(50))
+    previous_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("merchant_rules.id", ondelete="SET NULL"), index=True
+    )
+    new_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("merchant_rules.id", ondelete="SET NULL"), index=True
+    )
+    reason: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="categorization_events")
+    transaction: Mapped["Transaction"] = relationship(back_populates="categorization_events")
+    previous_rule: Mapped["MerchantRule | None"] = relationship(
+        foreign_keys=[previous_rule_id],
+        back_populates="previous_categorization_events",
+    )
+    new_rule: Mapped["MerchantRule | None"] = relationship(
+        foreign_keys=[new_rule_id],
+        back_populates="new_categorization_events",
+    )
 
 
 class Payslip(Base):

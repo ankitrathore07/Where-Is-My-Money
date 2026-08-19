@@ -21,6 +21,7 @@ from app.db.models import (
     RuleApplicationRun,
     Tag,
     Transaction,
+    TransactionCategorizationEvent,
     User,
     Workspace,
     WorkspaceMembership,
@@ -393,6 +394,14 @@ def test_confirm_applies_exact_actions_preserves_source_data_and_is_idempotent(
     assert run.changed_count == 1
     assert run.confirmed_at is not None
     assert len(session.scalars(select(RuleApplicationRun)).all()) == 1
+    events = session.scalars(select(TransactionCategorizationEvent)).all()
+    assert len(events) == 1
+    assert events[0].transaction_id == transaction.id
+    assert events[0].previous_source == "uncategorized"
+    assert events[0].new_source == "workspace_rule"
+    assert events[0].previous_rule_id is None
+    assert events[0].new_rule_id == rule.id
+    assert events[0].reason == "historical_application"
 
 
 def test_confirm_rejects_changed_state_before_mutating_any_selected_row(

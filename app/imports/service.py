@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.categorization.ai_graph import CompiledCategorizationGraph, suggest_category
 from app.categorization.ai_types import CategorySuggestion
+from app.categorization.events import CategorizationEventReason, record_categorization_event
 from app.categorization.sanitization import sanitize_transaction_description
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationDecision, CategorizationSource
@@ -857,6 +858,7 @@ def commit_import(
             "no_rows_selected", "Select at least one new valid transaction."
         )
 
+    persisted_transactions: list[Transaction] = []
     for item in new_items:
         transaction = item.transaction
         (
@@ -884,9 +886,22 @@ def commit_import(
         )
         persisted.tags = list(accessible_tags_by_id(session, job.workspace_id, tag_ids))
         session.add(persisted)
+        persisted_transactions.append(persisted)
     job.status = "committed"
     job.validation_errors = None
     try:
+        session.flush()
+        for persisted in persisted_transactions:
+            record_categorization_event(
+                session,
+                workspace_id=job.workspace_id,
+                transaction_id=persisted.id,
+                previous_source=CategorizationSource.UNCATEGORIZED,
+                new_source=persisted.categorization_source,
+                previous_rule_id=None,
+                new_rule_id=persisted.merchant_rule_id,
+                reason=CategorizationEventReason.IMPORT_COMMIT,
+            )
         session.commit()
     except IntegrityError as exc:
         session.rollback()

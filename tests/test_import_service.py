@@ -15,6 +15,7 @@ from app.db.models import (
     ImportJob,
     MerchantRule,
     Transaction,
+    TransactionCategorizationEvent,
     UploadedFile,
     Workspace,
 )
@@ -772,6 +773,14 @@ def test_workspace_rule_id_survives_review_and_unchanged_commit(
     transaction = session.scalar(select(Transaction))
     assert transaction is not None
     assert transaction.merchant_rule_id == rule.id
+    event = session.scalar(select(TransactionCategorizationEvent))
+    assert event is not None
+    assert event.transaction_id == transaction.id
+    assert event.previous_source == "uncategorized"
+    assert event.new_source == "workspace_rule"
+    assert event.previous_rule_id is None
+    assert event.new_rule_id == rule.id
+    assert event.reason == "import_commit"
 
 
 def test_manual_review_change_clears_workspace_rule_id(
