@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import MerchantRule, Tag, Transaction
+from app.workspaces.locking import serialize_workspace_mutation
 
 MAX_TAG_NAME_LENGTH = 100
 
@@ -113,6 +114,8 @@ def rename_custom_tag(session: Session, workspace_id: int, tag_id: int, name: st
 
 
 def delete_custom_tag(session: Session, workspace_id: int, tag_id: int) -> None:
+    if not serialize_workspace_mutation(session, workspace_id):
+        raise TagNotFoundError("Tag not found")
     tag = _custom_tag(session, workspace_id, tag_id)
     tag.transactions.clear()
     tag.merchant_rules.clear()

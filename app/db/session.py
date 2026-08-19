@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -11,6 +11,14 @@ engine = None
 SessionLocal = None
 
 
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
 def init_engine(database_url: str | None = None):
     """Initialize the SQLAlchemy engine and session factory.
 
@@ -19,6 +27,8 @@ def init_engine(database_url: str | None = None):
     global engine, SessionLocal
     url = database_url or settings.database_url
     engine = create_engine(url, echo=False)
+    if engine.dialect.name == "sqlite":
+        event.listen(engine, "connect", _enable_sqlite_foreign_keys)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return engine
 

@@ -26,13 +26,22 @@ from app.core.middleware import require_csrf
 from app.db.models import MerchantRule, Transaction, User, Workspace
 from app.db.session import get_db
 from app.imports.providers.registry import PROVIDER_PDF_PROFILES, PROVIDER_PROFILES
+from app.rules.application_tokens import (
+    MAX_SELECTED_TRANSACTION_IDS,
+    RuleApplicationTokenError,
+)
 from app.rules.presentation import describe_actions, describe_condition, describe_evaluation
 from app.rules.service import (
+    HistoricalApplicationPreview,
+    HistoricalApplicationResult,
+    HistoryFilters,
     RuleConflictError,
     RuleDraft,
     RuleNotFoundError,
     RuleResourceNotFoundError,
     RuleValidationError,
+    StaleRuleApplicationError,
+    confirm_historical_application,
     create_rule,
     delete_rule,
     duplicate_rule,
@@ -40,6 +49,7 @@ from app.rules.service import (
     list_rules,
     move_rule,
     normalize_rule_draft,
+    preview_historical_application,
     preview_rule_deletion,
     preview_rule_impact,
     set_rule_enabled,
@@ -538,6 +548,228 @@ def _conflict() -> HTTPException:
     )
 
 
+def _history_secret(request: Request) -> str:
+    secret_key = request.app.state.settings.secret_key
+    if not isinstance(secret_key, str) or not secret_key:
+        raise RuntimeError("Historical application requires the configured signing secret.")
+    return secret_key
+
+
+def _get_history_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
+    rule = get_rule(session, workspace_id, rule_id)
+    if not rule.enabled:
+        raise RuleNotFoundError("Rule not found.")
+    return rule
+
+
+def _history_filter_values(form: FormData | None = None) -> dict[str, str]:
+    if form is None:
+        return {
+            "date_from": "",
+            "date_to": "",
+            "account_id": "",
+            "category_id": "",
+            "direction": "all",
+        }
+    return {
+        "date_from": str(form.get("date_from", "")),
+        "date_to": str(form.get("date_to", "")),
+        "account_id": str(form.get("account_id", "")),
+        "category_id": str(form.get("category_id", "")),
+        "direction": str(form.get("direction", "all")),
+    }
+
+
+def _history_resource_filter(
+    value: str,
+    field: str,
+    errors: dict[str, str],
+) -> int | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = int(normalized)
+    except ValueError:
+        errors[field] = "Choose a valid resource."
+        return None
+    if parsed <= 0:
+        errors[field] = "Choose a valid resource."
+        return None
+    return parsed
+
+
+def _history_filters(values: dict[str, str]) -> HistoryFilters:
+    errors: dict[str, str] = {}
+    account_id = _history_resource_filter(values["account_id"], "account_id", errors)
+    category_id = _history_resource_filter(values["category_id"], "category_id", errors)
+    if errors:
+        raise RuleValidationError(errors)
+    return HistoryFilters(
+        date_from=values["date_from"],
+        date_to=values["date_to"],
+        account_id=account_id,
+        category_id=category_id,
+        direction=values["direction"],
+    )
+
+
+def _history_selection(form: FormData) -> tuple[int, ...]:
+    raw_ids = tuple(str(value) for value in form.getlist("transaction_ids"))
+    try:
+        selected_ids = tuple(int(value) for value in raw_ids)
+    except ValueError:
+        selected_ids = ()
+    valid = (
+        1 <= len(selected_ids) <= MAX_SELECTED_TRANSACTION_IDS
+        and all(transaction_id > 0 for transaction_id in selected_ids)
+        and len(selected_ids) == len(set(selected_ids))
+    )
+    if not valid:
+        raise RuleValidationError(
+            {"selected_transaction_ids": ("Choose between 1 and 500 eligible transactions.")}
+        )
+    return selected_ids
+
+
+def _history_rule_action_summary(
+    session: Session,
+    workspace_id: int,
+    rule: MerchantRule,
+) -> str:
+    try:
+        draft = normalize_rule_draft(session, workspace_id, _rule_draft(rule))
+        category_name, tag_names, _account_names = _preview_labels(session, workspace_id, draft)
+    except (RuleValidationError, RuleResourceNotFoundError):
+        return "Action effects are unavailable. Repair this rule before applying it to history."
+    return describe_actions(draft, category_name=category_name, tag_names=tag_names)
+
+
+def _historical_preview_action_summary(
+    session: Session,
+    workspace_id: int,
+    preview: HistoricalApplicationPreview,
+) -> str:
+    if preview.category_id is None:
+        return "Action effects are unavailable. Repair this rule before applying it to history."
+    choices = _choices(session, workspace_id)
+    category_names = {category.id: category.name for category in choices["categories"]}
+    tag_names = {tag.id: tag.name for tag in choices["tags"]}
+    category_name = category_names.get(preview.category_id)
+    labels = tuple(tag_names[tag_id] for tag_id in preview.tag_ids if tag_id in tag_names)
+    if category_name is None or len(labels) != len(preview.tag_ids):
+        return "Action effects are unavailable. Repair this rule before applying it to history."
+    return describe_actions(
+        preview,
+        category_name=category_name,
+        tag_names=labels,
+    )
+
+
+def _history_transaction_views(
+    session: Session,
+    workspace_id: int,
+    transaction_ids: tuple[int, ...],
+) -> tuple[dict[str, object], ...]:
+    if not transaction_ids:
+        return ()
+    transactions = tuple(
+        session.scalars(
+            select(Transaction).where(
+                Transaction.workspace_id == workspace_id,
+                Transaction.id.in_(transaction_ids),
+            )
+        )
+    )
+    by_id = {transaction.id: transaction for transaction in transactions}
+    if set(by_id) != set(transaction_ids):
+        raise RuleNotFoundError("Transaction not found.")
+    category_names = {
+        category.id: category.name for category in (*_choices(session, workspace_id)["categories"],)
+    }
+    return tuple(
+        {
+            "id": transaction_id,
+            "date": by_id[transaction_id].date.strftime("%Y-%m-%d"),
+            "description": by_id[transaction_id].description,
+            "category_name": category_names.get(
+                by_id[transaction_id].category_id, "Unavailable category"
+            ),
+            "source": by_id[transaction_id].categorization_source,
+        }
+        for transaction_id in transaction_ids
+    )
+
+
+def _render_history_page(
+    request: Request,
+    user: User,
+    session: Session,
+    workspace: Workspace,
+    rule: MerchantRule,
+    *,
+    filter_values: dict[str, str],
+    preview: HistoricalApplicationPreview | None = None,
+    eligible_rows: tuple[dict[str, object], ...] = (),
+    field_errors: dict[str, str] | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="rules/apply.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            rule=rule,
+            preview=preview,
+            eligible_rows=eligible_rows,
+            selected_transaction_ids=(
+                frozenset(preview.selected_transaction_ids) if preview is not None else frozenset()
+            ),
+            filter_values=filter_values,
+            field_errors=field_errors or {},
+            action_summary=(
+                _historical_preview_action_summary(session, workspace.id, preview)
+                if preview is not None
+                else _history_rule_action_summary(session, workspace.id, rule)
+            ),
+            max_selected_transactions=MAX_SELECTED_TRANSACTION_IDS,
+            **_choices(session, workspace.id),
+        ),
+        status_code=status_code,
+    )
+
+
+def _render_history_confirmation(
+    request: Request,
+    user: User,
+    session: Session,
+    workspace: Workspace,
+    *,
+    preview: HistoricalApplicationPreview | None = None,
+    selected_rows: tuple[dict[str, object], ...] = (),
+    result: HistoricalApplicationResult | None = None,
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="rules/apply_confirm.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            preview=preview,
+            selected_rows=selected_rows,
+            result=result,
+            action_summary=(
+                _historical_preview_action_summary(session, workspace.id, preview)
+                if preview is not None
+                else None
+            ),
+        ),
+    )
+
+
 def _preview_labels(
     session: Session, workspace_id: int, draft: RuleDraft
 ) -> tuple[str, tuple[str, ...], dict[int, str]]:
@@ -910,6 +1142,198 @@ async def rule_simulate(
         workspace,
         simulation=simulation,
         simulator_values=values,
+    )
+
+
+@router.get("/{rule_id}/apply", response_class=HTMLResponse)
+async def rule_history(
+    request: Request,
+    rule_id: int,
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    try:
+        rule = _get_history_rule(session, workspace.id, rule_id)
+    except RuleNotFoundError as exc:
+        raise _not_found(exc) from exc
+    return _render_history_page(
+        request,
+        user,
+        session,
+        workspace,
+        rule,
+        filter_values=_history_filter_values(),
+    )
+
+
+@router.post("/{rule_id}/apply/preview", dependencies=[Depends(require_csrf)])
+async def rule_history_preview(
+    request: Request,
+    rule_id: int,
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    form = await request.form()
+    filter_values = _history_filter_values(form)
+    try:
+        rule = _get_history_rule(session, workspace.id, rule_id)
+        preview = preview_historical_application(
+            session,
+            workspace.id,
+            rule_id,
+            _history_filters(filter_values),
+            user_id=user.id,
+            secret_key=_history_secret(request),
+        )
+        eligible_rows = _history_transaction_views(
+            session,
+            workspace.id,
+            preview.eligible_transaction_ids,
+        )
+        action_summary = _historical_preview_action_summary(session, workspace.id, preview)
+        session.commit()
+    except RuleValidationError as exc:
+        session.rollback()
+        try:
+            rule = _get_history_rule(session, workspace.id, rule_id)
+        except RuleNotFoundError as not_found:
+            raise _not_found(not_found) from not_found
+        return _render_history_page(
+            request,
+            user,
+            session,
+            workspace,
+            rule,
+            filter_values=filter_values,
+            field_errors=exc.field_errors,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    except (RuleNotFoundError, RuleResourceNotFoundError) as exc:
+        session.rollback()
+        raise _not_found(exc) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="rules/apply.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            rule=rule,
+            preview=preview,
+            eligible_rows=eligible_rows,
+            selected_transaction_ids=frozenset(preview.selected_transaction_ids),
+            filter_values={
+                key: "" if value is None else str(value)
+                for key, value in preview.normalized_filters.items()
+            },
+            field_errors={},
+            action_summary=action_summary,
+            max_selected_transactions=MAX_SELECTED_TRANSACTION_IDS,
+            **_choices(session, workspace.id),
+        ),
+    )
+
+
+@router.post("/{rule_id}/apply/confirm", dependencies=[Depends(require_csrf)])
+async def rule_history_selection(
+    request: Request,
+    rule_id: int,
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    form = await request.form()
+    filter_values = _history_filter_values(form)
+    try:
+        rule = _get_history_rule(session, workspace.id, rule_id)
+        selected_ids = _history_selection(form)
+        preview = preview_historical_application(
+            session,
+            workspace.id,
+            rule_id,
+            _history_filters(filter_values),
+            selected_transaction_ids=selected_ids,
+            user_id=user.id,
+            secret_key=_history_secret(request),
+        )
+        selected_rows = _history_transaction_views(
+            session,
+            workspace.id,
+            preview.selected_transaction_ids,
+        )
+        action_summary = _historical_preview_action_summary(session, workspace.id, preview)
+        session.commit()
+    except RuleValidationError as exc:
+        session.rollback()
+        try:
+            rule = _get_history_rule(session, workspace.id, rule_id)
+        except RuleNotFoundError as not_found:
+            raise _not_found(not_found) from not_found
+        return _render_history_page(
+            request,
+            user,
+            session,
+            workspace,
+            rule,
+            filter_values=filter_values,
+            field_errors=exc.field_errors,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    except (RuleNotFoundError, RuleResourceNotFoundError) as exc:
+        session.rollback()
+        raise _not_found(exc) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="rules/apply_confirm.html",
+        context=_context(
+            request,
+            user,
+            workspace,
+            preview=preview,
+            selected_rows=selected_rows,
+            result=None,
+            action_summary=action_summary,
+        ),
+    )
+
+
+@router.post("/history/confirm", dependencies=[Depends(require_csrf)])
+async def rule_history_confirm(
+    request: Request,
+    user: Annotated[User, Depends(require_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+    workspace: Annotated[Workspace, Depends(require_workspace)],
+) -> HTMLResponse:
+    form = await request.form()
+    try:
+        result = confirm_historical_application(
+            session,
+            workspace.id,
+            str(form.get("confirmation_token", "")),
+            user.id,
+            secret_key=_history_secret(request),
+        )
+        session.commit()
+    except RuleApplicationTokenError:
+        session.rollback()
+        raise _conflict() from None
+    except StaleRuleApplicationError as exc:
+        if exc.run_id is not None and exc.status == "stale":
+            session.commit()
+        else:
+            session.rollback()
+        raise _conflict() from None
+    except RuleNotFoundError as exc:
+        session.rollback()
+        raise _not_found(exc) from exc
+    return _render_history_confirmation(
+        request,
+        user,
+        session,
+        workspace,
+        result=result,
     )
 
 
