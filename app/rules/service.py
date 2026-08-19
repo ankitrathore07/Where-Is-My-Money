@@ -26,7 +26,6 @@ from app.db.models import (
     RuleApplicationRun,
     Tag,
     Transaction,
-    Workspace,
     WorkspaceMembership,
     transaction_tags,
 )
@@ -55,6 +54,7 @@ from app.rules.types import (
 )
 from app.rules.validation import RuleConditionValidationError, condition_to_json, parse_condition
 from app.tags.service import tag_ids_with_subscription
+from app.workspaces.locking import serialize_workspace_mutation
 
 MAX_RULE_NAME_LENGTH = 120
 MAX_MERCHANT_NAME_LENGTH = 255
@@ -347,15 +347,6 @@ def preview_historical_application(
         normalized_filters,
         selected_states,
     )
-    payload = ApplicationTokenPayload(
-        workspace_id=workspace_id,
-        merchant_rule_id=rule_id,
-        rule_lock_version=rule.lock_version,
-        selected_transaction_ids=selected_ids,
-        state_digest=state_digest,
-        normalized_filters=normalized_filters,
-    )
-    token = create_application_token(_application_secret(secret_key), payload)
     run = RuleApplicationRun(
         workspace_id=workspace_id,
         merchant_rule_id=rule_id,
@@ -363,7 +354,10 @@ def preview_historical_application(
         rule_name_snapshot=rule.name,
         rule_lock_version=rule.lock_version,
         status="previewed",
-        selection_json=canonical_application_selection(payload),
+        selection_json={
+            "normalized_filters": normalized_filters,
+            "selected_transaction_ids": selected_ids,
+        },
         preview_digest=state_digest,
         matched_count=evaluation.matched_count,
         changed_count=len(selected_ids),
@@ -373,6 +367,16 @@ def preview_historical_application(
     )
     session.add(run)
     session.flush()
+    payload = ApplicationTokenPayload(
+        application_run_id=run.id,
+        workspace_id=workspace_id,
+        merchant_rule_id=rule_id,
+        rule_lock_version=rule.lock_version,
+        selected_transaction_ids=selected_ids,
+        state_digest=state_digest,
+        normalized_filters=normalized_filters,
+    )
+    token = create_application_token(_application_secret(secret_key), payload)
     return HistoricalApplicationPreview(
         run_id=run.id,
         token=token,
@@ -420,6 +424,7 @@ def confirm_historical_application(
     selection = canonical_application_selection(payload)
     confirmed = _confirmed_application_run(
         session,
+        payload.application_run_id,
         workspace_id,
         payload.state_digest,
         selection,
@@ -430,6 +435,7 @@ def confirm_historical_application(
 
     preview_run = _preview_application_run(
         session,
+        payload.application_run_id,
         workspace_id,
         payload.state_digest,
         selection,
@@ -1014,11 +1020,28 @@ def _categorization_state_json(state: _CategorizationState) -> dict[str, object]
 
 def _confirmed_application_run(
     session: Session,
+    application_run_id: int,
     workspace_id: int,
     digest: str,
     selection: Mapping[str, object],
     rule_lock_version: int,
 ) -> RuleApplicationRun | None:
+    exact = session.scalar(
+        select(RuleApplicationRun)
+        .where(
+            RuleApplicationRun.id == application_run_id,
+            RuleApplicationRun.workspace_id == workspace_id,
+            RuleApplicationRun.preview_digest == digest,
+            RuleApplicationRun.rule_lock_version == rule_lock_version,
+        )
+        .with_for_update()
+    )
+    if exact is None or exact.selection_json != selection:
+        return None
+    if exact.status == "confirmed":
+        return exact
+    if exact.status != "previewed":
+        return None
     runs = session.scalars(
         select(RuleApplicationRun)
         .where(
@@ -1035,21 +1058,22 @@ def _confirmed_application_run(
 
 def _preview_application_run(
     session: Session,
+    application_run_id: int,
     workspace_id: int,
     digest: str,
     selection: Mapping[str, object],
 ) -> RuleApplicationRun | None:
-    runs = session.scalars(
+    run = session.scalar(
         select(RuleApplicationRun)
         .where(
+            RuleApplicationRun.id == application_run_id,
             RuleApplicationRun.workspace_id == workspace_id,
             RuleApplicationRun.preview_digest == digest,
             RuleApplicationRun.status == "previewed",
         )
-        .order_by(RuleApplicationRun.id)
         .with_for_update()
     )
-    return next((run for run in runs if run.selection_json == selection), None)
+    return run if run is not None and run.selection_json == selection else None
 
 
 def _locked_rule(session: Session, workspace_id: int, rule_id: int) -> MerchantRule:
@@ -1966,23 +1990,7 @@ def _assign_compact_priorities(rules: list[MerchantRule]) -> None:
 
 def serialize_workspace_rule_mutation(session: Session, workspace_id: int) -> None:
     """Lock a workspace before any writer reads or mutates its rule collection."""
-    bind = session.get_bind()
-    if bind.dialect.name == "sqlite":
-        result = session.execute(
-            update(Workspace)
-            .where(Workspace.id == workspace_id)
-            .values(name=Workspace.name)
-            .execution_options(synchronize_session=False)
-        )
-        found = result.rowcount == 1
-    else:
-        found = (
-            session.scalar(
-                select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
-            )
-            is not None
-        )
-    if not found:
+    if not serialize_workspace_mutation(session, workspace_id):
         raise RuleNotFoundError("Rule not found.")
 
 

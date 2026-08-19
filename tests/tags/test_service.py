@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.db.models import MerchantRule, Tag, Transaction, Workspace
@@ -92,6 +92,38 @@ def test_deleting_custom_tag_removes_associations_not_transactions(
     assert session.get(Transaction, transaction.id) is transaction
     assert transaction.tags == []
     assert session.get(Tag, tag.id) is None
+
+
+def test_deleting_custom_tag_serializes_before_loading_rule_resources(
+    session: Session, workspace: Workspace
+) -> None:
+    """Break if tag deletion can race historical confirmation after its rule plan is loaded."""
+    tag = create_custom_tag(session, workspace.id, "Serialized deletion")
+    session.commit()
+    tag_id = tag.id
+    workspace_id = workspace.id
+    session.expunge_all()
+    statements: list[str] = []
+
+    @event.listens_for(session.get_bind(), "before_cursor_execute")
+    def capture_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(" ".join(statement.casefold().split()))
+
+    try:
+        delete_custom_tag(session, workspace_id, tag_id)
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", capture_statement)
+
+    workspace_locks = [
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update workspaces")
+    ]
+    assert workspace_locks, statements
+    tag_lookup_index = next(
+        index for index, statement in enumerate(statements) if statement.startswith("select tags")
+    )
+    assert workspace_locks[0] < tag_lookup_index
 
 
 def test_tag_assignment_is_workspace_scoped_and_idempotent(

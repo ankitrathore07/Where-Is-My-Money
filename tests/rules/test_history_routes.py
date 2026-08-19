@@ -590,8 +590,13 @@ async def test_signed_confirmation_applies_explicit_effects_and_retries_truthful
             scenario = _seed_history_scenario(factory, workspace_id)
             transaction_id = scenario.eligible_ids[0]
             before = _state(factory, transaction_id)
+            previewed = await client.post(
+                history_preview_url(workspace_id, scenario.rule_id),
+                data={**_filters(), "csrf_token": await csrf_token(client)},
+            )
             selected = await _selected_preview(client, scenario)
             token = _history_token(selected.text)
+            selected_run_id = _run_id(selected.text)
             payload = load_application_token(application.state.settings.secret_key, token)
             first = await client.post(
                 history_confirm_url(workspace_id),
@@ -621,7 +626,7 @@ async def test_signed_confirmation_applies_explicit_effects_and_retries_truthful
     finally:
         engine.dispose()
 
-    assert selected.status_code == 200
+    assert [previewed.status_code, selected.status_code] == [200, 200]
     assert "Confirm historical changes" in selected.text
     assert "date, description, amount, import job, and duplicate fingerprint stay unchanged" in (
         selected.text
@@ -633,6 +638,7 @@ async def test_signed_confirmation_applies_explicit_effects_and_retries_truthful
     assert second.status_code == 200
     assert "History application complete" in first.text
     assert "1</strong><span>transaction changed" in first.text
+    assert selected_run_id == confirmed[0][0]
     assert _run_id(first.text) == _run_id(second.text) == confirmed[0][0]
     assert len(confirmed) == 1
     assert confirmed[0][1:] == (user_id, 1)

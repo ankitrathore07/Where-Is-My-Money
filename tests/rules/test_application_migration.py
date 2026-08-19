@@ -75,6 +75,7 @@ def _canonical_selection(
 ) -> Mapping[str, object]:
     return application_tokens.canonical_application_selection(
         ApplicationTokenPayload(
+            application_run_id=1,
             workspace_id=1,
             merchant_rule_id=1,
             rule_lock_version=3,
@@ -361,6 +362,7 @@ def test_application_run_model_rejects_unvalidated_selection_json(
 def test_application_run_model_accepts_only_canonical_application_selection() -> None:
     """Break if the supported model path cannot persist the canonical token-derived selection."""
     payload = ApplicationTokenPayload(
+        application_run_id=1,
         workspace_id=1,
         merchant_rule_id=1,
         rule_lock_version=1,

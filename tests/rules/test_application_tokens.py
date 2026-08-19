@@ -19,11 +19,13 @@ DIGEST = "a" * 64
 
 def preview_payload(
     *,
+    application_run_id: int = 19,
     selected_transaction_ids: tuple[int, ...] = (11, 3),
     state_digest: str = DIGEST,
     normalized_filters: Mapping[str, object] | None = None,
 ) -> ApplicationTokenPayload:
     return ApplicationTokenPayload(
+        application_run_id=application_run_id,
         workspace_id=7,
         merchant_rule_id=13,
         rule_lock_version=2,
@@ -44,7 +46,8 @@ def preview_payload(
 
 def _signed_payload(**overrides: object) -> str:
     raw: dict[str, object] = {
-        "v": 1,
+        "v": 2,
+        "application_run_id": 19,
         "workspace_id": 7,
         "merchant_rule_id": 13,
         "rule_lock_version": 2,
@@ -62,6 +65,7 @@ def test_application_token_round_trips_canonical_payload_and_rejects_tampering()
     payload = load_application_token(SECRET, token)
 
     assert payload == ApplicationTokenPayload(
+        application_run_id=19,
         workspace_id=7,
         merchant_rule_id=13,
         rule_lock_version=2,
@@ -138,7 +142,9 @@ def test_application_token_canonicalization_is_deterministic(
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     [
-        ("v", 2),
+        ("v", 1),
+        ("application_run_id", True),
+        ("application_run_id", 0),
         ("workspace_id", True),
         ("workspace_id", 0),
         ("merchant_rule_id", False),

@@ -1,10 +1,97 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import User, Workspace, WorkspaceInvitation, WorkspaceMembership
+from app.db import session as db_session
+from app.db.models import (
+    Base,
+    MerchantRule,
+    RuleApplicationRun,
+    User,
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceMembership,
+)
+
+
+def test_init_engine_enforces_sqlite_foreign_keys_and_audit_actions(tmp_path: Path) -> None:
+    """Break if the application SQLite engine leaves audit ownership constraints dormant."""
+    previous_engine = db_session.engine
+    previous_factory = db_session.SessionLocal
+    engine = db_session.init_engine(f"sqlite:///{(tmp_path / 'application.db').as_posix()}")
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            owner = User(google_sub="fk-owner", email="fk-owner@example.com")
+            workspace = Workspace(name="Foreign keys", is_personal=True, owner=owner)
+            rule = MerchantRule(workspace=workspace, name="Audit rule")
+            session.add_all((workspace, rule))
+            session.flush()
+            run = RuleApplicationRun(
+                workspace=workspace,
+                merchant_rule=rule,
+                initiated_by_user=owner,
+                rule_name_snapshot=rule.name,
+                rule_lock_version=1,
+                status="previewed",
+                selection_json={
+                    "normalized_filters": {},
+                    "selected_transaction_ids": [],
+                },
+                preview_digest="a" * 64,
+                created_at=datetime.now(UTC),
+            )
+            session.add(run)
+            session.commit()
+            workspace_id = workspace.id
+            rule_id = rule.id
+            run_id = run.id
+
+        with engine.begin() as connection:
+            assert connection.scalar(text("PRAGMA foreign_keys")) == 1
+            with pytest.raises(IntegrityError):
+                connection.execute(
+                    text(
+                        "insert into rule_application_runs "
+                        "(workspace_id, initiated_by_user_id, rule_name_snapshot, "
+                        "rule_lock_version, status, selection_json, preview_digest) values "
+                        "(999, 999, 'invalid', 1, 'previewed', "
+                        '\'{"normalized_filters": {}, "selected_transaction_ids": []}\', '
+                        ":digest)"
+                    ),
+                    {"digest": "b" * 64},
+                )
+
+        with engine.begin() as connection:
+            connection.execute(
+                text("delete from merchant_rules where id = :rule_id"), {"rule_id": rule_id}
+            )
+            assert (
+                connection.scalar(
+                    text("select merchant_rule_id from rule_application_runs where id = :run_id"),
+                    {"run_id": run_id},
+                )
+                is None
+            )
+            connection.execute(
+                text("delete from workspaces where id = :workspace_id"),
+                {"workspace_id": workspace_id},
+            )
+            assert (
+                connection.scalar(
+                    text("select count(*) from rule_application_runs where id = :run_id"),
+                    {"run_id": run_id},
+                )
+                == 0
+            )
+    finally:
+        engine.dispose()
+        db_session.engine = previous_engine
+        db_session.SessionLocal = previous_factory
 
 
 def test_user_roundtrip(session: Session) -> None:

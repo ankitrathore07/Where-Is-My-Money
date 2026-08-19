@@ -14,7 +14,7 @@ from sqlalchemy.types import TypeDecorator
 
 APPLICATION_TOKEN_SALT = "where-is-my-money-rule-application"
 APPLICATION_TOKEN_MAX_AGE = 3600
-APPLICATION_TOKEN_VERSION = 1
+APPLICATION_TOKEN_VERSION = 2
 MAX_SELECTED_TRANSACTION_IDS = 500
 
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -23,6 +23,7 @@ _DIRECTIONS = {"all", "expense", "income", "zero"}
 _SELECTION_KEYS = {"normalized_filters", "selected_transaction_ids"}
 _PAYLOAD_KEYS = {
     "v",
+    "application_run_id",
     "workspace_id",
     "merchant_rule_id",
     "rule_lock_version",
@@ -49,6 +50,7 @@ def validate_application_digest(value: object) -> str:
 
 @dataclass(frozen=True)
 class ApplicationTokenPayload:
+    application_run_id: int
     workspace_id: int
     merchant_rule_id: int
     rule_lock_version: int
@@ -168,6 +170,7 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
         )
 
     version = raw["v"]
+    application_run_id = raw["application_run_id"]
     workspace_id = raw["workspace_id"]
     merchant_rule_id = raw["merchant_rule_id"]
     rule_lock_version = raw["rule_lock_version"]
@@ -177,6 +180,7 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
     valid = (
         type(version) is int
         and version == APPLICATION_TOKEN_VERSION
+        and _positive_int(application_run_id)
         and _positive_int(workspace_id)
         and _positive_int(merchant_rule_id)
         and _positive_int(rule_lock_version)
@@ -191,6 +195,7 @@ def _validated_payload(raw: object) -> ApplicationTokenPayload:
             "Application preview could not be verified; reload and try again."
         )
     return ApplicationTokenPayload(
+        application_run_id=application_run_id,
         workspace_id=workspace_id,
         merchant_rule_id=merchant_rule_id,
         rule_lock_version=rule_lock_version,
@@ -211,6 +216,7 @@ def canonical_application_selection(
     validated = _validated_payload(
         {
             "v": APPLICATION_TOKEN_VERSION,
+            "application_run_id": payload.application_run_id,
             "workspace_id": payload.workspace_id,
             "merchant_rule_id": payload.merchant_rule_id,
             "rule_lock_version": payload.rule_lock_version,
@@ -244,6 +250,7 @@ def create_application_token(secret_key: str, payload: ApplicationTokenPayload) 
     validated = _validated_payload(
         {
             "v": APPLICATION_TOKEN_VERSION,
+            "application_run_id": payload.application_run_id,
             "workspace_id": payload.workspace_id,
             "merchant_rule_id": payload.merchant_rule_id,
             "rule_lock_version": payload.rule_lock_version,
@@ -256,6 +263,7 @@ def create_application_token(secret_key: str, payload: ApplicationTokenPayload) 
     return serializer.dumps(
         {
             "v": APPLICATION_TOKEN_VERSION,
+            "application_run_id": validated.application_run_id,
             "workspace_id": validated.workspace_id,
             "merchant_rule_id": validated.merchant_rule_id,
             "rule_lock_version": validated.rule_lock_version,

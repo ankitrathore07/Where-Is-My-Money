@@ -985,6 +985,7 @@ def test_confirmed_digest_match_also_requires_the_exact_canonical_selection(
         secret_key=SECRET,
     )
     different_payload = ApplicationTokenPayload(
+        application_run_id=preview.run_id,
         workspace_id=workspace.id,
         merchant_rule_id=rule.id,
         rule_lock_version=rule.lock_version,
