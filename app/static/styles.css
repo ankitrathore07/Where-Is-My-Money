@@ -1332,6 +1332,10 @@ select:focus-visible {
   gap: 0.4rem;
 }
 
+.rule-page .compact-check {
+  white-space: normal;
+}
+
 .rule-builder-enhanced .rule-remove-fallback {
   display: none;
 }
