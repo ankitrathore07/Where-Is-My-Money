@@ -46,11 +46,13 @@
   {% if page and page.items %}
     <div class="panel table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Subscription</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Categorized by</th><th>Subscription</th><th>Amount</th><th></th></tr></thead>
         <tbody>{% for transaction in page.items %}<tr>
+          {% set explanation = transaction_explanations[transaction.id] %}
           <td>{{ transaction.date.date().isoformat() }}</td>
           <td>{{ transaction.description }}</td>
           <td>{{ transaction.category.name if transaction.category else "Uncategorized" }}</td>
+          <td>{% if explanation.rule_id %}<a href="/workspaces/{{ workspace.id }}/rules/{{ explanation.rule_id }}/edit">{{ explanation.rule_name }}</a><br><span class="muted">{{ explanation.source_label }}</span>{% else %}{{ explanation.source_label }}{% endif %}</td>
           <td>{{ "Yes" if transaction.is_subscription else "No" }}</td>
           <td class="{{ 'money-out' if transaction.amount_cents < 0 else 'money-in' }}">{{ format_money(transaction.amount_cents) }} <span class="visually-explained">{{ "Money out" if transaction.amount_cents < 0 else "Money in" }}</span></td>
           <td><a href="/workspaces/{{ workspace.id }}/transactions/{{ transaction.id }}/categorization">Edit</a></td>

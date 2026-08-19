@@ -6,6 +6,20 @@
       <p class="eyebrow">{{ workspace.name }}</p>
       <div class="rule-heading-row"><div><h1>Rules</h1><p>Workspace rules run from top to bottom before provider and built-in categorization.</p></div><a class="button" href="/workspaces/{{ workspace.id }}/rules/new">Create rule</a></div>
     </header>
+    {% if rule_metrics %}
+      <section class="panel rule-quality" aria-labelledby="rule-quality-heading">
+        <h2 id="rule-quality-heading">90-day workspace quality</h2>
+        <p class="muted">{{ rule_metrics.window_start.isoformat() }} through {{ rule_metrics.window_end.isoformat() }} · {{ rule_metrics.total_transactions }} transaction{% if rule_metrics.total_transactions != 1 %}s{% endif %}</p>
+        <dl>
+          <dt>Workspace-rule coverage</dt><dd>{{ format_rate(rule_metrics.workspace_rule_coverage_basis_points) }}</dd>
+          <dt>Provider/built-in coverage</dt><dd>{{ format_rate(rule_metrics.provider_builtin_coverage_basis_points) }}</dd>
+          <dt>AI coverage</dt><dd>{{ format_rate(rule_metrics.ai_coverage_basis_points) }}</dd>
+          <dt>Uncategorized rate</dt><dd>{{ format_rate(rule_metrics.uncategorized_rate_basis_points) }}</dd>
+          <dt>Manual correction rate</dt><dd>{{ format_rate(rule_metrics.manual_correction_rate_basis_points) }}</dd>
+          <dt>Conflicting-rule rate</dt><dd>{{ format_rate(rule_metrics.conflicting_rule_rate_basis_points) }}</dd>
+        </dl>
+      </section>
+    {% endif %}
     {% if rule_views %}
       <ol class="rule-list">
         {% for item in rule_views %}
@@ -16,6 +30,7 @@
             <p><strong>Then:</strong> {{ item.action_summary }}</p>
             {% if item.conflict_warning %}<p class="rule-warning">{{ item.conflict_warning }}</p>{% endif %}
             <p class="muted">{{ item.linked_count }} linked transaction{% if item.linked_count != 1 %}s{% endif %}{% if item.last_used %} · Last committed use {{ item.last_used.strftime("%Y-%m-%d") }}{% else %} · Not used by a committed transaction yet{% endif %}</p>
+            {% if item.metrics %}<p class="muted">90-day matches: {{ item.metrics.match_count_90d }} · Higher-priority conflicts: {{ item.metrics.higher_priority_conflict_count_90d }} · Protected manual matches: {{ item.metrics.protected_manual_match_count_90d }} · Later manual corrections: {{ format_rate(item.metrics.manual_correction_rate_basis_points) }}</p>{% endif %}
             <div class="rule-card-actions">
               <a href="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/edit">Edit</a>
               <a href="#simulator-heading">Test</a>
