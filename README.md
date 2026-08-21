@@ -440,6 +440,56 @@ does not use wildcards, fuzzy matching, or prefixes, and it does not rewrite old
 transactions. Import-review corrections are manual decisions but do not create
 future rules; use the transaction edit page when you want that behavior.
 
+### Manage typed workspace rules
+
+Open **Rules** from a workspace to create, preview, edit, enable or disable,
+duplicate, reorder, test, or delete deterministic rules. Rules run in displayed
+priority order. Conditions can inspect description or canonical merchant text,
+amount, transaction date, money direction, workspace account, and supported
+provider. Text predicates support exact, contains, starts-with, and ends-with.
+Amounts support equal, greater than, greater than or equal, less than, and less
+than or equal. Dates support on, before, and after. Nested
+all/any/not groups preserve their boolean meaning. Actions can set the friendly
+merchant, category, tags, Subscription state, and billing cadence.
+
+Create and edit operations show a read-only impact preview before signed
+confirmation. A deletion preview explains how many current winners would move
+to another workspace rule or a fallback. Optimistic versions and one
+workspace-scoped mutation lock prevent a stale edit, reorder, deletion, or
+historical confirmation from silently winning a race. Disabled or invalid
+rules do not run, and a missing referenced category, tag, or account fails
+closed for that rule.
+
+An import compiles the active workspace rule set once and evaluates all reviewed
+rows in memory; it never queries rules once per transaction. The committed row
+stores the winning rule ID when that exact reviewed decision is still valid.
+Transaction pages show the committed source and live rule link. If that rule is
+later deleted with `ON DELETE SET NULL`, the financial fields stay unchanged and
+the source is shown honestly as **Deleted workspace rule**.
+
+**Apply to history** is an explicit three-step workflow: filter, preview and
+select, then confirm the signed preview. Manual categorizations are protected.
+Each confirmation changes at most 500 selected transactions, recomputes the
+complete rule order and state digest, and either commits every selected change
+or none. Reusing a confirmed token returns the same audited result; a stale
+token returns a conflict without applying a partial update.
+
+Historical runs and categorization changes write redacted audit metadata only:
+workspace, transaction/rule IDs, source transitions, reason, counts, state, and
+timestamps. They do not copy merchant descriptions, amounts, categories, tags,
+filenames, or signed tokens into audit rows. The Rules page derives linked use,
+matches, conflicts, protected manual matches, source coverage, uncategorized
+rate, and manual-correction rate from bounded projected queries over a 90-day
+window. A metrics failure hides that optional panel without blocking rule
+management. Because committed transactions do not store their import-provider
+profile, provider-dependent historical match/conflict metrics are shown as
+unavailable instead of a misleading zero.
+
+The implementation was kept reviewable at four independently tested boundaries:
+`merchant-rules-pr1-ready` (typed engine), `merchant-rules-pr2-ready`
+(management UI), `merchant-rules-pr3-ready` (safe historical application), and
+`merchant-rules-pr4-ready` (events, explanations, metrics, and hardening).
+
 ## Run the checks
 
 On a clean machine, install the locked dependencies and Chromium once:

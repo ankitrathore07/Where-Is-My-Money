@@ -20,7 +20,14 @@ from app.db.models import (
 )
 from app.rules.evaluation import evaluate_condition
 from app.rules.loader import load_compiled_rule_set
-from app.rules.types import RuleContext
+from app.rules.types import (
+    AllCondition,
+    AnyCondition,
+    ConditionNode,
+    NotCondition,
+    PredicateCondition,
+    RuleContext,
+)
 
 
 @dataclass(frozen=True)
@@ -28,9 +35,9 @@ class RuleMetric:
     rule_id: int
     linked_transaction_count: int
     last_committed_use: datetime | None
-    match_count_90d: int
-    higher_priority_conflict_count_90d: int
-    protected_manual_match_count_90d: int
+    match_count_90d: int | None
+    higher_priority_conflict_count_90d: int | None
+    protected_manual_match_count_90d: int | None
     manual_correction_count_90d: int
     manual_correction_rate_basis_points: int
 
@@ -45,7 +52,8 @@ class RuleMetricsReport:
     ai_coverage_basis_points: int
     uncategorized_rate_basis_points: int
     manual_correction_rate_basis_points: int
-    conflicting_rule_rate_basis_points: int
+    conflicting_rule_rate_basis_points: int | None
+    limitation_codes: tuple[str, ...]
     rules: tuple[RuleMetric, ...]
 
 
@@ -53,6 +61,16 @@ def _basis_points(numerator: int, denominator: int) -> int:
     if denominator <= 0:
         return 0
     return (numerator * 10_000 + denominator // 2) // denominator
+
+
+def _references_provider(node: ConditionNode) -> bool:
+    if isinstance(node, PredicateCondition):
+        return node.field == "provider_key"
+    if isinstance(node, (AllCondition, AnyCondition)):
+        return any(_references_provider(child) for child in node.children)
+    if isinstance(node, NotCondition):
+        return _references_provider(node.child)
+    return False
 
 
 def build_rule_metrics(
@@ -72,6 +90,15 @@ def build_rule_metrics(
         )
     )
     compiled = load_compiled_rule_set(session, workspace_id)
+    provider_rule_ids = {rule.id for rule in compiled.rules if _references_provider(rule.condition)}
+    provider_rule_positions = {
+        index for index, rule in enumerate(compiled.rules) if rule.id in provider_rule_ids
+    }
+    conflict_unavailable_rule_ids = {
+        rule.id
+        for index, rule in enumerate(compiled.rules)
+        if any(provider_index < index for provider_index in provider_rule_positions)
+    }
     rows = tuple(
         session.execute(
             select(
@@ -133,6 +160,7 @@ def build_rule_metrics(
         matching_rule_ids = tuple(
             rule.id
             for rule in compiled.rules
+            if rule.id not in provider_rule_ids
             if evaluate_condition(rule.condition, context).matched
         )
         if len(matching_rule_ids) > 1:
@@ -178,11 +206,21 @@ def build_rule_metrics(
             select(
                 TransactionCategorizationEvent.transaction_id,
                 TransactionCategorizationEvent.previous_rule_id,
-            ).where(
+            )
+            .join(
+                Transaction,
+                and_(
+                    Transaction.id == TransactionCategorizationEvent.transaction_id,
+                    Transaction.workspace_id == workspace_id,
+                ),
+            )
+            .where(
                 TransactionCategorizationEvent.workspace_id == workspace_id,
                 TransactionCategorizationEvent.reason == "manual_correction",
                 TransactionCategorizationEvent.created_at >= start_at,
                 TransactionCategorizationEvent.created_at < end_at,
+                Transaction.date >= start_at,
+                Transaction.date < end_at,
             )
         )
     )
@@ -206,9 +244,15 @@ def build_rule_metrics(
                 rule_id=rule_id,
                 linked_transaction_count=linked_count,
                 last_committed_use=last_committed_use,
-                match_count_90d=match_counts[rule_id],
-                higher_priority_conflict_count_90d=conflict_counts[rule_id],
-                protected_manual_match_count_90d=protected_manual_counts[rule_id],
+                match_count_90d=(None if rule_id in provider_rule_ids else match_counts[rule_id]),
+                higher_priority_conflict_count_90d=(
+                    None
+                    if rule_id in provider_rule_ids or rule_id in conflict_unavailable_rule_ids
+                    else conflict_counts[rule_id]
+                ),
+                protected_manual_match_count_90d=(
+                    None if rule_id in provider_rule_ids else protected_manual_counts[rule_id]
+                ),
                 manual_correction_count_90d=correction_count,
                 manual_correction_rate_basis_points=_basis_points(
                     correction_count,
@@ -237,6 +281,9 @@ def build_rule_metrics(
             source_counts[CategorizationSource.UNCATEGORIZED.value], total
         ),
         manual_correction_rate_basis_points=_basis_points(len(corrected_transaction_ids), total),
-        conflicting_rule_rate_basis_points=_basis_points(conflicting_transactions, total),
+        conflicting_rule_rate_basis_points=(
+            None if provider_rule_ids else _basis_points(conflicting_transactions, total)
+        ),
+        limitation_codes=(("provider_provenance_unavailable",) if provider_rule_ids else ()),
         rules=tuple(metrics),
     )

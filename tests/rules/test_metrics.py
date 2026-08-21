@@ -146,3 +146,110 @@ def test_empty_workspace_metrics_are_zero_not_division_errors(
     assert report.uncategorized_rate_basis_points == 0
     assert report.manual_correction_rate_basis_points == 0
     assert report.conflicting_rule_rate_basis_points == 0
+
+
+def test_provider_dependent_order_metrics_are_marked_unavailable(
+    session: Session,
+    workspace: Workspace,
+) -> None:
+    category = Category(
+        workspace_id=workspace.id,
+        name="Provider metrics",
+        name_key="provider metrics",
+        kind="expense",
+    )
+    session.add(category)
+    session.flush()
+    provider_rule = MerchantRule(
+        workspace_id=workspace.id,
+        name="Provider first",
+        enabled=True,
+        priority=0,
+        condition_version=1,
+        condition_json={
+            "version": 1,
+            "type": "predicate",
+            "field": "provider_key",
+            "operator": "equal",
+            "value": "chase_bank_csv",
+        },
+        lock_version=1,
+        category_id=category.id,
+    )
+    lower = MerchantRule(
+        workspace_id=workspace.id,
+        name="Description second",
+        enabled=True,
+        priority=1,
+        condition_version=1,
+        condition_json={
+            "version": 1,
+            "type": "predicate",
+            "field": "description",
+            "operator": "contains",
+            "value": "MATCH",
+        },
+        lock_version=1,
+        category_id=category.id,
+    )
+    session.add_all([provider_rule, lower])
+    session.add(
+        Transaction(
+            workspace_id=workspace.id,
+            date=datetime(2026, 8, 1, tzinfo=UTC),
+            description="MATCH",
+            amount_cents=-100,
+            categorization_source=CategorizationSource.MANUAL.value,
+        )
+    )
+    session.flush()
+
+    report = build_rule_metrics(session, workspace.id, date(2026, 8, 15))
+    by_id = {item.rule_id: item for item in report.rules}
+
+    assert "provider_provenance_unavailable" in report.limitation_codes
+    assert report.conflicting_rule_rate_basis_points is None
+    assert by_id[provider_rule.id].match_count_90d is None
+    assert by_id[provider_rule.id].protected_manual_match_count_90d is None
+    assert by_id[lower.id].match_count_90d == 1
+    assert by_id[lower.id].higher_priority_conflict_count_90d is None
+
+
+def test_correction_rate_uses_the_same_transaction_date_cohort(
+    session: Session,
+    workspace: Workspace,
+) -> None:
+    recent = Transaction(
+        workspace_id=workspace.id,
+        date=datetime(2026, 8, 1, tzinfo=UTC),
+        description="RECENT",
+        amount_cents=-100,
+        categorization_source=CategorizationSource.UNCATEGORIZED.value,
+    )
+    old = Transaction(
+        workspace_id=workspace.id,
+        date=datetime(2026, 5, 17, tzinfo=UTC),
+        description="OLD",
+        amount_cents=-100,
+        categorization_source=CategorizationSource.MANUAL.value,
+    )
+    session.add_all([recent, old])
+    session.flush()
+    session.add(
+        TransactionCategorizationEvent(
+            workspace_id=workspace.id,
+            transaction_id=old.id,
+            previous_source=CategorizationSource.WORKSPACE_RULE.value,
+            new_source=CategorizationSource.MANUAL.value,
+            previous_rule_id=None,
+            new_rule_id=None,
+            reason="manual_correction",
+            created_at=datetime(2026, 8, 10, tzinfo=UTC),
+        )
+    )
+    session.flush()
+
+    report = build_rule_metrics(session, workspace.id, date(2026, 8, 15))
+
+    assert report.total_transactions == 1
+    assert report.manual_correction_rate_basis_points == 0

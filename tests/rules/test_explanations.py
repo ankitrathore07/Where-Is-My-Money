@@ -88,3 +88,47 @@ def test_deleted_rule_transaction_is_presented_truthfully(
     assert explanation.source_label == "Deleted workspace rule"
     assert explanation.rule_id is None
     assert "deleted" in explanation.detail.casefold()
+
+
+def test_cross_workspace_rule_link_never_exposes_foreign_rule_details(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+) -> None:
+    category = Category(
+        workspace_id=other_workspace.id,
+        name="Foreign",
+        name_key="foreign",
+        kind="expense",
+    )
+    session.add(category)
+    session.flush()
+    foreign_rule = MerchantRule(
+        workspace_id=other_workspace.id,
+        name="SECRET FOREIGN RULE",
+        enabled=True,
+        priority=0,
+        condition_version=1,
+        condition_json={
+            "version": 1,
+            "type": "predicate",
+            "field": "description",
+            "operator": "contains",
+            "value": "SECRET CONDITION",
+        },
+        lock_version=1,
+        category_id=category.id,
+    )
+    session.add(foreign_rule)
+    session.flush()
+    transaction = _transaction(
+        session,
+        workspace.id,
+        source=CategorizationSource.WORKSPACE_RULE,
+        rule=foreign_rule,
+    )
+
+    explanation = transaction_explanation(transaction)
+
+    assert explanation.source_label == "Deleted workspace rule"
+    assert "SECRET" not in repr(explanation)

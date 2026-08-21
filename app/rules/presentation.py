@@ -215,7 +215,7 @@ def transaction_explanation(transaction: Transaction) -> TransactionExplanation:
         )
     if source is CategorizationSource.WORKSPACE_RULE:
         rule = transaction.merchant_rule
-        if rule is None:
+        if rule is None or rule.workspace_id != transaction.workspace_id:
             return TransactionExplanation(
                 "Deleted workspace rule",
                 "The workspace rule was deleted; the committed categorization was preserved.",

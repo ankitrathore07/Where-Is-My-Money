@@ -1,15 +1,26 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, inspect, select
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.orm import Session
 
-from app.categorization.events import CategorizationEventReason, record_categorization_event
+from app.categorization.events import (
+    CategorizationEventReason,
+    CategorizationEventScopeError,
+    record_categorization_event,
+)
 from app.categorization.types import CategorizationSource
-from app.db.models import Transaction, TransactionCategorizationEvent, Workspace
+from app.db.models import (
+    Category,
+    MerchantRule,
+    Transaction,
+    TransactionCategorizationEvent,
+    Workspace,
+)
 
 
 def _config(engine: Engine) -> Config:
@@ -125,4 +136,59 @@ def test_record_categorization_event_skips_unchanged_attribution(
     )
 
     assert event is None
+    assert session.scalars(select(TransactionCategorizationEvent)).all() == []
+
+
+def test_record_categorization_event_rejects_cross_workspace_resources(
+    session: Session,
+    workspace: Workspace,
+    other_workspace: Workspace,
+) -> None:
+    foreign_transaction = _transaction(session, other_workspace.id)
+
+    with pytest.raises(CategorizationEventScopeError):
+        record_categorization_event(
+            session,
+            workspace_id=workspace.id,
+            transaction_id=foreign_transaction.id,
+            previous_source=CategorizationSource.UNCATEGORIZED,
+            new_source=CategorizationSource.MANUAL,
+            previous_rule_id=None,
+            new_rule_id=None,
+            reason=CategorizationEventReason.MANUAL_CORRECTION,
+        )
+
+    local_transaction = _transaction(session, workspace.id)
+    foreign_category = Category(
+        workspace_id=other_workspace.id,
+        name="Foreign",
+        name_key="foreign",
+        kind="expense",
+    )
+    session.add(foreign_category)
+    session.flush()
+    foreign_rule = MerchantRule(
+        workspace_id=other_workspace.id,
+        name="Foreign",
+        enabled=True,
+        priority=0,
+        condition_version=1,
+        condition_json={},
+        lock_version=1,
+        category_id=foreign_category.id,
+    )
+    session.add(foreign_rule)
+    session.flush()
+    with pytest.raises(CategorizationEventScopeError):
+        record_categorization_event(
+            session,
+            workspace_id=workspace.id,
+            transaction_id=local_transaction.id,
+            previous_source=CategorizationSource.WORKSPACE_RULE,
+            new_source=CategorizationSource.MANUAL,
+            previous_rule_id=foreign_rule.id,
+            new_rule_id=None,
+            reason=CategorizationEventReason.MANUAL_CORRECTION,
+        )
+
     assert session.scalars(select(TransactionCategorizationEvent)).all() == []

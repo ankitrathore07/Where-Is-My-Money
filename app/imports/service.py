@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.categorization.ai_graph import CompiledCategorizationGraph, suggest_category
 from app.categorization.ai_types import CategorySuggestion
-from app.categorization.events import CategorizationEventReason, record_categorization_event
+from app.categorization.events import (
+    CategorizationEventDraft,
+    CategorizationEventReason,
+    record_categorization_events,
+)
 from app.categorization.sanitization import sanitize_transaction_description
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationDecision, CategorizationSource
@@ -891,17 +895,21 @@ def commit_import(
     job.validation_errors = None
     try:
         session.flush()
-        for persisted in persisted_transactions:
-            record_categorization_event(
-                session,
-                workspace_id=job.workspace_id,
-                transaction_id=persisted.id,
-                previous_source=CategorizationSource.UNCATEGORIZED,
-                new_source=persisted.categorization_source,
-                previous_rule_id=None,
-                new_rule_id=persisted.merchant_rule_id,
-                reason=CategorizationEventReason.IMPORT_COMMIT,
-            )
+        record_categorization_events(
+            session,
+            tuple(
+                CategorizationEventDraft(
+                    workspace_id=job.workspace_id,
+                    transaction_id=persisted.id,
+                    previous_source=CategorizationSource.UNCATEGORIZED,
+                    new_source=persisted.categorization_source,
+                    previous_rule_id=None,
+                    new_rule_id=persisted.merchant_rule_id,
+                    reason=CategorizationEventReason.IMPORT_COMMIT,
+                )
+                for persisted in persisted_transactions
+            ),
+        )
         session.commit()
     except IntegrityError as exc:
         session.rollback()

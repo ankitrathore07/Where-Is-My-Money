@@ -14,7 +14,11 @@ from datetime import UTC, date, datetime, time
 from sqlalchemy import and_, case, delete, insert, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.categorization.events import CategorizationEventReason, record_categorization_event
+from app.categorization.events import (
+    CategorizationEventDraft,
+    CategorizationEventReason,
+    record_categorization_events,
+)
 from app.categorization.normalization import merchant_display_fallback, merchant_key
 from app.categorization.sanitization import sanitize_transaction_description
 from app.categorization.service import categorize_candidate
@@ -1155,17 +1159,21 @@ def _apply_historical_states(
                 for tag_id in tag_ids
             ],
         )
-    for item in states:
-        record_categorization_event(
-            session,
-            workspace_id=workspace_id,
-            transaction_id=item.transaction_id,
-            previous_source=item.current.categorization_source,
-            new_source=item.resulting.categorization_source,
-            previous_rule_id=item.current.merchant_rule_id,
-            new_rule_id=item.resulting.merchant_rule_id,
-            reason=CategorizationEventReason.HISTORICAL_APPLICATION,
-        )
+    record_categorization_events(
+        session,
+        tuple(
+            CategorizationEventDraft(
+                workspace_id=workspace_id,
+                transaction_id=item.transaction_id,
+                previous_source=item.current.categorization_source,
+                new_source=item.resulting.categorization_source,
+                previous_rule_id=item.current.merchant_rule_id,
+                new_rule_id=item.resulting.merchant_rule_id,
+                reason=CategorizationEventReason.HISTORICAL_APPLICATION,
+            )
+            for item in states
+        ),
+    )
 
 
 def _historical_application_result(run: RuleApplicationRun) -> HistoricalApplicationResult:

@@ -968,7 +968,9 @@ def _render_index(
             workspace,
             rule_views=_rule_views(session, workspace.id, rule_metrics),
             rule_metrics=rule_metrics,
-            format_rate=lambda basis_points: f"{basis_points / 100:.2f}%",
+            format_rate=lambda basis_points: (
+                f"{basis_points / 100:.2f}%" if basis_points is not None else "Unavailable"
+            ),
             simulation=simulation,
             simulation_view=(
                 _simulation_view(session, workspace.id, simulation) if simulation else None

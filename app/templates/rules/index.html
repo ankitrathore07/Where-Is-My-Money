@@ -18,6 +18,7 @@
           <dt>Manual correction rate</dt><dd>{{ format_rate(rule_metrics.manual_correction_rate_basis_points) }}</dd>
           <dt>Conflicting-rule rate</dt><dd>{{ format_rate(rule_metrics.conflicting_rule_rate_basis_points) }}</dd>
         </dl>
+        {% if "provider_provenance_unavailable" in rule_metrics.limitation_codes %}<p class="muted">Match and conflict metrics that depend on historical provider provenance are unavailable.</p>{% endif %}
       </section>
     {% endif %}
     {% if rule_views %}
@@ -30,7 +31,7 @@
             <p><strong>Then:</strong> {{ item.action_summary }}</p>
             {% if item.conflict_warning %}<p class="rule-warning">{{ item.conflict_warning }}</p>{% endif %}
             <p class="muted">{{ item.linked_count }} linked transaction{% if item.linked_count != 1 %}s{% endif %}{% if item.last_used %} · Last committed use {{ item.last_used.strftime("%Y-%m-%d") }}{% else %} · Not used by a committed transaction yet{% endif %}</p>
-            {% if item.metrics %}<p class="muted">90-day matches: {{ item.metrics.match_count_90d }} · Higher-priority conflicts: {{ item.metrics.higher_priority_conflict_count_90d }} · Protected manual matches: {{ item.metrics.protected_manual_match_count_90d }} · Later manual corrections: {{ format_rate(item.metrics.manual_correction_rate_basis_points) }}</p>{% endif %}
+            {% if item.metrics %}<p class="muted">90-day matches: {{ item.metrics.match_count_90d if item.metrics.match_count_90d is not none else "Unavailable" }} · Higher-priority conflicts: {{ item.metrics.higher_priority_conflict_count_90d if item.metrics.higher_priority_conflict_count_90d is not none else "Unavailable" }} · Protected manual matches: {{ item.metrics.protected_manual_match_count_90d if item.metrics.protected_manual_match_count_90d is not none else "Unavailable" }} · Later manual corrections: {{ format_rate(item.metrics.manual_correction_rate_basis_points) }}</p>{% endif %}
             <div class="rule-card-actions">
               <a href="/workspaces/{{ workspace.id }}/rules/{{ item.rule.id }}/edit">Edit</a>
               <a href="#simulator-heading">Test</a>

@@ -46,6 +46,45 @@ async def test_transaction_pages_explain_linked_and_deleted_workspace_rules(
                 )
                 session.add(rule)
                 session.flush()
+                foreign_owner = User(
+                    google_sub="foreign-attribution-owner",
+                    email="foreign-attribution@example.com",
+                )
+                session.add(foreign_owner)
+                session.flush()
+                foreign_workspace = Workspace(
+                    name="Foreign attribution",
+                    is_personal=True,
+                    owner_id=foreign_owner.id,
+                )
+                session.add(foreign_workspace)
+                session.flush()
+                foreign_category = Category(
+                    workspace_id=foreign_workspace.id,
+                    name="Foreign category",
+                    name_key="foreign category",
+                    kind="expense",
+                )
+                session.add(foreign_category)
+                session.flush()
+                foreign_rule = MerchantRule(
+                    workspace_id=foreign_workspace.id,
+                    name="SECRET FOREIGN ATTRIBUTION",
+                    enabled=True,
+                    priority=0,
+                    condition_version=1,
+                    condition_json={
+                        "version": 1,
+                        "type": "predicate",
+                        "field": "description",
+                        "operator": "contains",
+                        "value": "SECRET",
+                    },
+                    lock_version=1,
+                    category_id=foreign_category.id,
+                )
+                session.add(foreign_rule)
+                session.flush()
                 linked = Transaction(
                     workspace_id=workspace.id,
                     date=datetime(2026, 8, 1, tzinfo=UTC),
@@ -64,7 +103,16 @@ async def test_transaction_pages_explain_linked_and_deleted_workspace_rules(
                     categorization_source="workspace_rule",
                     merchant_rule_id=None,
                 )
-                session.add_all([linked, deleted])
+                corrupt_foreign_link = Transaction(
+                    workspace_id=workspace.id,
+                    date=datetime(2026, 8, 3, tzinfo=UTC),
+                    description="Foreign link must stay private",
+                    amount_cents=-700,
+                    category_id=category.id,
+                    categorization_source="workspace_rule",
+                    merchant_rule_id=foreign_rule.id,
+                )
+                session.add_all([linked, deleted, corrupt_foreign_link])
                 session.commit()
                 workspace_id = workspace.id
                 linked_id = linked.id
@@ -80,6 +128,7 @@ async def test_transaction_pages_explain_linked_and_deleted_workspace_rules(
     assert "Workspace rule" in listing.text
     assert "Deleted workspace rule" in listing.text
     assert "Coffee truth" in listing.text
+    assert "SECRET FOREIGN ATTRIBUTION" not in listing.text
     assert f"/workspaces/{workspace_id}/rules/{rule_id}/edit" in listing.text
     assert edit.status_code == 200
     assert "Categorized by" in edit.text
