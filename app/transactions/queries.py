@@ -214,7 +214,10 @@ def list_transactions(
     items = tuple(
         session.scalars(
             select(Transaction)
-            .options(joinedload(Transaction.category))
+            .options(
+                joinedload(Transaction.category),
+                joinedload(Transaction.merchant_rule),
+            )
             .where(*predicates)
             .order_by(Transaction.date.desc(), Transaction.id.desc())
             .limit(filters.page_size)

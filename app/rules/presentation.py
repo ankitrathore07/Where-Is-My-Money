@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.categorization.types import CategorizationSource
+from app.db.models import Transaction
 from app.rules.evaluation import ConditionResult
 from app.rules.types import (
     AllCondition,
@@ -14,6 +16,7 @@ from app.rules.types import (
     NotCondition,
     PredicateCondition,
 )
+from app.rules.validation import RuleConditionValidationError, parse_condition
 
 
 class RuleActions(Protocol):
@@ -33,6 +36,17 @@ class RuleExplanationLine:
     depth: int
     text: str
     matched: bool
+
+
+@dataclass(frozen=True)
+class TransactionExplanation:
+    """Truthful, link-ready attribution for a persisted transaction."""
+
+    source_label: str
+    detail: str
+    rule_id: int | None = None
+    rule_name: str | None = None
+    condition_summary: str | None = None
 
 
 _FIELD_LABELS = {
@@ -188,6 +202,68 @@ def describe_evaluation(
             )
         )
     return tuple(lines)
+
+
+def transaction_explanation(transaction: Transaction) -> TransactionExplanation:
+    """Describe persisted attribution without pretending a deleted rule still exists."""
+    try:
+        source = CategorizationSource(transaction.categorization_source)
+    except ValueError:
+        return TransactionExplanation(
+            "Unknown categorization source",
+            "The stored categorization source is no longer recognized.",
+        )
+    if source is CategorizationSource.WORKSPACE_RULE:
+        rule = transaction.merchant_rule
+        if rule is None or rule.workspace_id != transaction.workspace_id:
+            return TransactionExplanation(
+                "Deleted workspace rule",
+                "The workspace rule was deleted; the committed categorization was preserved.",
+            )
+        payload: object = rule.condition_json
+        if payload == {} and rule.merchant_pattern:
+            payload = {
+                "version": 1,
+                "type": "predicate",
+                "field": "merchant_key",
+                "operator": "exact",
+                "value": rule.merchant_pattern,
+            }
+        try:
+            condition_summary = describe_condition(parse_condition(payload))
+        except RuleConditionValidationError:
+            condition_summary = "Saved condition is no longer available"
+        return TransactionExplanation(
+            "Workspace rule",
+            f"Categorized by workspace rule “{rule.name}”.",
+            rule_id=rule.id,
+            rule_name=rule.name,
+            condition_summary=condition_summary,
+        )
+    labels = {
+        CategorizationSource.MANUAL: (
+            "Manual correction",
+            "Categorized manually and protected from automatic rule changes.",
+        ),
+        CategorizationSource.PROVIDER_RULE: (
+            "Provider rule",
+            "Categorized by a provider-specific rule.",
+        ),
+        CategorizationSource.BUILTIN_RULE: (
+            "Built-in rule",
+            "Categorized by a built-in fallback rule.",
+        ),
+        CategorizationSource.AI_SUGGESTION: (
+            "AI suggestion",
+            "Categorized from a reviewed AI suggestion.",
+        ),
+        CategorizationSource.UNCATEGORIZED: (
+            "Uncategorized",
+            "No committed categorization rule has been attributed.",
+        ),
+    }
+    label, detail = labels[source]
+    return TransactionExplanation(label, detail)
 
 
 def _describe_predicate(

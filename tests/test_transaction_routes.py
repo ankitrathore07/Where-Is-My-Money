@@ -5,13 +5,134 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.db.models import Category, Transaction, User, Workspace
+from app.db.models import Category, MerchantRule, Transaction, User, Workspace
 from tests.route_helpers import build_route_test_app, complete_sign_in
 
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_transaction_pages_explain_linked_and_deleted_workspace_rules(
+    tmp_path: Path,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://testserver"
+        ) as client:
+            await complete_sign_in(client)
+            with factory() as session:
+                workspace = session.scalar(select(Workspace))
+                category = session.scalar(select(Category))
+                assert workspace is not None and category is not None
+                rule = MerchantRule(
+                    workspace_id=workspace.id,
+                    name="Coffee truth",
+                    enabled=True,
+                    priority=0,
+                    condition_version=1,
+                    condition_json={
+                        "version": 1,
+                        "type": "predicate",
+                        "field": "description",
+                        "operator": "contains",
+                        "value": "COFFEE",
+                    },
+                    lock_version=1,
+                    category_id=category.id,
+                )
+                session.add(rule)
+                session.flush()
+                foreign_owner = User(
+                    google_sub="foreign-attribution-owner",
+                    email="foreign-attribution@example.com",
+                )
+                session.add(foreign_owner)
+                session.flush()
+                foreign_workspace = Workspace(
+                    name="Foreign attribution",
+                    is_personal=True,
+                    owner_id=foreign_owner.id,
+                )
+                session.add(foreign_workspace)
+                session.flush()
+                foreign_category = Category(
+                    workspace_id=foreign_workspace.id,
+                    name="Foreign category",
+                    name_key="foreign category",
+                    kind="expense",
+                )
+                session.add(foreign_category)
+                session.flush()
+                foreign_rule = MerchantRule(
+                    workspace_id=foreign_workspace.id,
+                    name="SECRET FOREIGN ATTRIBUTION",
+                    enabled=True,
+                    priority=0,
+                    condition_version=1,
+                    condition_json={
+                        "version": 1,
+                        "type": "predicate",
+                        "field": "description",
+                        "operator": "contains",
+                        "value": "SECRET",
+                    },
+                    lock_version=1,
+                    category_id=foreign_category.id,
+                )
+                session.add(foreign_rule)
+                session.flush()
+                linked = Transaction(
+                    workspace_id=workspace.id,
+                    date=datetime(2026, 8, 1, tzinfo=UTC),
+                    description="Coffee linked",
+                    amount_cents=-500,
+                    category_id=category.id,
+                    categorization_source="workspace_rule",
+                    merchant_rule_id=rule.id,
+                )
+                deleted = Transaction(
+                    workspace_id=workspace.id,
+                    date=datetime(2026, 8, 2, tzinfo=UTC),
+                    description="Coffee preserved",
+                    amount_cents=-600,
+                    category_id=category.id,
+                    categorization_source="workspace_rule",
+                    merchant_rule_id=None,
+                )
+                corrupt_foreign_link = Transaction(
+                    workspace_id=workspace.id,
+                    date=datetime(2026, 8, 3, tzinfo=UTC),
+                    description="Foreign link must stay private",
+                    amount_cents=-700,
+                    category_id=category.id,
+                    categorization_source="workspace_rule",
+                    merchant_rule_id=foreign_rule.id,
+                )
+                session.add_all([linked, deleted, corrupt_foreign_link])
+                session.commit()
+                workspace_id = workspace.id
+                linked_id = linked.id
+                rule_id = rule.id
+            listing = await client.get(f"/workspaces/{workspace_id}/transactions")
+            edit = await client.get(
+                f"/workspaces/{workspace_id}/transactions/{linked_id}/categorization"
+            )
+    finally:
+        engine.dispose()
+
+    assert listing.status_code == 200
+    assert "Workspace rule" in listing.text
+    assert "Deleted workspace rule" in listing.text
+    assert "Coffee truth" in listing.text
+    assert "SECRET FOREIGN ATTRIBUTION" not in listing.text
+    assert f"/workspaces/{workspace_id}/rules/{rule_id}/edit" in listing.text
+    assert edit.status_code == 200
+    assert "Categorized by" in edit.text
+    assert "description contains “COFFEE”" in edit.text
 
 
 @pytest.mark.anyio

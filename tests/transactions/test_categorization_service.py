@@ -8,7 +8,15 @@ from sqlalchemy.orm import Session
 import app.transactions.service as transaction_service
 from app.categorization.service import categorize_candidate
 from app.categorization.types import CategorizationSource
-from app.db.models import Category, MerchantRule, Tag, Transaction, User, Workspace
+from app.db.models import (
+    Category,
+    MerchantRule,
+    Tag,
+    Transaction,
+    TransactionCategorizationEvent,
+    User,
+    Workspace,
+)
 from app.imports.types import NormalizedTransaction
 from app.transactions.service import (
     CategoryNotAccessibleError,
@@ -74,6 +82,12 @@ def test_manual_edit_changes_transaction_but_not_description(
     assert updated.category_id == selected.id
     assert updated.is_subscription is False
     assert updated.categorization_source == "manual"
+    event = session.scalar(select(TransactionCategorizationEvent))
+    assert event is not None
+    assert event.transaction_id == updated.id
+    assert event.previous_source == "uncategorized"
+    assert event.new_source == "manual"
+    assert event.reason == "manual_correction"
     assert session.scalar(select(func.count()).select_from(MerchantRule)) == 0
 
 

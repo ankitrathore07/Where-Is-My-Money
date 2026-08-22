@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.categorization.events import CategorizationEventReason, record_categorization_event
 from app.categorization.normalization import MAX_MERCHANT_LENGTH, merchant_key
 from app.categorization.types import CategorizationSource
 from app.db.models import Category, MerchantRule, Transaction
@@ -192,8 +193,10 @@ def manually_categorize_transaction(
         session,
         workspace_id,
         transaction_id,
-        lock=save_for_future,
+        lock=True,
     )
+    previous_source = transaction.categorization_source
+    previous_rule_id = transaction.merchant_rule_id
 
     category = session.scalar(
         select(Category).where(
@@ -215,6 +218,7 @@ def manually_categorize_transaction(
     transaction.is_subscription = is_subscription
     transaction.billing_period_months = billing_period_months
     transaction.categorization_source = CategorizationSource.MANUAL.value
+    transaction.merchant_rule_id = None
     replace_transaction_tags(
         session,
         workspace_id,
@@ -235,4 +239,15 @@ def manually_categorize_transaction(
         )
     else:
         session.flush()
+    record_categorization_event(
+        session,
+        workspace_id=workspace_id,
+        transaction_id=transaction.id,
+        previous_source=previous_source,
+        new_source=CategorizationSource.MANUAL,
+        previous_rule_id=previous_rule_id,
+        new_rule_id=None,
+        reason=CategorizationEventReason.MANUAL_CORRECTION,
+    )
+    session.flush()
     return transaction

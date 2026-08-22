@@ -11,7 +11,7 @@ import uvicorn
 from playwright.sync_api import BrowserContext, Page, expect, sync_playwright
 from sqlalchemy import select
 
-from app.db.models import Category, Transaction, Workspace
+from app.db.models import Category, MerchantRule, Transaction, Workspace
 from app.rules.service import RuleDraft, create_rule
 from app.rules.types import PredicateCondition
 from tests.route_helpers import build_route_test_app
@@ -186,6 +186,17 @@ def test_keyboard_create_preview_confirmation_and_row_enhancement(
         page.get_by_role("button", name="Confirm and save rule").click()
         expect(page).to_have_url(re.compile(r"/rules$"))
         expect(page.get_by_text("Keyboard coffee", exact=True)).to_be_visible()
+
+        edit = page.get_by_role("link", name="Edit")
+        edit.focus()
+        edit.press("Enter")
+        expect(page.get_by_role("heading", name="Edit rule")).to_be_visible()
+        page.get_by_label("Rule name").fill("Keyboard coffee edited")
+        page.get_by_role("button", name="Preview rule").click()
+        expect(page.get_by_role("heading", name="Review rule impact")).to_be_visible()
+        page.get_by_role("button", name="Confirm and save rule").click()
+        expect(page).to_have_url(re.compile(r"/rules$"))
+        expect(page.get_by_text("Keyboard coffee edited", exact=True)).to_be_visible()
         assert errors == []
 
     _run_browser_scenario(scenario)
@@ -291,3 +302,102 @@ def test_rules_pages_do_not_overflow_supported_viewports(
         assert overflowing_rule_checks == []
 
     _run_browser_scenario(scenario, viewport=viewport)
+
+
+def test_metrics_disabled_state_and_deleted_attribution_are_truthful_on_mobile(
+    live_rules_app: tuple[str, object],
+) -> None:
+    """Break if the final insight UI overflows or invents a live rule after deletion."""
+
+    def scenario(page: Page, context: BrowserContext) -> None:
+        base_url, workspace_id = _sign_in_and_seed(page, context, live_rules_app)
+        _, factory = live_rules_app
+        rule_id, transaction_id, _category_id = _seed_history_browser_scenario(
+            factory, workspace_id
+        )
+        page.goto(f"{base_url}/workspaces/{workspace_id}/rules")
+        expect(page.get_by_role("heading", name="90-day workspace quality")).to_be_visible()
+        for label in (
+            "Workspace-rule coverage",
+            "Provider/built-in coverage",
+            "AI coverage",
+            "Uncategorized rate",
+            "Manual correction rate",
+            "Conflicting-rule rate",
+        ):
+            expect(page.get_by_text(label, exact=True)).to_be_visible()
+        metrics = page.locator(".rule-card .muted").filter(has_text="90-day matches")
+        expect(metrics).to_contain_text("Higher-priority conflicts")
+        expect(metrics).to_contain_text("Protected manual matches")
+        expect(metrics).to_contain_text("Later manual corrections")
+        assert (
+            page.evaluate(
+                "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+            )
+            is False
+        )
+
+        with factory() as session:
+            rule = session.get(MerchantRule, rule_id)
+            transaction = session.get(Transaction, transaction_id)
+            assert rule is not None
+            assert transaction is not None
+            rule.enabled = False
+            transaction.categorization_source = "workspace_rule"
+            transaction.merchant_rule_id = rule.id
+            session.commit()
+        page.reload()
+        expect(page.get_by_text("Disabled", exact=True)).to_be_visible()
+        expect(
+            page.get_by_role("link", name="Apply Browser coffee history to history")
+        ).to_have_count(0)
+
+        with factory() as session:
+            rule = session.get(MerchantRule, rule_id)
+            assert rule is not None
+            session.delete(rule)
+            session.commit()
+        page.goto(f"{base_url}/workspaces/{workspace_id}/transactions")
+        expect(page.get_by_text("Deleted workspace rule", exact=True)).to_be_visible()
+        assert (
+            page.evaluate(
+                "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+            )
+            is False
+        )
+
+    _run_browser_scenario(scenario, viewport={"width": 390, "height": 844})
+
+
+def test_history_confirmation_surfaces_a_stale_rule_without_mutating(
+    live_rules_app: tuple[str, object],
+) -> None:
+    """Break if browser confirmation hides a stale conflict or partly applies it."""
+
+    def scenario(page: Page, context: BrowserContext) -> None:
+        base_url, workspace_id = _sign_in_and_seed(page, context, live_rules_app)
+        _, factory = live_rules_app
+        rule_id, transaction_id, _category_id = _seed_history_browser_scenario(
+            factory, workspace_id
+        )
+        page.goto(f"{base_url}/workspaces/{workspace_id}/rules/{rule_id}/apply")
+        page.get_by_role("button", name="Preview eligible transactions").click()
+        page.get_by_role("button", name="Review selected transactions").click()
+
+        with factory() as session:
+            rule = session.get(MerchantRule, rule_id)
+            assert rule is not None
+            rule.normalized_merchant = "Concurrent change"
+            rule.lock_version += 1
+            session.commit()
+        page.get_by_role("button", name="Apply 1 transaction").click()
+        expect(page.get_by_text("409", exact=True)).to_be_visible()
+        expect(page.get_by_text("The request could not be completed.", exact=True)).to_be_visible()
+
+        with factory() as session:
+            transaction = session.get(Transaction, transaction_id)
+            assert transaction is not None
+            assert transaction.normalized_merchant == "Old merchant"
+            assert transaction.categorization_source == "uncategorized"
+
+    _run_browser_scenario(scenario)

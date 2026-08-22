@@ -46,6 +46,28 @@ def test_operations_documentation_covers_required_recovery_paths() -> None:
     assert "alembic upgrade head" in operations
 
 
+def test_workspace_rule_documentation_covers_final_safety_and_metric_boundaries() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+
+    for required in (
+        "500",
+        "manual categorizations",
+        "90-day",
+        "redacted",
+        "merchant-rules-pr4-ready",
+    ):
+        assert required.casefold() in readme.casefold()
+    for required in (
+        "transaction_categorization_events",
+        "ON DELETE SET NULL",
+        "signed preview",
+        "bounded",
+        "metrics failure",
+    ):
+        assert required.casefold() in architecture.casefold()
+
+
 @pytest.mark.parametrize(
     "document",
     ["architecture.md", "operations.md", "troubleshooting.md", "learning-path.md"],

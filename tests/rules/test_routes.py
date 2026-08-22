@@ -7,7 +7,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from itsdangerous.timed import TimestampSigner
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
+import app.rules.routes as rule_routes
 from app.db.models import Category, MerchantRule, Tag, Transaction, User, Workspace
 from app.rules.service import RuleDraft, create_rule
 from app.rules.types import AllCondition, AnyCondition, NotCondition, PredicateCondition
@@ -897,3 +899,54 @@ async def test_foreign_rule_ids_return_not_found_for_every_lifecycle_route(tmp_p
     assert [response.status_code for response in responses] == [404] * 8
     assert all("Secret foreign rule" not in response.text for response in responses)
     assert foreign_name == "Secret foreign rule"
+
+
+@pytest.mark.anyio
+async def test_rule_index_renders_bounded_workspace_and_per_rule_metrics(tmp_path: Path) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with signed_in_client(application) as client:
+            workspace_id = workspace_id_for(factory)
+            category_id = _seed_rule_choices(factory, workspace_id, transactions=2)
+            rule_id = _seed_rule(factory, workspace_id, category_id, name="Measured coffee")
+            with factory() as session:
+                transaction = session.scalar(select(Transaction).order_by(Transaction.id))
+                assert transaction is not None
+                transaction.categorization_source = "workspace_rule"
+                transaction.merchant_rule_id = rule_id
+                session.commit()
+            response = await client.get(f"/workspaces/{workspace_id}/rules")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert "90-day workspace quality" in response.text
+    assert "Workspace-rule coverage" in response.text
+    assert "50.00%" in response.text
+    assert "90-day matches: 2" in response.text
+    assert "Protected manual matches: 0" in response.text
+
+
+@pytest.mark.anyio
+async def test_rule_index_omits_failed_metrics_without_blocking_management(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, factory, engine = build_route_test_app(tmp_path)
+    try:
+        async with signed_in_client(application) as client:
+            workspace_id = workspace_id_for(factory)
+            category_id = _seed_rule_choices(factory, workspace_id)
+            _seed_rule(factory, workspace_id, category_id, name="Still manageable")
+
+            def fail_metrics(*_args, **_kwargs):
+                raise SQLAlchemyError("synthetic metrics outage")
+
+            monkeypatch.setattr(rule_routes, "build_rule_metrics", fail_metrics)
+            response = await client.get(f"/workspaces/{workspace_id}/rules")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == 200
+    assert "Still manageable" in response.text
+    assert "90-day workspace quality" not in response.text

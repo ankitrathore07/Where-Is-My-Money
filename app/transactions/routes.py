@@ -16,6 +16,7 @@ from app.categories.service import list_accessible_categories
 from app.core.middleware import require_csrf
 from app.db.models import Category, User, Workspace
 from app.db.session import get_db
+from app.rules.presentation import transaction_explanation
 from app.tags.service import TagNotFoundError, list_accessible_tags
 from app.transactions.queries import (
     FilterValidationError,
@@ -134,6 +135,11 @@ async def transaction_list(
             "previous_query": previous_query,
             "next_query": next_query,
             "format_money": _format_money,
+            "transaction_explanations": {
+                transaction.id: transaction_explanation(transaction) for transaction in page.items
+            }
+            if page is not None
+            else {},
             "already_imported": request.query_params.get("already_imported") == "1",
             "semantic_filter_label": (
                 "categorized spending"
@@ -176,6 +182,7 @@ def _categorization_response(
             "csrf_token": request.state.csrf_token,
             "workspace": workspace,
             "transaction": transaction,
+            "transaction_explanation": transaction_explanation(transaction),
             "format_money": _format_money,
             "choices": list_accessible_categories(session, workspace.id),
             "tag_choices": list_accessible_tags(session, workspace.id),

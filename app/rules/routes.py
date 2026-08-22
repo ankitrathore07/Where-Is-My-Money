@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -30,6 +31,7 @@ from app.rules.application_tokens import (
     MAX_SELECTED_TRANSACTION_IDS,
     RuleApplicationTokenError,
 )
+from app.rules.metrics import RuleMetricsReport, build_rule_metrics
 from app.rules.presentation import describe_actions, describe_condition, describe_evaluation
 from app.rules.service import (
     HistoricalApplicationPreview,
@@ -830,7 +832,11 @@ def _render_preview(
     )
 
 
-def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
+def _rule_views(
+    session: Session,
+    workspace_id: int,
+    metrics_report: RuleMetricsReport | None = None,
+) -> list[dict[str, object]]:
     rules = list_rules(session, workspace_id)
     categories = list_accessible_categories(session, workspace_id)
     category_names = {
@@ -856,6 +862,11 @@ def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
             .group_by(Transaction.merchant_rule_id)
         )
     }
+    metrics_by_rule = (
+        {metric.rule_id: metric for metric in metrics_report.rules}
+        if metrics_report is not None
+        else {}
+    )
     views = []
     seen_enabled_conditions: set[str] = set()
     for rule in rules:
@@ -875,6 +886,10 @@ def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
             action_summary = "Action details are unavailable until the rule is repaired."
             repair_error = "Needs repair"
         linked_count, last_used = usage.get(rule.id, (0, None))
+        rule_metrics = metrics_by_rule.get(rule.id)
+        if rule_metrics is not None:
+            linked_count = rule_metrics.linked_transaction_count
+            last_used = rule_metrics.last_committed_use
         views.append(
             {
                 "rule": rule,
@@ -882,6 +897,7 @@ def _rule_views(session: Session, workspace_id: int) -> list[dict[str, object]]:
                 "action_summary": action_summary,
                 "linked_count": linked_count,
                 "last_used": last_used,
+                "metrics": rule_metrics,
                 "conflict_warning": (
                     "Detected identical condition in an earlier enabled rule."
                     if rule.enabled and condition_key in seen_enabled_conditions
@@ -938,6 +954,11 @@ def _render_index(
     simulator_error: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
+    try:
+        rule_metrics = build_rule_metrics(session, workspace.id, date.today())
+    except SQLAlchemyError:
+        session.rollback()
+        rule_metrics = None
     return templates.TemplateResponse(
         request=request,
         name="rules/index.html",
@@ -945,7 +966,11 @@ def _render_index(
             request,
             user,
             workspace,
-            rule_views=_rule_views(session, workspace.id),
+            rule_views=_rule_views(session, workspace.id, rule_metrics),
+            rule_metrics=rule_metrics,
+            format_rate=lambda basis_points: (
+                f"{basis_points / 100:.2f}%" if basis_points is not None else "Unavailable"
+            ),
             simulation=simulation,
             simulation_view=(
                 _simulation_view(session, workspace.id, simulation) if simulation else None

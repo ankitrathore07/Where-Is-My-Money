@@ -15,6 +15,7 @@
     <dl>
       <dt>Statement description</dt><dd>{{ transaction.description }}</dd>
       <dt>Amount</dt><dd>{{ format_money(transaction.amount_cents) if format_money is defined else transaction.amount_cents }}</dd>
+      <dt>Categorized by</dt><dd>{% if transaction_explanation.rule_id %}<a href="/workspaces/{{ workspace.id }}/rules/{{ transaction_explanation.rule_id }}/edit">{{ transaction_explanation.rule_name }}</a> · {{ transaction_explanation.source_label }}{% else %}{{ transaction_explanation.source_label }}{% endif %}<br><span class="muted">{{ transaction_explanation.detail }}</span>{% if transaction_explanation.condition_summary %}<br><span class="muted">Current rule condition: {{ transaction_explanation.condition_summary }}</span>{% endif %}</dd>
     </dl>
     <form action="/workspaces/{{ workspace.id }}/transactions/{{ transaction.id }}/categorization" method="post" class="stacked-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
