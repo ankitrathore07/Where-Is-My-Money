@@ -82,9 +82,12 @@ def parse_csv_bytes(data: bytes) -> CsvDocument:
                 continue
             _validate_field_lengths(raw_row)
             if len(raw_row) > len(headers):
-                raise CsvValidationError(
-                    "wide_row", f"Row {source_line} has more fields than the header."
-                )
+                surplus_values = raw_row[len(headers) :]
+                if any(value.strip() for value in surplus_values):
+                    raise CsvValidationError(
+                        "wide_row", f"Row {source_line} has more fields than the header."
+                    )
+                raw_row = raw_row[: len(headers)]
             if len(raw_row) < len(headers):
                 raise CsvValidationError(
                     "short_row", f"Row {source_line} has fewer fields than the header."
