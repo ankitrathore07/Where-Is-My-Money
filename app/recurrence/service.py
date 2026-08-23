@@ -53,8 +53,7 @@ def _billing_day_matches(earlier: date, later: date) -> bool:
 
 def _period_matches(dates: tuple[date, ...], period_months: int) -> bool:
     return all(
-        _months_between(earlier, later) == period_months
-        and _billing_day_matches(earlier, later)
+        _months_between(earlier, later) == period_months and _billing_day_matches(earlier, later)
         for earlier, later in zip(dates, dates[1:], strict=False)
     )
 
