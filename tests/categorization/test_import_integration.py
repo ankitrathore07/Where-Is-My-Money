@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -467,6 +468,63 @@ def test_builtin_decision_is_visible_in_import_preview(
     assert row.category_name == "Entertainment"
     assert row.is_subscription is True
     assert row.categorization_source == "builtin_rule"
+
+
+def test_import_review_infers_recurring_cadence_from_transaction_history(
+    session: Session, workspace: Workspace, tmp_path: Path
+) -> None:
+    categories = _seed_builtins(session)
+    session.add_all(
+        [
+            Transaction(
+                workspace_id=workspace.id,
+                date=datetime(2026, 1, 15, tzinfo=UTC),
+                description="STATE FARM",
+                normalized_merchant="State Farm",
+                amount_cents=-12_000,
+                category_id=categories["Insurance"].id,
+                categorization_source="builtin_rule",
+                is_subscription=False,
+            ),
+            Transaction(
+                workspace_id=workspace.id,
+                date=datetime(2026, 4, 15, tzinfo=UTC),
+                description="STATE FARM",
+                normalized_merchant="State Farm",
+                amount_cents=-12_000,
+                category_id=categories["Insurance"].id,
+                categorization_source="builtin_rule",
+                is_subscription=False,
+            ),
+        ]
+    )
+    session.commit()
+    store = LocalUploadStore(tmp_path)
+    result = create_csv_import(
+        session,
+        store,
+        workspace,
+        BytesIO(b"Date,Description,Amount\n07/15/2026,STATE FARM,-120.00\n"),
+        "retain",
+    )
+    save_mapping(
+        session,
+        store,
+        result.job,
+        {
+            "date_column": "Date",
+            "description_column": "Description",
+            "amount_mode": "single",
+            "amount_column": "Amount",
+            "date_format": "mdy",
+            "amount_sign": "as_is",
+        },
+    )
+
+    row = build_review(session, store, result.job).rows[0]
+
+    assert row.billing_period_months == 3
+    assert row.is_subscription is False
 
 
 def test_workspace_rule_overrides_builtin_without_cross_workspace_leakage(

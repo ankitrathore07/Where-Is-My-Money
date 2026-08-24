@@ -393,8 +393,16 @@ Every transaction has one primary category and a separate **Subscription**
 label. For example, Netflix can be **Entertainment** and Subscription at the
 same time. Subscription means an app or service membership; it does not mean
 every repeating bill. Rent, electricity, insurance, and similar recurring bills
-keep their normal categories without the Subscription label. Later reporting
-will detect recurrence from transaction cadence.
+keep their normal categories without the Subscription label. Reporting uses
+transaction cadence separately from the Subscription label.
+
+Import review automatically suggests a monthly, quarterly, six-month, or yearly
+billing cadence after finding at least three expense transactions with the same
+normalized merchant, amounts within $1 or 2%, and consistent calendar timing.
+Detection considers both previously imported transactions and other rows in the
+current import. Income and non-expense categories are excluded, inferred cadence
+never turns a recurring bill into a Subscription, and every suggestion remains
+editable before commit.
 
 The built-in categories are Income, Transfers, Housing, Utilities, Groceries,
 Dining & Drinks, Transportation, Shopping, Entertainment, Software & Online

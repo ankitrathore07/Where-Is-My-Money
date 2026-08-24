@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import BinaryIO, Literal, Protocol
@@ -38,6 +38,7 @@ from app.imports.types import (
     ReviewRow,
     RowEdit,
 )
+from app.recurrence.service import RecurrenceCandidate, suggest_recurrences
 from app.rules.evaluation import CompiledWorkspaceRuleSet
 from app.rules.loader import load_compiled_rule_set
 from app.tags.service import (
@@ -462,6 +463,49 @@ def _apply_ai_suggestion(
     )
 
 
+def _apply_recurrence_suggestions(
+    session: Session,
+    workspace_id: int,
+    review_rows: list[ReviewRow],
+) -> list[ReviewRow]:
+    category_kinds: dict[int, str | None] = {}
+    candidates: list[RecurrenceCandidate] = []
+    for row in review_rows:
+        if (
+            not row.included
+            or row.duplicate
+            or row.normalized is None
+            or row.category_id is None
+            or row.billing_period_months is not None
+            or row.normalized.amount_cents >= 0
+        ):
+            continue
+        if row.category_id not in category_kinds:
+            category = session.get(Category, row.category_id)
+            category_kinds[row.category_id] = category.kind if category is not None else None
+        if category_kinds[row.category_id] != "expense":
+            continue
+        candidates.append(
+            RecurrenceCandidate(
+                row.row_number,
+                row.normalized.transaction_date,
+                row.normalized_merchant or row.normalized.description,
+                row.normalized.amount_cents,
+            )
+        )
+
+    suggestions = suggest_recurrences(session, workspace_id, tuple(candidates))
+    return [
+        replace(
+            row,
+            billing_period_months=suggestions[row.row_number].billing_period_months,
+        )
+        if row.row_number in suggestions
+        else row
+        for row in review_rows
+    ]
+
+
 def build_review(
     session: Session,
     store: LocalUploadStore,
@@ -576,6 +620,7 @@ def build_review(
                 )
             )
 
+    review_rows = _apply_recurrence_suggestions(session, job.workspace_id, review_rows)
     return ImportReview(
         rows=tuple(review_rows),
         total_rows=len(review_rows),
